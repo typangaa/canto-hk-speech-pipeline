@@ -1,0 +1,396 @@
+# RTHK Audio Sources
+# Radio Television Hong Kong — official public broadcaster
+#
+# Usage: python scripts/02_download.py --source rthk
+# This file is read by 01_discover.py and 02_download.py.
+#
+# Schema: see docs/SOURCE_GUIDE.md
+# Status values: active | paused | done | skip
+#
+# RSS URL pattern (verified 2026-06-09):
+#   https://podcast.rthk.hk/podcast/{slug}_i.xml
+# Not all RTHK programs have a podcast RSS — many are radio-only.
+# Programs without RSS are downloaded via their RTHK YouTube channel.
+
+# ──────────────────────────────────────────────
+# Already collected (do not re-download)
+# ──────────────────────────────────────────────
+
+- name: "創科新里程"
+  url: "https://www.youtube.com/playlist?list=PLzBfpGDForQ42JjsPuaC5Y-bCzSsLJRkQ"
+  type: "playlist"
+  source: "rthk"
+  language: "yue"
+  domain: "documentary"
+  style: "narration"
+  priority: "done"
+  estimated_hours: 30
+  status: "done"
+  notes: "Already processed in cantonese-tts-old. Re-ingest only if re-segmenting with VAD."
+
+# ──────────────────────────────────────────────
+# High Priority — RTHK Podcast RSS (Confirmed Feeds)
+# ──────────────────────────────────────────────
+
+- name: "鏗鏘集 Podcast"
+  url: "https://podcast.rthk.hk/podcast/hongkongconnection.xml"
+  type: "rss"
+  source: "rthk"
+  language: "yue"
+  domain: "documentary"
+  style: "interview"
+  priority: "high"
+  estimated_hours: 30
+  max_age_days: 0
+  status: "paused"
+  apple_podcast_id: 378458691
+  notes: >
+    VERIFIED RSS (2026-06-09). 123 episodes from 2010-2012.
+    PAUSED: podcast.rthk.hk old media server times out on every .avi download (120s/req).
+    Re-enable only after confirming media server is accessible.
+
+- name: "城市論壇 Podcast"
+  url: "https://podcast.rthk.hk/podcast/cityforum.xml"
+  type: "rss"
+  source: "rthk"
+  language: "yue"
+  domain: "talk_show"
+  style: "casual"
+  priority: "high"
+  estimated_hours: 50
+  max_age_days: 0
+  status: "paused"
+  apple_podcast_id: 421341320
+  notes: >
+    VERIFIED RSS (2026-06-09). 182 episodes from 2010-2012.
+    PAUSED: podcast.rthk.hk old media server times out on every .avi download.
+
+- name: "頭條新聞 Podcast"
+  url: "https://podcast.rthk.hk/podcast/headliner.xml"
+  type: "rss"
+  source: "rthk"
+  language: "yue"
+  domain: "talk_show"
+  style: "casual"
+  priority: "high"
+  estimated_hours: 20
+  max_age_days: 0
+  status: "paused"
+  notes: >
+    VERIFIED RSS (2026-06-09). 65 episodes from 2010-2012. .avi format.
+    PAUSED: podcast.rthk.hk old media server times out.
+
+- name: "議事論事 Podcast"
+  url: "https://podcast.rthk.hk/podcast/legco.xml"
+  type: "rss"
+  source: "rthk"
+  language: "yue"
+  domain: "talk_show"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 20
+  max_age_days: 0
+  status: "paused"
+  notes: >
+    VERIFIED RSS (2026-06-09). 82 episodes from 2008-2009. .avi format.
+    PAUSED: podcast.rthk.hk old media server times out.
+
+# ──────────────────────────────────────────────
+# High Priority — YouTube (back-catalogue + programs without Podcast RSS)
+# ──────────────────────────────────────────────
+
+- name: "鏗鏘集 YouTube"
+  url: "https://www.youtube.com/playlist?list=PLuwJy35eAVaIDgH7hgOpknp7KPOaibNjN"
+  type: "playlist"
+  source: "rthk"
+  language: "yue"
+  domain: "documentary"
+  style: "interview"
+  priority: "high"
+  estimated_hours: 200
+  status: "active"
+  notes: >
+    Playlist ID confirmed 2026-06-09. Supplements 鏗鏘集 Podcast RSS (RSS only has last 12 months).
+    YouTube playlist has full back-catalogue going back years.
+
+- name: "城市論壇 YouTube"
+  url: "https://www.youtube.com/playlist?list=PLP6gBXOda05fDuV9NjS-gA-rLseIEWjhT"
+  type: "playlist"
+  source: "rthk"
+  language: "yue"
+  domain: "talk_show"
+  style: "casual"
+  priority: "high"
+  estimated_hours: 80
+  status: "active"
+  notes: >
+    Playlist ID confirmed 2026-06-09. Public affairs discussion with diverse guests.
+    Very high speaker diversity (different guests each episode).
+
+- name: "頭條新聞 YouTube"
+  url: "https://www.youtube.com/playlist?list=PLP6gBXOda05e-1sKR8VcIq2ebUFe470rE"
+  type: "playlist"
+  source: "rthk"
+  language: "yue"
+  domain: "talk_show"
+  style: "casual"
+  priority: "high"
+  estimated_hours: 100
+  status: "active"
+  notes: >
+    Playlist ID confirmed 2026-06-09. Political satire show, multiple hosts, natural HK Cantonese.
+
+- name: "香港故事 YouTube"
+  url: "https://www.youtube.com/playlist?list=PLuwJy35eAVaLZsUf-TiUgdjfLSo0Qtsxi"
+  type: "playlist"
+  source: "rthk"
+  language: "yue"
+  domain: "documentary"
+  style: "narration"
+  priority: "high"
+  estimated_hours: 60
+  status: "active"
+  notes: >
+    Playlist ID confirmed 2026-06-09. Local history and society documentary.
+    Narration-heavy, professional presenters. Good for formal narration style.
+
+# ──────────────────────────────────────────────
+# Medium Priority
+# ──────────────────────────────────────────────
+
+- name: "財經快訊 YouTube"
+  url: "https://www.youtube.com/@rthkhongkong"
+  type: "channel"
+  source: "rthk"
+  language: "yue"
+  domain: "news"
+  style: "formal"
+  priority: "medium"
+  estimated_hours: 50
+  status: "evaluate"
+  notes: >
+    No standalone podcast RSS found (2026-06-09). Needs playlist ID lookup.
+    Short financial news segments, very formal delivery.
+
+- name: "一路走來 YouTube"
+  url: "https://www.youtube.com/@rthkhongkong"
+  type: "channel"
+  source: "rthk"
+  language: "yue"
+  domain: "documentary"
+  style: "interview"
+  priority: "medium"
+  estimated_hours: 40
+  status: "evaluate"
+  notes: >
+    No standalone podcast RSS found (2026-06-09). Needs playlist ID lookup.
+    Biography documentary, interview format. Older speakers (50+) represented.
+
+- name: "千禧年代 YouTube"
+  url: "https://www.youtube.com/playlist?list=PLuwJy35eAVaKEgSGp0cq6PIP32dTaUY1s"
+  type: "playlist"
+  source: "rthk"
+  language: "yue"
+  domain: "talk_show"
+  style: "casual"
+  priority: "high"
+  estimated_hours: 100
+  status: "active"
+  notes: >
+    Playlist confirmed 2026-06-10 (workflow research). Official @rthkhongkong channel.
+    Daily morning current-affairs caller-in show. Multiple callers, natural conversational Cantonese.
+    High value: very large episode count, diverse speakers.
+
+- name: "RTHK Radio 2 YouTube"
+  url: "https://www.youtube.com/playlist?list=PLqNZao3BKcfVTVF9xNX4fPxIeu2hQukL8"
+  type: "playlist"
+  source: "rthk"
+  language: "yue"
+  domain: "talk_show"
+  style: "casual"
+  priority: "medium"
+  estimated_hours: 80
+  status: "active"
+  notes: >
+    Playlist confirmed 2026-06-10 (workflow research). RTHK Radio 2 entertainment/talk.
+    Informal register, good for casual Cantonese style diversity.
+
+- name: "守下留情 YouTube"
+  url: "https://www.youtube.com/@rthkhongkong"
+  type: "channel"
+  source: "rthk"
+  language: "yue"
+  domain: "talk_show"
+  style: "casual"
+  priority: "low"
+  estimated_hours: 60
+  status: "skip"
+  notes: >
+    RTHK Radio 1 morning show. Confirmed (2026-06-10): NO dedicated YouTube playlist and
+    NO podcast.rthk.hk RSS feed. Individual episode pages at
+    www.rthk.hk/radio/radio1/programme/seesaw/episode/{pid} but no automated feed.
+    PLVVCeCTSi_ydpp8_ctE7R1zhRwXkTG1Y2 is a 2-video user Beyond songs playlist — DISCARD.
+    Only option: manual yt-dlp search queries against @rthkhongkong. Skipping for now.
+
+# ──────────────────────────────────────────────
+# Low Priority — Evaluate Before Downloading
+# ──────────────────────────────────────────────
+
+- name: "RTHK 新聞直播"
+  url: "https://www.youtube.com/@rthknews"
+  type: "channel"
+  source: "rthk"
+  language: "yue"
+  domain: "news"
+  style: "formal"
+  priority: "low"
+  estimated_hours: 500
+  status: "evaluate"
+  notes: >
+    Live news stream clips. Large volume but many clips are live broadcast with
+    background audio. Sample and check DNSMOS distribution before bulk download.
+    Focus on in-studio segments, not outdoor live reporting.
+
+- name: "自由風自由PHONE Podcast"
+  url: "https://podcast.rthk.hk/podcast/item.php?pid=289"
+  type: "rss"
+  source: "rthk"
+  language: "yue"
+  domain: "talk_show"
+  style: "casual"
+  priority: "low"
+  estimated_hours: 50
+  status: "evaluate"
+  notes: >
+    Phone-in talk show on Radio 1 (pid=289). Need to find the _i.xml slug.
+    If accessible, high speaker diversity (different callers each episode).
+    Try: https://podcast.rthk.hk/podcast/freefone_i.xml (not yet verified).
+
+# ──────────────────────────────────────────────
+# 五夜講場 (Five Night Forum) — Verified Playlists 2026-06-12
+# ──────────────────────────────────────────────
+# Academic talk-show series. Clear formal Cantonese. High-value for TTS.
+# Each sub-series covers a different domain (philosophy, history, literature, science).
+
+- name: "五夜講場 - 哲學有偈傾 (全集合輯)"
+  url: "https://www.youtube.com/playlist?list=PLTwEBiElN5TZ7gsEc4alkKWla2uhU8pc7"
+  type: "playlist"
+  source: "rthk"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 60
+  status: "active"
+  notes: >
+    VERIFIED 2026-06-12 via WebSearch. 132 episodes, all seasons (2017-2021).
+    Philosophy talk-show with academics. Clear, formal, deliberate Cantonese.
+    Excellent for TTS — minimal music, no audience noise, studio quality.
+
+- name: "五夜講場 - 哲學有偈傾 2019"
+  url: "https://www.youtube.com/playlist?list=PLuwJy35eAVaLYr2s-aZu-fV6ymUg1FhHe"
+  type: "playlist"
+  source: "rthk"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "medium"
+  estimated_hours: 10
+  status: "active"
+  notes: "VERIFIED 2026-06-12. Season-specific playlist. Skip if 全集合輯 above already covers it."
+
+- name: "五夜講場 - 歷史係咁話 2020"
+  url: "https://www.youtube.com/playlist?list=PLuwJy35eAVaJv3m3sK1eqjUrsR0eTsXqt"
+  type: "playlist"
+  source: "rthk"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 15
+  status: "active"
+  notes: >
+    VERIFIED 2026-06-12. History talk-show. Academics discuss HK/Chinese history.
+    Formal Cantonese, clear enunciation. Good for academic register diversity.
+
+# ──────────────────────────────────────────────
+# 獅子山下 (Below the Lion Rock) — Verified Playlists 2026-06-12
+# ──────────────────────────────────────────────
+# All 6 playlists verified by agy from official @RTHK channel (PLuwJy35eAVa prefix).
+# The 半小時版 playlist (PLuwJy35eAVaKfWs6pBoYwFpYUsgMlucHV) has 0 videos — skipped.
+
+- name: "獅子山下 (Below the Lion Rock) — Main Playlist"
+  url: "https://www.youtube.com/playlist?list=PLuwJy35eAVaKgJ01HWDbs7EeqJPeZhN6Y"
+  type: "playlist"
+  source: "rthk"
+  language: "yue"
+  domain: "drama"
+  style: "narration"
+  priority: "high"
+  estimated_hours: 20
+  status: "active"
+  notes: >
+    VERIFIED 2026-06-12 via agy. 27 videos. Official RTHK drama anthology series.
+    Classic HK social drama from the 1970s-2000s. Authentic period HK Cantonese,
+    working-class speech, high speaker diversity.
+
+- name: "獅子山下：我們之間"
+  url: "https://www.youtube.com/playlist?list=PLuwJy35eAVaIEYs021mY1n8ealM3ePuHw"
+  type: "playlist"
+  source: "rthk"
+  language: "yue"
+  domain: "drama"
+  style: "narration"
+  priority: "medium"
+  estimated_hours: 3
+  status: "active"
+  notes: "VERIFIED 2026-06-12. 3 videos. 獅子山下 spin-off series."
+
+- name: "獅子山下 - 繼往開來50年"
+  url: "https://www.youtube.com/playlist?list=PLuwJy35eAVaKUamIEKsYYN0CzcCRRZPTY"
+  type: "playlist"
+  source: "rthk"
+  language: "yue"
+  domain: "documentary"
+  style: "narration"
+  priority: "medium"
+  estimated_hours: 2
+  status: "active"
+  notes: "VERIFIED 2026-06-12. 2 videos. 50th anniversary documentary special."
+
+- name: "獅子山下製作特輯"
+  url: "https://www.youtube.com/playlist?list=PLuwJy35eAVaKdI2MncrnKg-ud8dSPPlOq"
+  type: "playlist"
+  source: "rthk"
+  language: "yue"
+  domain: "documentary"
+  style: "interview"
+  priority: "low"
+  estimated_hours: 2
+  status: "active"
+  notes: "VERIFIED 2026-06-12. 4 videos. Behind-the-scenes production features."
+
+- name: "獅子山下 - 紅花樹下"
+  url: "https://www.youtube.com/playlist?list=PLuwJy35eAVaJyDK-42Q0rqGdCQ0c61UGy"
+  type: "playlist"
+  source: "rthk"
+  language: "yue"
+  domain: "drama"
+  style: "narration"
+  priority: "medium"
+  estimated_hours: 2
+  status: "active"
+  notes: "VERIFIED 2026-06-12. 2 videos. 獅子山下 sub-series."
+
+# ──────────────────────────────────────────────
+# Skip
+# ──────────────────────────────────────────────
+
+- name: "RTHK Radio 3 (English) / Mandarin segments"
+  url: "SKIP"
+  type: "channel"
+  source: "rthk"
+  language: "cmn/en"
+  priority: "skip"
+  status: "skip"
+  notes: "Wrong language — DO NOT download."

@@ -1,0 +1,1516 @@
+# HK Cantonese Podcast Sources
+#
+# Usage: python scripts/02_download.py --source podcast
+# This file is read by 01_discover.py and 02_download.py.
+#
+# Podcasts are downloaded via RSS. Verify RSS URL before running:
+#   curl -s "{rss_url}" | python3 -c "import sys,feedparser; f=feedparser.parse(sys.stdin.read()); print('Title:', f.feed.title); print('Episodes:', len(f.entries))"
+#
+# See docs/SOURCE_GUIDE.md for evaluation criteria.
+# Status values: active | evaluate | paused | skip
+
+sources:
+  # ──────────────────────────────────────────────
+  # RTHK Podcasts — Confirmed RSS URLs (verified 2026-06-09)
+  # ──────────────────────────────────────────────
+  # RTHK podcast platform: https://podcast.rthk.hk
+  # RSS pattern: https://podcast.rthk.hk/podcast/{slug}_i.xml
+  # Note: platform only retains past 12 months. For older episodes → rthk_sources.yaml (YouTube).
+
+  - name: "鏗鏘集 (RTHK Podcast)"
+    rss_url: "https://podcast.rthk.hk/podcast/hongkongconnection.xml"
+    source: "rthk"
+    language: "yue"
+    domain: "documentary"
+    style: "interview"
+    priority: "high"
+    estimated_hours: 30
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-09). 123 episodes. Audio-only, consistent studio quality.
+      NOTE: _i.xml variant only has 16 eps — use .xml (no _i) for full archive.
+      Supplement with YouTube channel (rthk_sources.yaml) for even older back-catalogue.
+
+  - name: "城市論壇 (RTHK Podcast)"
+    rss_url: "https://podcast.rthk.hk/podcast/cityforum.xml"
+    source: "rthk"
+    language: "yue"
+    domain: "talk_show"
+    style: "casual"
+    priority: "high"
+    estimated_hours: 50
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-09). 182 episodes. NOTE: _i.xml variant has 0 eps — use .xml.
+      Very high speaker diversity — different panel guests each episode.
+
+  - name: "頭條新聞 (RTHK Podcast)"
+    rss_url: "https://podcast.rthk.hk/podcast/headliner.xml"
+    source: "rthk"
+    language: "yue"
+    domain: "talk_show"
+    style: "casual"
+    priority: "high"
+    estimated_hours: 20
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-09). 65 episodes. NOTE: _i.xml variant may differ — use .xml.
+      Political satire show, multiple hosts, natural HK Cantonese with local slang.
+
+  - name: "議事論事 (RTHK Podcast)"
+    rss_url: "https://podcast.rthk.hk/podcast/legco.xml"
+    source: "rthk"
+    language: "yue"
+    domain: "talk_show"
+    style: "formal"
+    priority: "high"
+    estimated_hours: 20
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-09). 82 episodes. Legislative council affairs discussion.
+      NOTE: legco_i.xml is empty archive (2008/2009 only) — use legco.xml (no _i).
+      Formal Cantonese, good for formal speech style variety.
+
+  - name: "RTHK 晨早新聞天地"
+    rss_url: "https://podcast.rthk.hk/podcast/radio1_hktoday.xml"
+    source: "rthk"
+    language: "yue"
+    domain: "news"
+    style: "formal"
+    priority: "high"
+    estimated_hours: 40
+    max_age_days: 365
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10, found by workflow wiplhsv7m). 113 episodes. Daily morning
+      news programme on RTHK Radio 1. HK Cantonese news and current affairs. Formal register.
+
+  - name: "RTHK 新聞特寫"
+    rss_url: "https://podcast.rthk.hk/podcast/radio1_news_feature.xml"
+    source: "rthk"
+    language: "yue"
+    domain: "news"
+    style: "interview"
+    priority: "high"
+    estimated_hours: 80
+    max_age_days: 365
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10, found by workflow wiplhsv7m). 372 episodes. RTHK Radio 1
+      news feature programme. In-depth reporting and interviews. Good for interview-style
+      formal Cantonese with subject-matter diversity.
+
+  - name: "RTHK 凝聚香港"
+    rss_url: "https://podcast.rthk.hk/podcast/tv_hkunited_i.xml"
+    source: "rthk"
+    language: "yue"
+    domain: "talk_show"
+    style: "formal"
+    priority: "high"
+    estimated_hours: 150
+    max_age_days: 365
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10, found by workflow wiplhsv7m). 858 episodes. RTHK TV
+      current affairs / community discussion programme. Active 2025 content confirmed.
+      Large back-catalogue; max_age_days=365 limits to recent year.
+
+  - name: "RTHK 千禧年代"
+    rss_url: "https://podcast.rthk.hk/podcast/radio1_HK2000.xml"
+    source: "rthk"
+    language: "yue"
+    domain: "talk_show"
+    style: "casual"
+    priority: "high"
+    estimated_hours: 120
+    max_age_days: 365
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10, hermes task1). 413 episodes. RTHK Radio 1 morning talk show.
+      Very natural conversational HK Cantonese, multiple regular hosts. Daily current affairs
+      discussion with audience calls. Excellent speaker diversity and casual register.
+
+  - name: "RTHK 自由風自由PHONE"
+    rss_url: "https://podcast.rthk.hk/podcast/radio1_openline_openview.xml"
+    source: "rthk"
+    language: "yue"
+    domain: "talk_show"
+    style: "casual"
+    priority: "high"
+    estimated_hours: 100
+    max_age_days: 365
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10, hermes task1). 372 episodes. RTHK Radio 1 open-line talk show.
+      Phone-in format with diverse caller voices and natural colloquial Cantonese.
+      Excellent for phonetic diversity (many different speakers per episode).
+
+  - name: "RTHK 一桶金"
+    rss_url: "https://podcast.rthk.hk/podcast/radio1_Moneyprogram.xml"
+    source: "rthk"
+    language: "yue"
+    domain: "educational"
+    style: "casual"
+    priority: "high"
+    estimated_hours: 90
+    max_age_days: 365
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10, hermes task1). 307 episodes. RTHK personal finance / investment
+      talk show. Casual-formal mixed register, HK Cantonese with financial vocabulary.
+      Consistent hosts, good for financial domain coverage.
+
+  - name: "RTHK e線金融網"
+    rss_url: "https://podcast.rthk.hk/podcast/pth_ezone2020.xml"
+    source: "rthk"
+    language: "yue"
+    domain: "educational"
+    style: "formal"
+    priority: "medium"
+    estimated_hours: 45
+    max_age_days: 365
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10, hermes task1). 151 episodes. RTHK finance / tech program.
+      Formal-casual register. Good for financial/tech vocabulary coverage.
+
+  - name: "RTHK 午間新聞天地"
+    rss_url: "https://podcast.rthk.hk/podcast/radio1_12oclocknews.xml"
+    source: "rthk"
+    language: "yue"
+    domain: "news"
+    style: "formal"
+    priority: "medium"
+    estimated_hours: 35
+    max_age_days: 365
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10, hermes task1). 113 episodes. RTHK Radio 1 noon news programme.
+      Formal broadcast Cantonese, professional news anchors.
+
+  - name: "RTHK 傍晚新聞天地"
+    rss_url: "https://podcast.rthk.hk/podcast/radio1_6oclocknews.xml"
+    source: "rthk"
+    language: "yue"
+    domain: "news"
+    style: "formal"
+    priority: "medium"
+    estimated_hours: 35
+    max_age_days: 365
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10, hermes task1). 113 episodes. RTHK Radio 1 early evening news.
+      Formal broadcast Cantonese. Complements morning/noon bulletins with different anchors.
+
+  - name: "RTHK 晚間新聞天地"
+    rss_url: "https://podcast.rthk.hk/podcast/radio1_eveningnews.xml"
+    source: "rthk"
+    language: "yue"
+    domain: "news"
+    style: "formal"
+    priority: "medium"
+    estimated_hours: 35
+    max_age_days: 365
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10, hermes task1). 113 episodes. RTHK Radio 1 evening news bulletin.
+      Formal broadcast Cantonese.
+
+  - name: "RTHK 講東講西"
+    rss_url: "https://podcast.rthk.hk/podcast/Free_as_the_wind.xml"
+    source: "rthk"
+    language: "yue"
+    domain: "talk_show"
+    style: "casual"
+    priority: "medium"
+    estimated_hours: 30
+    max_age_days: 365
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10, hermes task1). 97 episodes. RTHK casual chat/commentary show.
+      Natural conversational HK Cantonese, good for casual register coverage.
+
+  - name: "RTHK 財經華爾街"
+    rss_url: "https://podcast.rthk.hk/podcast/radio1_finance_morning_show.xml"
+    source: "rthk"
+    language: "yue"
+    domain: "educational"
+    style: "formal"
+    priority: "medium"
+    estimated_hours: 30
+    max_age_days: 365
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10, hermes task1). 97 episodes. RTHK finance/markets morning show.
+      Formal-technical register, financial vocabulary.
+
+  - name: "RTHK 報章摘要"
+    rss_url: "https://podcast.rthk.hk/podcast/radio1_newspaper.xml"
+    source: "rthk"
+    language: "yue"
+    domain: "news"
+    style: "formal"
+    priority: "medium"
+    estimated_hours: 15
+    max_age_days: 365
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10, hermes task1). 97 episodes. RTHK newspaper review programme.
+      Formal press-reading style, good for formal reading-aloud register.
+
+  - name: "RTHK 學人沙龍"
+    rss_url: "https://podcast.rthk.hk/podcast/tv_talkshow_i.xml"
+    source: "rthk"
+    language: "yue"
+    domain: "educational"
+    style: "formal"
+    priority: "medium"
+    estimated_hours: 25
+    max_age_days: 365
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10, hermes task1). 81 episodes. RTHK TV academic talk show.
+      Formal Cantonese, subject experts, good for academic register coverage.
+
+  - name: "RTHK 動感天地"
+    rss_url: "https://podcast.rthk.hk/podcast/rsssports.xml"
+    source: "rthk"
+    language: "yue"
+    domain: "talk_show"
+    style: "casual"
+    priority: "medium"
+    estimated_hours: 25
+    max_age_days: 365
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10, hermes task1). 97 episodes. RTHK sports programme.
+      Casual commentary style, sports vocabulary, HK Cantonese.
+
+  # Programs WITHOUT confirmed Podcast RSS (radio-only as of 2026-06-09):
+  #   守下留情   → No podcast feed. Download via YouTube: search "守下留情" on RTHK channel.
+  #   財經快訊   → No podcast feed. Download via YouTube.
+  #   一路走來   → No podcast feed. Download via YouTube.
+  #   香港故事   → No podcast feed. Download via YouTube: rthk_sources.yaml entry "香港故事 YouTube".
+
+  # ──────────────────────────────────────────────
+  # Independent HK Podcasts — Verified 2026-06-09
+  # ──────────────────────────────────────────────
+
+  - name: "有台channel D"
+    rss_url: "https://anchor.fm/s/598cc1e4/podcast/rss"
+    source: "podcast"
+    language: "yue"
+    domain: "talk_show"
+    style: "casual"
+    priority: "high"
+    estimated_hours: 176
+    max_age_days: 0
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-09). 201 episodes, 176h total. Pure HK Cantonese (純粵語/廣東話廣播).
+      《景仁春秋》current affairs commentary, 16-120 min per episode.
+      Hosted on Anchor/Spotify CDN. Independent broadcaster.
+
+  - name: "RTHK 古今風雲人物"
+    rss_url: "https://podcast.rthk.hk/podcast/people.xml"
+    source: "rthk"
+    language: "yue"
+    domain: "documentary"
+    style: "narration"
+    priority: "medium"
+    estimated_hours: 8
+    max_age_days: 365
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-09). 16 episodes, newest 2025-09-27. Historical figures documentary.
+      Cantonese narration, good for formal/narrative style.
+
+  - name: "RTHK 大地書香"
+    rss_url: "https://podcast.rthk.hk/podcast/groundbook.xml"
+    source: "rthk"
+    language: "yue"
+    domain: "educational"
+    style: "casual"
+    priority: "medium"
+    estimated_hours: 8
+    max_age_days: 365
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-09). 15 episodes, newest 2025-09-28. Books and literature program.
+
+  - name: "RTHK 香港家書"
+    rss_url: "https://podcast.rthk.hk/podcast/hkletter.xml"
+    source: "rthk"
+    language: "yue"
+    domain: "talk_show"
+    style: "formal"
+    priority: "medium"
+    estimated_hours: 8
+    max_age_days: 365
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-09). 16 episodes, newest 2025-09-28. Letter-reading format.
+      Formal spoken Cantonese, single-speaker per episode. Good for speaker variety.
+
+  # ──────────────────────────────────────────────
+  # Independent HK Cantonese Podcasts (Non-RTHK)
+  # ──────────────────────────────────────────────
+
+  - name: "勵志鷹 LaichiEagle"
+    rss_url: "https://feeds.soundon.fm/podcasts/83838d49-9f4f-43a8-95e9-921174e2730c.xml"
+    source: "podcast"
+    language: "yue"
+    domain: "podcast"
+    style: "casual"
+    priority: "high"
+    estimated_hours: 200
+    max_age_days: 730
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10). 568+ episodes (EP572 as of 2026-06-09), ~58 min each.
+      Language: zh-HK. 2-3 hosts (牙石, 牙田). Comedy/lifestyle, casual HK Cantonese.
+      SoundOn hosted. Active (2x/week). max_age_days=730 limits to ~200 recent eps (~68GB).
+
+  - name: "HKPUG Podcast 派樂派對"
+    rss_url: "https://www.hkpug.org/podcast/feed/"
+    source: "podcast"
+    language: "yue"
+    domain: "podcast"
+    style: "casual"
+    priority: "medium"
+    estimated_hours: 100
+    max_age_days: 365
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10). 1056+ total episodes (RSS shows 50 most recent).
+      HK tech discussion podcast. HK Cantonese, 2+ hosts. Active (latest 2026-06-03).
+      Covers technology topics; good for casual technical Cantonese vocabulary.
+
+  - name: "Sparksine廣東話讀書會"
+    rss_url: "https://feeds.acast.com/public/shows/62cc4ff5042a970012400abf"
+    source: "podcast"
+    language: "yue"
+    domain: "educational"
+    style: "narration"
+    priority: "medium"
+    estimated_hours: 130
+    max_age_days: 730
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10, found by workflow wiplhsv7m). 320 episodes (EP321 as of 2026-06-10).
+      HK Cantonese book summary podcast. Single host (Isaac Wong). Episodes 17-30 min each.
+      Language: zh-HK. Narration style, good for formal spoken Cantonese diversity.
+      Active weekly publication. Acast hosted.
+
+  - name: "絮言．狂想"
+    rss_url: "https://rss.buzzsprout.com/1666555.rss"
+    source: "podcast"
+    language: "yue"
+    domain: "educational"
+    style: "casual"
+    priority: "medium"
+    estimated_hours: 50
+    max_age_days: 730
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10, found by workflow wiplhsv7m). 107 episodes. HK linguistics
+      and language discussion podcast. Cantonese language focus. Casual academic register.
+      Buzzsprout hosted. Good for meta-linguistic content variety.
+
+  - name: "五分鐘心理學 樹洞香港"
+    rss_url: "https://anchor.fm/s/13b71908/podcast/rss"
+    source: "podcast"
+    language: "yue"
+    domain: "educational"
+    style: "casual"
+    priority: "medium"
+    estimated_hours: 80
+    max_age_days: 365
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10, found by workflow wiplhsv7m). 334 episodes (more than
+      initial 20ep estimate). zh-tw language tag but content is clearly HK Cantonese.
+      Psychology topics explained in accessible HK Cantonese. Episodes ~5-15 min each.
+      Anchor/Spotify CDN hosted. Active weekly publication.
+
+  - name: "不浪漫故事"
+    rss_url: "https://feed.podbean.com/notaromanticstory/feed.xml"
+    source: "podcast"
+    language: "yue"
+    domain: "podcast"
+    style: "casual"
+    priority: "medium"
+    estimated_hours: 60
+    max_age_days: 730
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10, found by workflow wiplhsv7m). 99 episodes. Lifestyle /
+      relationship discussion podcast. HK Cantonese, casual register. Podbean hosted.
+      Good for conversational style diversity.
+
+  - name: "吹水奇懸"
+    rss_url: "https://anchor.fm/s/3147e0d8/podcast/rss"
+    source: "podcast"
+    language: "yue"
+    domain: "podcast"
+    style: "casual"
+    priority: "high"
+    estimated_hours: 140
+    max_age_days: 730
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10, found by workflow wiplhsv7m). 214 episodes (EP209 as of 2026-06-08).
+      2 female hosts discussing true crime / mystery cases worldwide, in HK Cantonese.
+      Episodes 30-65 min each. Biweekly updates. Excellent for diverse female speaker data.
+      Note: language tag is zh-tw but content is clearly HK Cantonese (粵語口語).
+
+  # ──────────────────────────────────────────────
+  # Pending Evaluation
+  # ──────────────────────────────────────────────
+
+  - name: "SBS Cantonese 廣東話節目"
+    rss_url: "https://sbs-ondemand.streamguys1.com/sbs-cantonese/"
+    source: "podcast"
+    language: "yue"
+    domain: "news"
+    style: "formal"
+    priority: "medium"
+    estimated_hours: 200
+    max_age_days: 365
+    status: "paused"
+    notes: >
+      PAUSED 2026-06-10 — user requires HK Cantonese only. SBS is an Australian service
+      targeting HK diaspora; presenters may have Australia-influenced accent or non-HK
+      phonology. Already downloaded episodes need accent evaluation before use.
+      Re-activate only after sampling confirms accent is acceptable native HK Cantonese.
+
+  - name: "荔枝角的事 (if active)"
+    rss_url: "PLACEHOLDER"
+    source: "podcast"
+    language: "yue"
+    domain: "podcast"
+    style: "casual"
+    priority: "medium"
+    estimated_hours: 20
+    status: "evaluate"
+    notes: >
+      HK society discussion podcast. Natural conversational Cantonese with 2-3 hosts.
+      Verify current activity status -- some HK podcasts have ceased since 2021.
+      Find RSS URL via Apple Podcasts: search '荔枝角的事'.
+
+  # ──────────────────────────────────────────────
+  # New Sources Added 2026-06-10 (Hermes Task 4a Research)
+  # ──────────────────────────────────────────────
+
+  - name: "講經Talkshit (明哥和一發)"
+    rss_url: "https://feeds.soundon.fm/podcasts/cdead6b6-2dfa-46c2-a934-3d048488610f.xml"
+    source: "podcast"
+    language: "yue"
+    domain: "talk_show"
+    style: "casual"
+    priority: "high"
+    estimated_hours: 100
+    max_age_days: 730
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10). 425 episodes. HK Cantonese casual chat show hosted by
+      明哥和一發. Former Commercial Radio hosts. Daily updates (Wed/Fri). Natural conversational
+      Cantonese with local slang. SoundOn hosted. Excellent for casual speech diversity.
+      Apple Podcasts: https://podcasts.apple.com/hk/podcast/%E8%AC%9B%E7%B6%93talkshit/id1530669614
+
+  - name: "白兵電台"
+    rss_url: "https://feeds.soundcloud.com/users/soundcloud:users:839253250/sounds.rss"
+    source: "podcast"
+    language: "yue"
+    domain: "podcast"
+    style: "casual"
+    priority: "high"
+    estimated_hours: 80
+    max_age_days: 730
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10). 500 episodes. HK Cantonese society/culture podcast.
+      SoundCloud hosted. Multiple speakers, casual register.
+
+  - name: "HKcropcircle 廣東話Podcast"
+    rss_url: "https://anchor.fm/s/284eb8f8/podcast/rss"
+    source: "podcast"
+    language: "yue"
+    domain: "talk_show"
+    style: "casual"
+    priority: "high"
+    estimated_hours: 120
+    max_age_days: 730
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10). 471 episodes. HK Cantonese comedy/interview podcast.
+      Host: 麥麥廣播 (麥子). Very natural Cantonese with slang and colloquialisms.
+      Anchor/Spotify hosted. Good for casual speech and slang acquisition.
+
+  - name: "輕鬆講科技"
+    rss_url: "https://anchor.fm/s/42975bd4/podcast/rss"
+    source: "podcast"
+    language: "yue"
+    domain: "educational"
+    style: "casual"
+    priority: "high"
+    estimated_hours: 80
+    max_age_days: 730
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10). 944 episodes. HK Cantonese tech/gadget discussion podcast.
+      2+ hosts. Formal-casual register with technical vocabulary. Anchor/Spotify hosted.
+      Active weekly publication.
+
+  - name: "漂夫人事務所 - 漂流放送廳"
+    rss_url: "https://feeds.soundon.fm/podcasts/4766df1e-6a70-418a-9fde-2a42e78fa929.xml"
+    source: "podcast"
+    language: "yue"
+    domain: "podcast"
+    style: "casual"
+    priority: "medium"
+    estimated_hours: 60
+    max_age_days: 730
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10). 239 episodes. HK Cantonese society/culture podcast.
+      SoundOn hosted. Casual register with cultural commentary.
+
+  - name: "港識多史｜香港歷史社會研究社"
+    rss_url: "https://anchor.fm/s/10568fa50/podcast/rss"
+    source: "podcast"
+    language: "yue"
+    domain: "educational"
+    style: "formal"
+    priority: "medium"
+    estimated_hours: 50
+    max_age_days: 730
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10). 205 episodes. HK Cantonese history podcast.
+      Anchor/Spotify hosted. Formal lecture-style Cantonese, good for formal register.
+      Active with regular updates.
+
+  - name: "馬修靈異怪談鬼故(廣東話)"
+    rss_url: "https://anchor.fm/s/31f11b1c/podcast/rss"
+    source: "podcast"
+    language: "yue"
+    domain: "podcast"
+    style: "narration"
+    priority: "medium"
+    estimated_hours: 40
+    max_age_days: 730
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10). 190 episodes. HK Cantonese ghost story / scary stories podcast.
+      Single host (馬修). Expressive narration style, good for prosody and intonation variety.
+      Anchor/Spotify hosted.
+
+  - name: "集誌社 The Collective HK - 聚焦背後"
+    rss_url: "https://anchor.fm/s/d97a7f7c/podcast/rss"
+    source: "podcast"
+    language: "yue"
+    domain: "news"
+    style: "casual"
+    priority: "medium"
+    estimated_hours: 40
+    max_age_days: 730
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10). 197 episodes. HK Cantonese investigative news podcast.
+      Anchor/Spotify hosted. News/current affairs in HK Cantonese.
+
+  - name: "Nom Talk Network"
+    rss_url: "https://anchor.fm/s/524097e4/podcast/rss"
+    source: "podcast"
+    language: "yue"
+    domain: "podcast"
+    style: "casual"
+    priority: "medium"
+    estimated_hours: 50
+    max_age_days: 730
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10). 260 episodes. HK Cantonese movie/TV review podcast.
+      Mixed English/Cantonese -- filter for Cantonese-dominant episodes.
+      Anchor/Spotify hosted. Good for entertainment vocabulary.
+
+  - name: "Sex But True 騎呢性趣聞"
+    rss_url: "https://feeds.soundon.fm/podcasts/88c9d140-f1f1-4a43-aae2-d2129c0dc93d.xml"
+    source: "podcast"
+    language: "yue"
+    domain: "podcast"
+    style: "casual"
+    priority: "medium"
+    estimated_hours: 40
+    max_age_days: 730
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10). 240 episodes. HK Cantonese sex education / relationships podcast.
+      SoundOn hosted. Natural conversational Cantonese with relationship vocabulary.
+      Note: adult-themed content -- may need content filtering for TTS training.
+
+  - name: "Hong Kong On Screen Podcast"
+    rss_url: "https://feed.firstory.me/rss/user/cl55om7v70ekf01t9ff6n3tkt"
+    source: "podcast"
+    language: "yue"
+    domain: "podcast"
+    style: "casual"
+    priority: "medium"
+    estimated_hours: 20
+    max_age_days: 730
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10). 83 episodes. HK Cantonese film history podcast (mixed English).
+      Firstory hosted. Film and cinema discussion in Cantonese.
+
+  - name: "查查 + 瀝瀝｜香港Podcast - 罪愛真相"
+    rss_url: "https://anchor.fm/s/ddb4c14c/podcast/rss"
+    source: "podcast"
+    language: "yue"
+    domain: "podcast"
+    style: "casual"
+    priority: "medium"
+    estimated_hours: 20
+    max_age_days: 730
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10, found by workflow wiplhsv7m). 60 episodes. HK Cantonese
+      crime/true crime podcast. Single host. Suspenseful narration style.
+      Anchor/Spotify hosted.
+
+  - name: "願聞奇詳｜廣東話Podcast"
+    rss_url: "https://anchor.fm/s/3075d3b0/podcast/rss"
+    source: "podcast"
+    language: "yue"
+    domain: "talk_show"
+    style: "casual"
+    priority: "medium"
+    estimated_hours: 5
+    max_age_days: 730
+    status: "evaluate"
+    notes: "RSS FEED DEAD (404 as of 2026-06-10). Was verified with 7 episodes previously. May have moved to new URL. Search Apple Podcasts for updated feed: '願聞奇詳'."
+
+  # ──────────────────────────────────────────────
+  # New Sources Added 2026-06-10 (Hermes Task 3 Research)
+  # ──────────────────────────────────────────────
+
+  - name: "胡說八道陳老C"
+    rss_url: "https://anchor.fm/s/f6370248/podcast/rss"
+    source: "podcast"
+    language: "yue"
+    domain: "talk_show"
+    style: "casual"
+    priority: "high"
+    estimated_hours: 300
+    max_age_days: 730
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10, hermes task3). 1,369 episodes. Film analysis, history stories,
+      social commentary. Daily updates by 陳老C. Very high volume, consistently HK Cantonese.
+      Anchor/Spotify hosted.
+
+  - name: "吾係教練"
+    rss_url: "https://anchor.fm/s/24c7c774/podcast/rss"
+    source: "podcast"
+    language: "yue"
+    domain: "educational"
+    style: "casual"
+    priority: "high"
+    estimated_hours: 100
+    max_age_days: 730
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10, hermes task3). 421 episodes. Exercise training, health,
+      boxing coaching by Owen (歐恩). HK Cantonese, clear single-host narration.
+      Anchor/Spotify hosted.
+
+  - name: "啤啤說書"
+    rss_url: "https://anchor.fm/s/edbfc438/podcast/rss"
+    source: "podcast"
+    language: "yue"
+    domain: "educational"
+    style: "casual"
+    priority: "high"
+    estimated_hours: 80
+    max_age_days: 730
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10, hermes task3). 346 episodes. Investment, self-help, science
+      book summaries in HK Cantonese. 加入早餐會 production.
+      Anchor/Spotify hosted.
+
+  - name: "是但啦 Whateverrr"
+    rss_url: "https://anchor.fm/s/3e33eb70/podcast/rss"
+    source: "podcast"
+    language: "yue"
+    domain: "talk_show"
+    style: "casual"
+    priority: "high"
+    estimated_hours: 80
+    max_age_days: 730
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10, hermes task3). 299 episodes. KC, Jane (啤牙姐) daily banter.
+      DIY, AI, tech, relationships, everyday HK life. Natural conversational Cantonese.
+      Anchor/Spotify hosted.
+
+  - name: "生而為人邊有咁簡單"
+    rss_url: "https://feed.firstory.me/rss/user/ckp5k5iy8y0i40873k3rbittm"
+    source: "podcast"
+    language: "yue"
+    domain: "talk_show"
+    style: "casual"
+    priority: "high"
+    estimated_hours: 80
+    max_age_days: 730
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10, hermes task3). 337 episodes. 表姐表妹 chatting about life,
+      AI, relationships. Casual HK Cantonese. Firstory hosted.
+
+  - name: "牛哥講經"
+    rss_url: "https://anchor.fm/s/5d6da210/podcast/rss"
+    source: "podcast"
+    language: "yue"
+    domain: "educational"
+    style: "casual"
+    priority: "medium"
+    estimated_hours: 60
+    max_age_days: 730
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10, hermes task3). 249 episodes. Chinese philosophy, neuroscience,
+      book sharing in HK Cantonese. 讀物農莊 production.
+      Anchor/Spotify hosted.
+
+  - name: "怪獸冰室 Monster Cafe"
+    rss_url: "https://anchor.fm/s/7f502c7c/podcast/rss"
+    source: "podcast"
+    language: "yue"
+    domain: "talk_show"
+    style: "casual"
+    priority: "medium"
+    estimated_hours: 50
+    max_age_days: 730
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10, hermes task3). 186 episodes. Gaming discussion, HK-style
+      cafe talk.繁體中文 content. Casual HK Cantonese.
+      Anchor/Spotify hosted.
+
+  - name: "Whatsuuup做咩啫!?"
+    rss_url: "https://anchor.fm/s/3e95b440/podcast/rss"
+    source: "podcast"
+    language: "yue"
+    domain: "talk_show"
+    style: "casual"
+    priority: "medium"
+    estimated_hours: 45
+    max_age_days: 730
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10, hermes task3). 166 episodes. 阿牛, 羊兒, 歪歪 daily banter,
+      movies, music. Natural HK Cantonese. Anchor/Spotify hosted.
+
+  - name: "近距離同你講游水"
+    rss_url: "https://anchor.fm/s/3363460/podcast/rss"
+    source: "podcast"
+    language: "yue"
+    domain: "educational"
+    style: "casual"
+    priority: "medium"
+    estimated_hours: 40
+    max_age_days: 730
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10, hermes task3). 156 episodes. Cantonese swimming coaching
+      podcast by 黃埔體育會. Technical sports vocabulary in HK Cantonese.
+      Anchor/Spotify hosted.
+
+  - name: "複利讀書 ideas try1try"
+    rss_url: "https://feed.firstory.me/rss/user/clwjvhtkm00yi01ujcbjl9a5u"
+    source: "podcast"
+    language: "yue"
+    domain: "educational"
+    style: "casual"
+    priority: "medium"
+    estimated_hours: 30
+    max_age_days: 730
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10, hermes task3). 106 episodes. Investment, wealth-building,
+      productivity in HK Cantonese. Firstory hosted.
+
+  - name: "懶人多口水"
+    rss_url: "https://feeds.soundon.fm/podcasts/20339e14-cfd7-4206-a60c-d8d1ae68bb45.xml"
+    source: "podcast"
+    language: "yue"
+    domain: "talk_show"
+    style: "casual"
+    priority: "medium"
+    estimated_hours: 20
+    max_age_days: 730
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10, hermes task3). 61 episodes. World Cup, reading, savings,
+      childhood memories. Natural HK Cantonese. SoundOn hosted.
+
+  - name: "大話歷史 陳老C"
+    rss_url: "https://anchor.fm/s/1124535a4/podcast/rss"
+    source: "podcast"
+    language: "yue"
+    domain: "educational"
+    style: "casual"
+    priority: "medium"
+    estimated_hours: 15
+    max_age_days: 730
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10, hermes task3). 59 episodes. Spring & Autumn period history
+      series in HK Cantonese by 陳老C. Narrative style.
+      Anchor/Spotify hosted.
+
+  - name: "末日奶嘴"
+    rss_url: "https://feed.firstory.me/rss/user/clmbtl39204fh01tc14bp573v"
+    source: "podcast"
+    language: "yue"
+    domain: "talk_show"
+    style: "casual"
+    priority: "medium"
+    estimated_hours: 15
+    max_age_days: 730
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10, hermes task3). 60 episodes. HK life commentary, actor stories,
+      exam trivia. HK Cantonese. Firstory hosted.
+
+  - name: "乜東東．豎起耳仔窿"
+    rss_url: "https://anchor.fm/s/f767b374/podcast/rss"
+    source: "podcast"
+    language: "yue"
+    domain: "educational"
+    style: "casual"
+    priority: "medium"
+    estimated_hours: 12
+    max_age_days: 730
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10, hermes task3). 50 episodes. Cantonese idioms, children's
+      stories, HK folklore. HK Cantonese. Good for regional cultural vocabulary.
+      Anchor/Spotify hosted.
+
+  # ──────────────────────────────────────────────
+  # Narration / Audiobook Sources (Added 2026-06-10, Hermes narration agent)
+  # Critical gap: scripted/narration style for TTS prosody training
+  # ──────────────────────────────────────────────
+
+  - name: "Room410 四一零室"
+    rss_url: "https://feeds.soundon.fm/podcasts/9fe6d179-9c48-4751-b7a3-f724ca7bf24f.xml"
+    source: "podcast"
+    language: "yue"
+    domain: "documentary"
+    style: "narration"
+    priority: "high"
+    estimated_hours: 150
+    max_age_days: 730
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10, hermes narration agent). 315 episodes. HK Cantonese true
+      crime narration podcast. Consistent single-speaker storytelling format. Clear narration
+      style — excellent for TTS prosody training (scripted, deliberate pacing).
+      SoundOn hosted.
+
+  - name: "公公講廣東話故仔 Mario Cantonese Story Time"
+    rss_url: "https://anchor.fm/s/dc47f5cc/podcast/rss"
+    source: "podcast"
+    language: "yue"
+    domain: "documentary"
+    style: "narration"
+    priority: "high"
+    estimated_hours: 40
+    max_age_days: 0
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10, hermes narration agent). 187 episodes. Elderly grandfather
+      reading Cantonese stories for grandchildren. Pure narration, warm tone, slow clear
+      pacing. Unique elderly male speaker voice — rare in corpus. Anchor/Spotify hosted.
+
+  - name: "聖嚴法師有聲書 (粵語版)"
+    rss_url: "https://anchor.fm/s/43b1b8fc/podcast/rss"
+    source: "podcast"
+    language: "yue"
+    domain: "educational"
+    style: "narration"
+    priority: "high"
+    estimated_hours: 50
+    max_age_days: 0
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10, hermes narration agent). 193 episodes. Buddhist texts read
+      in Cantonese. Formal, slow, deliberate reading style — ideal for TTS clarity training.
+      Single male narrator. Literary formal register. Anchor/Spotify hosted.
+
+  - name: "襪仔咩咩的繪本窩 Socks Storybook Den"
+    rss_url: "https://anchor.fm/s/7fbb74f0/podcast/rss"
+    source: "podcast"
+    language: "yue"
+    domain: "educational"
+    style: "narration"
+    priority: "high"
+    estimated_hours: 30
+    max_age_days: 0
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10, hermes narration agent). 149 episodes. Cantonese picture
+      book stories for children. Clear children's narration, simple vocabulary, consistent
+      format. Likely female narrator. Anchor/Spotify hosted.
+
+  - name: "米．悅讀分享 Mic the Reader"
+    rss_url: "https://rss.buzzsprout.com/2182675.rss"
+    source: "podcast"
+    language: "yue"
+    domain: "educational"
+    style: "narration"
+    priority: "high"
+    estimated_hours: 30
+    max_age_days: 730
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10, hermes narration agent). 106 episodes. Book reading podcast
+      in literary HK Cantonese. Single host (阿米). Good for diverse vocabulary and literary
+      register. Buzzsprout hosted.
+
+  - name: "好耐好耐以前：廣東話講故事"
+    rss_url: "https://anchor.fm/s/d90d5500/podcast/rss"
+    source: "podcast"
+    language: "yue"
+    domain: "documentary"
+    style: "narration"
+    priority: "medium"
+    estimated_hours: 20
+    max_age_days: 0
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10, hermes narration agent). 67 episodes. Cantonese storytelling
+      from CHERIE'S BOOK CLUB. Folk stories and narrative HK Cantonese. Anchor/Spotify hosted.
+
+  - name: "金瓶梅 Golden Lotus (粵語版)"
+    rss_url: "https://media.rss.com/the-golden-lotus/feed.xml"
+    source: "podcast"
+    language: "yue"
+    domain: "documentary"
+    style: "narration"
+    priority: "medium"
+    estimated_hours: 10
+    max_age_days: 0
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10, hermes narration agent). 36 episodes. Classical Chinese novel
+      (金瓶梅) read in Cantonese by single female narrator (Betty C). Excellent literary/formal
+      register, dramatic reading style. Rare female narration voice. RSS.com hosted.
+
+  # ──────────────────────────────────────────────
+  # Female-Hosted Sources (Added 2026-06-10, Hermes female agent)
+  # ──────────────────────────────────────────────
+
+  - name: "RTHK 醫生與你"
+    rss_url: "https://podcast.rthk.hk/podcast/tv_doctorandyou2021_i.xml"
+    source: "rthk"
+    language: "yue"
+    domain: "educational"
+    style: "interview"
+    priority: "high"
+    estimated_hours: 8
+    max_age_days: 365
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10, hermes female agent). 15 episodes. RTHK health/medical
+      programme hosted by 鄭萃雯 (confirmed female host). Studio quality, formal interview
+      style. Good for female formal register and medical vocabulary.
+
+  - name: "晚安啦，小耳朵｜廣東話睡前故事"
+    rss_url: "https://anchor.fm/s/11096cd44/podcast/rss"
+    source: "podcast"
+    language: "yue"
+    domain: "educational"
+    style: "narration"
+    priority: "medium"
+    estimated_hours: 5
+    max_age_days: 0
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10, hermes female agent). 13 episodes. Cantonese bedtime stories
+      for ages 2-5. Gentle female narrator, very clean studio audio, slow deliberate pacing.
+      Small volume but unique gentle-narration register. Anchor/Spotify hosted.
+
+  - name: "聊齋故事 (粵語)"
+    rss_url: "https://feeds.acast.com/public/shows/662b867f437bd7001249b592"
+    source: "podcast"
+    language: "yue"
+    domain: "documentary"
+    style: "narration"
+    priority: "medium"
+    estimated_hours: 8
+    max_age_days: 0
+    status: "active"
+    notes: >
+      VERIFIED RSS (2026-06-10, hermes female agent). 19 episodes. Classic Chinese ghost
+      stories (聊齋誌異) narrated in HK Cantonese. Dramatic narration style, literary
+      vocabulary. Acast hosted.
+
+  # ──────────────────────────────────────────────
+  # REJECTED / Non-Viable Sources
+  # ──────────────────────────────────────────────
+
+  - name: "Commercial Radio HK (商業電台) — NO PUBLIC FEED"
+    rss_url: "SKIP"
+    source: "podcast"
+    language: "yue"
+    domain: "talk_show"
+    priority: "skip"
+    status: "skip"
+    notes: "REJECTED: cr.com.hk has no public RSS feeds. Apple Podcasts search returned no results for their programs."
+
+  - name: "D100 Radio — SUSPENDED"
+    rss_url: "SKIP"
+    source: "podcast"
+    language: "yue"
+    domain: "podcast"
+    priority: "skip"
+    status: "skip"
+    notes: >
+      REJECTED: d100.hk site unreachable. No RSS feed found. YouTube channel @D100Radio exists
+      but appears archived. D100 suspended operations in 2021.
+
+  - name: "Metro Radio (城市電台) — OFFLINE"
+    rss_url: "SKIP"
+    source: "podcast"
+    language: "yue"
+    domain: "talk_show"
+    priority: "skip"
+    status: "skip"
+    notes: "REJECTED: metro.com.hk timed out. No Apple Podcasts presence. Appears offline/suspended."
+
+  - name: "HKSAR Government Press Briefings — NO RSS"
+    rss_url: "SKIP"
+    source: "podcast"
+    language: "yue"
+    domain: "news"
+    priority: "skip"
+    status: "skip"
+    notes: >
+      REJECTED: news.gov.hk RSS feeds return 404. info.gov.hk has no podcast RSS.
+      Government press briefings are available on YouTube but no public RSS/podcast feed.
+      If YouTube RSS (via yt-dlp) is needed, add as YouTube source, not podcast.
+
+  - name: "English-language HK podcasts"
+    rss_url: "SKIP"
+    source: "podcast"
+    language: "en"
+    domain: "other"
+    priority: "skip"
+    status: "skip"
+    notes: "REJECTED: Wrong language."
+
+  - name: "Cantonese podcasts from Guangzhou/Macau"
+    rss_url: "SKIP"
+    source: "podcast"
+    language: "yue-GZ"
+    domain: "other"
+    priority: "skip"
+    status: "skip"
+    notes: >
+      REJECTED: Guangzhou Cantonese differs in vocabulary, tone, and prosody from HK Cantonese.
+      Only accept clearly HK-produced content.
+
+# ──────────────────────────────────────────────
+# Narration / Audiobook / Storytelling — Added 2026-06-11
+# All feeds verified HTTP 200 as of 2026-06-10 (cantonese_narration_sources.md)
+# Excluded: SBS Cantonese (Australian Cantonese), 誰來讀新聞 (Taiwanese), Hong Kong Lit Club (English)
+# ──────────────────────────────────────────────
+
+  # --- ACTIVE: 50+ episodes, HK/Macau Cantonese, narration/storytelling ---
+
+  - name: "Room410 四一零室 (真實犯罪 Cantonese True Crime)"
+    rss_url: "https://feeds.soundon.fm/podcasts/9fe6d179-9c48-4751-b7a3-f724ca7bf24f.xml"
+    source: "podcast"
+    language: "yue"
+    domain: "podcast"
+    style: "narration"
+    priority: "high"
+    estimated_hours: 100
+    status: "active"
+    notes: >
+      VERIFIED 2026-06-10. 315 episodes. HK Cantonese true crime narration.
+      Long-form single-speaker storytelling. Good phonemic coverage and natural prosody.
+
+  - name: "公公講廣東話故仔 Mario Cantonese Story Time"
+    rss_url: "https://anchor.fm/s/dc47f5cc/podcast/rss"
+    source: "podcast"
+    language: "yue"
+    domain: "educational"
+    style: "narration"
+    priority: "high"
+    estimated_hours: 30
+    status: "active"
+    notes: >
+      VERIFIED 2026-06-10. 187 episodes. Macau grandfather reading Cantonese stories
+      to grandchildren. Pure single-speaker narration, warm gentle tone.
+      Macau Cantonese is near-identical to HK Cantonese.
+
+  - name: "聖嚴法師有聲書 (粵語版)"
+    rss_url: "https://anchor.fm/s/43b1b8fc/podcast/rss"
+    source: "podcast"
+    language: "yue"
+    domain: "educational"
+    style: "formal"
+    priority: "high"
+    estimated_hours: 40
+    status: "active"
+    notes: >
+      VERIFIED 2026-06-10. 193 episodes. Formal Cantonese reading of Buddhist
+      master's writings. Slow, clear, literary Cantonese register.
+      Excellent for formal/literary phoneme coverage.
+
+  - name: "米．悅讀分享 Mic the Reader"
+    rss_url: "https://rss.buzzsprout.com/2182675.rss"
+    source: "podcast"
+    language: "yue"
+    domain: "educational"
+    style: "narration"
+    priority: "high"
+    estimated_hours: 20
+    status: "active"
+    notes: >
+      VERIFIED 2026-06-10. 106 episodes. Book reading podcast in Cantonese.
+      Literary vocabulary and diverse subject matter. Single male speaker (阿米).
+
+  - name: "襪仔咩咩的繪本窩 Socks Storybook Den (廣東話)"
+    rss_url: "https://anchor.fm/s/7fbb74f0/podcast/rss"
+    source: "podcast"
+    language: "yue"
+    domain: "educational"
+    style: "narration"
+    priority: "high"
+    estimated_hours: 25
+    status: "active"
+    notes: >
+      VERIFIED 2026-06-10. 149 episodes. Cantonese children's picture book stories.
+      Clear narration, simple vocabulary, consistent format. Single female speaker.
+
+  - name: "好耐好耐以前：廣東話講故事"
+    rss_url: "https://anchor.fm/s/d90d5500/podcast/rss"
+    source: "podcast"
+    language: "yue"
+    domain: "podcast"
+    style: "narration"
+    priority: "high"
+    estimated_hours: 15
+    status: "active"
+    notes: >
+      VERIFIED 2026-06-10. 67 episodes. Cantonese storytelling from CHERIE'S BOOK CLUB.
+      General narrative Cantonese, varied story types.
+
+  - name: "金瓶梅 Golden Lotus (女頻粵語演繹)"
+    rss_url: "https://media.rss.com/the-golden-lotus/feed.xml"
+    source: "podcast"
+    language: "yue"
+    domain: "podcast"
+    style: "narration"
+    priority: "medium"
+    estimated_hours: 8
+    status: "active"
+    notes: >
+      VERIFIED 2026-06-10. 36 episodes. Classical Chinese novel read in Cantonese.
+      Formal/literary register, single female narrator (Betty C).
+      Good for classical literary vocabulary coverage.
+
+  - name: "Ching Ho li - 書劍恩仇錄"
+    rss_url: "https://feeds.acast.com/public/shows/6628e90133dbf40012b4d721"
+    source: "podcast"
+    language: "yue"
+    domain: "podcast"
+    style: "narration"
+    priority: "medium"
+    estimated_hours: 7
+    status: "active"
+    notes: >
+      VERIFIED 2026-06-10. 32 episodes. Jin Yong wuxia novel in Cantonese.
+      Dramatic reading, formal register. Speaker: Ching Ho li (consistent narrator).
+
+  # --- EVALUATE: smaller episode counts, need spot-check before bulk download ---
+
+  - name: "Cantonese Stories with Star's mommy 廣東話星星媽咪講故事"
+    rss_url: "https://anchor.fm/s/3cd75e88/podcast/rss"
+    source: "podcast"
+    language: "yue"
+    domain: "educational"
+    style: "narration"
+    priority: "medium"
+    estimated_hours: 3
+    status: "evaluate"
+    notes: >
+      VERIFIED 2026-06-10. 26 episodes. Cantonese children's stories by a mother.
+      Natural parent-child speech register. Female speaker.
+
+  - name: "奇幻咖啡館 Twilight Cafe 廣東話"
+    rss_url: "https://anchor.fm/s/7b9d7710/podcast/rss"
+    source: "podcast"
+    language: "yue"
+    domain: "podcast"
+    style: "narration"
+    priority: "medium"
+    estimated_hours: 4
+    status: "evaluate"
+    notes: >
+      VERIFIED 2026-06-10. 23 episodes. Suspense/fantasy Cantonese stories.
+      Varied emotional range in narration. Spot-check speaker consistency.
+
+  - name: "Ching Ho li - 聊齋故事"
+    rss_url: "https://feeds.acast.com/public/shows/662b867f437bd7001249b592"
+    source: "podcast"
+    language: "yue"
+    domain: "podcast"
+    style: "narration"
+    priority: "medium"
+    estimated_hours: 3
+    status: "evaluate"
+    notes: >
+      VERIFIED 2026-06-10. 19 episodes. Classical Chinese ghost stories in Cantonese.
+      Formal/literary register. Speaker: Ching Ho li.
+
+  - name: "Ching Ho li - 天外金球"
+    rss_url: "https://feeds.acast.com/public/shows/6629026865481e001269c373"
+    source: "podcast"
+    language: "yue"
+    domain: "podcast"
+    style: "narration"
+    priority: "low"
+    estimated_hours: 2
+    status: "evaluate"
+    notes: >
+      VERIFIED 2026-06-10. 15 episodes. Sci-fi novel in Cantonese. Speaker: Ching Ho li.
+
+  - name: "晚安啦，小耳朵 廣東話睡前故事"
+    rss_url: "https://anchor.fm/s/11096cd44/podcast/rss"
+    source: "podcast"
+    language: "yue"
+    domain: "educational"
+    style: "narration"
+    priority: "low"
+    estimated_hours: 2
+    status: "evaluate"
+    notes: >
+      VERIFIED 2026-06-10. 13 episodes. Cantonese bedtime stories for 2-5 year olds.
+      Very clear gentle narration, clean audio. Female speaker.
+
+  - name: "Survival Cantonese Podcast"
+    rss_url: "https://anchor.fm/s/af45880/podcast/rss"
+    source: "podcast"
+    language: "yue"
+    domain: "educational"
+    style: "narration"
+    priority: "low"
+    estimated_hours: 1
+    status: "evaluate"
+    notes: >
+      VERIFIED 2026-06-10. 5 episodes. Cantonese fables clearly paced for learners.
+      Transcripts available. Speaker: HKBooktalker (講故佬).
+
+  - name: "粵讀你解 廣東話有聲書"
+    rss_url: "https://anchor.fm/s/108bfd73c/podcast/rss"
+    source: "podcast"
+    language: "yue"
+    domain: "podcast"
+    style: "narration"
+    priority: "low"
+    estimated_hours: 1
+    status: "evaluate"
+    notes: >
+      VERIFIED 2026-06-10. 6 episodes. Currently reading Animal Farm in Cantonese.
+      Literary Cantonese. Speaker: 琪 Ki.
+
+  - name: "Ching Ho li - 奧德修斯迷航記"
+    rss_url: "https://feeds.acast.com/public/shows/66291aad33dbf40012c1a214"
+    source: "podcast"
+    language: "yue"
+    domain: "podcast"
+    style: "narration"
+    priority: "low"
+    estimated_hours: 1
+    status: "evaluate"
+    notes: >
+      VERIFIED 2026-06-10. 2 episodes. Odyssey in Cantonese. Speaker: Ching Ho li.
+
+  # --- Religious Sermon Podcasts — Added 2026-06-12 (agy research, RSS verified HTTP 200) ---
+
+  - name: "播道會同福堂 九龍東堂 (Tung Fook Kowloon East Church)"
+    rss_url: "http://share.tungfook.com/tungfook/podcasts/kes/kesaudio.xml"
+    source: "podcast"
+    language: "yue"
+    domain: "educational"
+    style: "formal"
+    priority: "high"
+    estimated_hours: 150
+    max_age_days: 0
+    status: "active"
+    notes: >
+      VERIFIED 2026-06-12 (HTTP 200). Direct XML RSS feed of Kowloon East branch.
+      Weekly Cantonese sermons from multiple pastors. Formal speech, clean PA audio.
+      Good for diverse formal-register speakers.
+
+  - name: "播道會同福堂 主堂 TCS (Tung Fook Church Main)"
+    rss_url: "http://share.tungfook.com/tungfook/podcasts/tcs/tcsaudio.xml"
+    source: "podcast"
+    language: "yue"
+    domain: "educational"
+    style: "formal"
+    priority: "high"
+    estimated_hours: 200
+    max_age_days: 0
+    status: "active"
+    notes: >
+      VERIFIED 2026-06-12 (HTTP 200). Direct XML RSS feed of Tung Fook Church main
+      services. High-quality Cantonese sermon recordings from various pastors.
+      Excellent for formal HK Cantonese corpus.
+
+# ──────────────────────────────────────────────
+# Health / Medical Podcasts (agy Search 2026-06-12)
+# ──────────────────────────────────────────────
+
+- name: "五分鐘心理學 樹洞香港 Podcast"
+  rss_url: "https://anchor.fm/s/13b71908/podcast/rss"
+  source: "podcast"
+  language: "yue"
+  domain: "educational"
+  style: "casual"
+  priority: "high"
+  estimated_hours: 8
+  status: "active"
+  notes: "FOUND 2026-06-12. ~78 episodes. HK mental health psychology in Cantonese. Clear conversational speech."
+
+- name: "粵講愈健康 Cantonese Health Talk with Dr. Wu"
+  rss_url: "https://anchor.fm/s/103f34658/podcast/rss"
+  source: "podcast"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "medium"
+  estimated_hours: 3
+  status: "active"
+  notes: "FOUND 2026-06-12. ~13 episodes. Doctor-led health education podcast in formal Cantonese."
+
+- name: "健康啲囉 Health D-load"
+  rss_url: "https://feeds.acast.com/public/shows/63eedb6d3ccc750011a2b79f"
+  source: "podcast"
+  language: "yue"
+  domain: "educational"
+  style: "casual"
+  priority: "medium"
+  estimated_hours: 4
+  status: "active"
+  notes: "FOUND 2026-06-12. ~15 episodes. HK health and lifestyle podcast in Cantonese."
+
+- name: "爸媽成長營 廣東話讀書會"
+  rss_url: "https://rss.buzzsprout.com/2443030.rss"
+  source: "podcast"
+  language: "yue"
+  domain: "educational"
+  style: "casual"
+  priority: "medium"
+  estimated_hours: 6
+  status: "active"
+  notes: "FOUND 2026-06-12. ~38 episodes. HK parenting education podcast in Cantonese."
+
+- name: "Athena 8分鐘自我對話 廣東話心理學"
+  rss_url: "https://feeds.soundon.fm/podcasts/b65afe37-1e02-4f1f-b3a9-a8942b59a281.xml"
+  source: "podcast"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "medium"
+  estimated_hours: 2
+  status: "active"
+  notes: "FOUND 2026-06-12. ~9 episodes. Short-form psychology self-improvement in Cantonese."
+
+# ──────────────────────────────────────────────
+# Current Affairs / News Analysis Podcasts (agy Search 2026-06-12)
+# NOTE: Some are diaspora-based (overseas HK speakers) — marked evaluate; speech is authentic HK Cantonese
+# ──────────────────────────────────────────────
+
+- name: "綠豆搞Bean科 Green Bean Media"
+  rss_url: "https://anchor.fm/s/e89e5780/podcast/rss"
+  source: "podcast"
+  language: "yue"
+  domain: "other"
+  style: "casual"
+  priority: "high"
+  estimated_hours: 40
+  status: "evaluate"
+  notes: >
+    FOUND 2026-06-12. Active (weekly). ~199h est. HK diaspora news/political commentary.
+    Authentic HK Cantonese speakers — evaluate whether accent/dialect acceptable for corpus.
+
+- name: "學識開咪 HK Social Commentary"
+  rss_url: "https://feeds.soundon.fm/podcasts/90e3d85d-a1c8-4acc-b266-093a678fa5f5.xml"
+  source: "podcast"
+  language: "yue"
+  domain: "other"
+  style: "casual"
+  priority: "medium"
+  estimated_hours: 10
+  status: "evaluate"
+  notes: "FOUND 2026-06-12. Active (monthly). HK social commentary and current events in Cantonese."
+
+- name: "本來我想說些什麼健吾"
+  rss_url: "https://anchor.fm/s/6c1b797c/podcast/rss"
+  source: "podcast"
+  language: "yue"
+  domain: "other"
+  style: "casual"
+  priority: "medium"
+  estimated_hours: 8
+  status: "evaluate"
+  notes: "FOUND 2026-06-12. Active. HK writer Kengo (健吾) social commentary. Natural HK Cantonese."
+
+# ──────────────────────────────────────────────
+# Legal / Professional Podcasts (agy Search 2026-06-12)
+# ──────────────────────────────────────────────
+
+- name: "一周法庭線報 法生咩事"
+  rss_url: "https://anchor.fm/s/e80a95b8/podcast/rss"
+  source: "podcast"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 10
+  status: "active"
+  notes: "FOUND 2026-06-12. HK court and legal news podcast. Formal legal Cantonese, high clarity."
+
+# ──────────────────────────────────────────────
+# Download Configuration
+# ──────────────────────────────────────────────
+
+download_config:
+  audio_format: "mp3"         # podcasts are typically distributed as MP3
+  convert_to_wav: true        # convert to WAV mono in 03_segment.py
+  target_sample_rate: 48000   # store 48 kHz master; NEVER upsample, NEVER go below source (KNOWN_ISSUES §11)
+  max_age_days: 365           # skip episodes older than 1 year
+  sleep_between_episodes: 2   # seconds between downloads
+
+# ──────────────────────────────────────────────
+# How to Find New Podcast RSS URLs
+# ──────────────────────────────────────────────
+#
+# Option 1: Apple Podcasts Lookup API
+#   1. Find the podcast on https://podcasts.apple.com — note the id in the URL
+#   2. curl "https://itunes.apple.com/lookup?id=XXXXXXXXX&entity=podcast"
+#   3. Extract the feedUrl field from the JSON
+#
+# Option 2: Directly from podcast website
+#   Most podcasts link their RSS feed in the footer or "Subscribe" section.
+#
+# Option 3: Podchaser / Listen Notes
+#   Search these directories for HK Cantonese podcasts with RSS feeds.

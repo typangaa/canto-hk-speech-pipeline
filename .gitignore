@@ -1,0 +1,49 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Dataset — audio and derived files (never committed; large, copyright-restricted)
+data/
+
+# Metadata — all machine-generated (logs, reports, archives)
+metadata/
+
+# Model weights cache
+.cache/
+
+# Research screenshots
+*.png
+*.jpg
+*.jpeg
+
+# Session logs (personal notes, not source)
+PROGRESS.md
+
+# yt-dlp download archives
+*.ytdlp-archive
+download_archive.txt
+
+# Process output and temp files
+nohup.out
+*.log
+
+# Test / debug result files (ad-hoc)
+*_results.yml
+*_results.json
+
+# sources discovery data (large JSON, not source)
+sources/hk_cantonese_podcasts.json
+sources/verified_podcasts.jsonl
+
+# Tool-specific directories
+.playwright-mcp/
+
+# Python version pin (machine-specific)
+.python-version

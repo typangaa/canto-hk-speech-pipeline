@@ -1,0 +1,2588 @@
+# YouTube HK Cantonese Channels (Non-RTHK)
+#
+# Usage: python scripts/02_download.py --source youtube
+# This file is read by 01_discover.py and 02_download.py.
+#
+# All channels here must be clearly HK Cantonese (not Guangzhou, not Mandarin).
+# Evaluate each entry with 5-10 sample segments before running at scale.
+# See docs/SOURCE_GUIDE.md for evaluation criteria.
+#
+# Status values: active | evaluate | paused | skip
+
+# ──────────────────────────────────────────────
+# High Priority — Confirmed 2026-06-10
+# ──────────────────────────────────────────────
+
+- name: "TVB 無綫新聞"
+  url: "https://www.youtube.com/@tvbnewshk"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "news"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 800
+  max_age_days: 365
+  status: "active"
+  notes: >
+    CONFIRMED 2026-06-10 (handle @tvbnewshk verified with yt-dlp). ~8000 videos.
+    Largest single new Cantonese source. Formal news register, multiple anchors.
+    High speaker diversity. Standard HK broadcast Cantonese.
+
+- name: "RTHK 新聞頻道"
+  url: "https://www.youtube.com/@rthkhongkong"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "news"
+  style: "formal"
+  priority: "medium"
+  estimated_hours: 100
+  status: "evaluate"
+  notes: >
+    2026-06-10: @rthknews handle returns 404. Use main @rthkhongkong channel.
+    Separate playlist search needed to isolate news-only content.
+    Needs evaluation before bulk download (large channel, mixed content).
+
+- name: "TVB NEWS Official"
+  url: "https://www.youtube.com/@tvbnewsofficial"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "news"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 500
+  max_age_days: 365
+  status: "active"
+  notes: >
+    CONFIRMED 2026-06-10. ~15k videos. TVB news clips channel, separate from @tvbnewshk.
+    Professional news anchors, studio quality, formal HK broadcast Cantonese.
+    Time-bounded clips (5-30 min) are easier to process than full broadcasts.
+
+- name: "HOY 78 x 有線新聞"
+  url: "https://www.youtube.com/@hoy78cablenews"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "news"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 150
+  max_age_days: 365
+  status: "active"
+  notes: >
+    CONFIRMED 2026-06-10. ~4k videos. HOY TV cable news, separate speaker pool from TVB/RTHK.
+    HK Cantonese news anchors, adds anchor diversity to corpus.
+
+- name: "Now 財經新聞"
+  url: "https://www.youtube.com/@nowbnc"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "news"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 100
+  max_age_days: 365
+  status: "active"
+  notes: >
+    CONFIRMED 2026-06-10. Finance and business news. Clear enunciation.
+    Verify primarily Cantonese (some NowTV finance shows are bilingual). Sample first.
+
+- name: "ISD 香港特區政府新聞處"
+  url: "https://www.youtube.com/@isdgovhk"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "news"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 200
+  max_age_days: 365
+  status: "active"
+  notes: >
+    CONFIRMED 2026-06-10 (found by workflow wiplhsv7m). Official HK government Information
+    Services Department. Formal government announcements, press briefings, policy explainers
+    in HK Cantonese. Excellent for formal register diversity.
+
+- name: "香港01"
+  url: "https://www.youtube.com/channel/UCTxyBu9VWUq5LXezXwy_SGg"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "news"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 300
+  max_age_days: 365
+  status: "active"
+  notes: >
+    CONFIRMED 2026-06-10 (found by workflow wiplhsv7m). ~55K videos total; max_age_days=365
+    is REQUIRED to prevent disk exhaustion. HK01 digital news media. Multiple reporters.
+    Mix of news, feature, and commentary. Strong HK Cantonese speaker diversity.
+
+- name: "明報 Mingpao"
+  url: "https://www.youtube.com/@mingpao"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "news"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 150
+  max_age_days: 365
+  status: "active"
+  notes: >
+    CONFIRMED 2026-06-10 (found by workflow wiplhsv7m). Daily newspaper video arm.
+    Formal Cantonese news reporting. Different speaker pool from broadcast TV channels.
+
+- name: "高清本土台 HKLocalTV"
+  url: "https://www.youtube.com/@HKLocalTV"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "talk_show"
+  style: "casual"
+  priority: "high"
+  estimated_hours: 200
+  max_age_days: 365
+  status: "active"
+  notes: >
+    CONFIRMED 2026-06-10 (found by workflow wiplhsv7m). Grassroots HK Cantonese commentary
+    channel. Multiple hosts, casual register. Good for colloquial/informal style diversity.
+    Strong local accent and idiom usage.
+
+- name: "ViuTV"
+  url: "https://www.youtube.com/@ViuTV"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "talk_show"
+  style: "casual"
+  priority: "medium"
+  estimated_hours: 200
+  status: "evaluate"
+  notes: >
+    CONFIRMED 2026-06-10. Entertainment variety. Informal/casual Cantonese, multiple speakers.
+    Background music/sound effects present — filter with DNSMOS ≥ 3.0. Evaluate sample first.
+
+- name: "毛記葵涌"
+  url: "https://www.youtube.com/@maukeikwaichung"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "talk_show"
+  style: "casual"
+  priority: "high"
+  estimated_hours: 200
+  status: "evaluate"
+  notes: >
+    Major HK entertainment channel. Natural HK Cantonese, multiple hosts, diverse topics.
+    Very high subscriber count indicates mainstream HK Cantonese audience.
+    Audio quality varies — check DNSMOS distribution on sample before bulk download.
+    Be selective: some clips have heavy background music; prefer talk segments.
+
+- name: "果籽 Pomme"
+  url: "https://www.youtube.com/@appledailypomme"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "documentary"
+  style: "interview"
+  priority: "high"
+  estimated_hours: 100
+  status: "evaluate"
+  notes: >
+    Feature journalism and lifestyle. On-location interviews, diverse interviewees.
+    Natural HK Cantonese, multiple speakers per episode.
+    Check that audio is not too echoey (on-location can vary).
+
+- name: "立場新聞 (The Stand News — archived)"
+  url: "https://www.youtube.com/@standnews"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "news"
+  style: "interview"
+  priority: "high"
+  estimated_hours: 150
+  status: "evaluate"
+  notes: >
+    Archived journalism channel. Cantonese-dominant. Check if channel is still accessible.
+    If geo-blocked, skip — do not attempt to bypass with VPN in automated scripts.
+    Focus on talk-format videos, not outdoor live reporting.
+
+# ──────────────────────────────────────────────
+# High Priority — Finance / Lifestyle (Added 2026-06-10, Hermes Task 4b)
+# ──────────────────────────────────────────────
+
+- name: "我要做富翁"
+  url: "https://www.youtube.com/@我要做富翁"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "narration"
+  priority: "high"
+  estimated_hours: 100
+  max_age_days: 365
+  status: "evaluate"
+  notes: >
+    Found 2026-06-10 (hermes task4b). Investment/financial freedom education channel.
+    106K views per video. Single-host narration style, ~1h/video. Very clear audio,
+    minimal background music. HK Cantonese financial vocabulary. Long format requires
+    segmentation. Evaluate 5+ videos before activating bulk download.
+
+- name: "蔡瀾花花世界 ChuaLam ColorfulWorld"
+  url: "https://www.youtube.com/@ChuaLam"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "documentary"
+  style: "narration"
+  priority: "high"
+  estimated_hours: 50
+  max_age_days: 365
+  status: "evaluate"
+  notes: >
+    Found 2026-06-10 (hermes task4b). Culinary/food travel show hosted by 蔡瀾.
+    684K views per video. Professional production, 10 min/video. Very clear human voice,
+    standard HK Cantonese narration. Evaluate 3+ videos for audio quality.
+
+- name: "搵食街 Food Guide HK"
+  url: "https://www.youtube.com/@foodguidehk"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "vlog"
+  style: "casual"
+  priority: "high"
+  estimated_hours: 5
+  max_age_days: 365
+  status: "evaluate"
+  notes: >
+    Found 2026-06-10 (hermes task4b). HK restaurant review channel. 8.64K subs, 33 videos.
+    4-5 min/video, clear narration, minimal background music. Cantonese-dominant.
+    Small channel — evaluate audio quality before adding. Low volume (33 videos total).
+
+- name: "阿陳冷知識"
+  url: "https://www.youtube.com/@ALLZS8888"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "narration"
+  priority: "high"
+  estimated_hours: 2
+  max_age_days: 365
+  status: "evaluate"
+  notes: >
+    Found 2026-06-10 (hermes task4b). HK food business commentary, 9-16 min/video.
+    Only 9 videos total — very small channel. Narration-only, no background music,
+    very clean audio. Evaluate audio quality; low volume limits TTS utility.
+
+# ──────────────────────────────────────────────
+# Medium Priority
+# ──────────────────────────────────────────────
+
+- name: "TVB 娛樂新聞台"
+  url: "https://www.youtube.com/channel/UC5dp6FxyIJmXLQv-9RYOTfA"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "talk_show"
+  style: "casual"
+  priority: "medium"
+  estimated_hours: 150
+  max_age_days: 365
+  status: "active"
+  notes: >
+    CONFIRMED 2026-06-10 (found by workflow wiplhsv7m). TVB entertainment news channel.
+    Casual/informal HK Cantonese, celebrity/entertainment topics. Different register from
+    TVB 無綫新聞. Good for casual speech style diversity.
+
+- name: "追新聞 The Chaser"
+  url: "https://www.youtube.com/@thechasernews"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "news"
+  style: "interview"
+  priority: "medium"
+  estimated_hours: 100
+  max_age_days: 365
+  status: "active"
+  notes: >
+    CONFIRMED 2026-06-10 (found by workflow wiplhsv7m). Independent HK news outlet.
+    Investigative journalism and interviews. Natural HK Cantonese, multiple interviewees.
+    Good for interview-style register coverage.
+
+- name: "星島頭條 SingTao Headline"
+  url: "https://www.youtube.com/c/SingTaoHeadline"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "news"
+  style: "formal"
+  priority: "medium"
+  estimated_hours: 150
+  max_age_days: 365
+  status: "active"
+  notes: >
+    CONFIRMED 2026-06-10 (found by workflow wiplhsv7m). Sing Tao newspaper video arm.
+    Formal HK news Cantonese. Complements TVB/RTHK speaker pool with print-media journalists.
+
+- name: "珍Talk"
+  url: "https://www.youtube.com/@珍Talk"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "talk_show"
+  style: "casual"
+  priority: "medium"
+  estimated_hours: 50
+  max_age_days: 365
+  status: "evaluate"
+  notes: >
+    Found 2026-06-10 (hermes task4b). HK finance/investment talk show. 61K views per video.
+    41 min/video, long-form interview format. HK Cantonese, may have background music in
+    segments. Evaluate audio quality and language consistency before bulk download.
+
+- name: "Now新聞 Now News"
+  url: "https://www.youtube.com/@nownewstv"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "news"
+  style: "formal"
+  priority: "medium"
+  estimated_hours: 300
+  status: "evaluate"
+  notes: >
+    Commercial news broadcaster. Professional quality, multiple anchors.
+    Good for news domain and formal Cantonese. Large volume.
+    Some content may be Mandarin — filter by language before download.
+
+- name: "港識多史 HK History"
+  url: "https://www.youtube.com/@hkhistory"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "narration"
+  priority: "medium"
+  estimated_hours: 40
+  status: "evaluate"
+  notes: >
+    Hong Kong history education channel. Clear narration Cantonese.
+    Limited speaker diversity but good narration style coverage.
+
+- name: "Cantonese educational channels"
+  url: "SEARCH"
+  type: "search"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "medium"
+  estimated_hours: 0
+  status: "evaluate"
+  notes: >
+    Search YouTube for '廣東話 教學' or '粵語 課程' to find Cantonese teaching channels.
+    These have very clear pronunciation — excellent quality but limited speaker diversity.
+    Useful as a baseline quality anchor for the dataset.
+
+# ──────────────────────────────────────────────
+# Evaluate — Needs Language/Quality Check First
+# ──────────────────────────────────────────────
+
+- name: "singtaotv 星電視"
+  url: "https://www.youtube.com/channel/UCYWSlgQB1BpfQTkNm_P5qIw"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "news"
+  style: "formal"
+  priority: "medium"
+  estimated_hours: 100
+  max_age_days: 365
+  status: "evaluate"
+  notes: >
+    Found by workflow wiplhsv7m (2026-06-10). Moderate confidence — may have mixed
+    Cantonese/Mandarin content. MUST evaluate 20+ sample videos for language ratio
+    before enabling. Change to status: active only if > 80% clearly HK Cantonese.
+
+- name: "memehongkong 謎米香港"
+  url: "https://www.youtube.com/channel/UCu_YquoQYKR3GpP82TO-zRw"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "talk_show"
+  style: "casual"
+  priority: "medium"
+  estimated_hours: 200
+  max_age_days: 365
+  status: "evaluate"
+  notes: >
+    Found by workflow wiplhsv7m (2026-06-10). ~44K videos total — max_age_days=365 is
+    REQUIRED before activating. HK commentary/satire channel, casual Cantonese.
+    MUST sample first: evaluate audio quality and language consistency before enabling.
+
+# ──────────────────────────────────────────────
+# Institutional / Government (Added 2026-06-10, Hermes institutions agent)
+# ──────────────────────────────────────────────
+
+- name: "香港立法會 LegCo"
+  url: "https://www.youtube.com/@legcogovhk"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "talk_show"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 400
+  max_age_days: 365
+  status: "active"
+  notes: >
+    CONFIRMED 2026-06-10 (hermes institutions agent). 14,000+ videos, 64.4K subscribers.
+    Official HK Legislative Council channel. Full LegCo plenary sessions (7-9h each),
+    committee meetings, bill debates. 100% HK Cantonese formal political register.
+    Multiple speakers per session — excellent for speaker diversity (70+ legislators).
+    Mixed language: ~70% Cantonese, ~20% English, ~10% Mandarin per session.
+    User decision: download all, Stage 6 language filter handles non-Cantonese segments.
+
+# ──────────────────────────────────────────────
+# Drama / Scripted Content (Added 2026-06-10, Hermes drama agent)
+# Critical gap filled: scripted dialogue for TTS prosody training
+# ──────────────────────────────────────────────
+
+- name: "TVB Best Drama (tvbanywhere)"
+  url: "https://www.youtube.com/@TVBBestDramaChannel"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "drama"
+  style: "scripted"
+  priority: "high"
+  estimated_hours: 500
+  max_age_days: 730
+  status: "evaluate"
+  notes: >
+    CONFIRMED 2026-06-10 (hermes drama agent). 653K subscribers. Official TVB channel with
+    full drama episodes (使徒行者, 幕後玩家, etc.). Professional actors, studio audio,
+    written scripted dialogue — fills critical gap in corpus. Multiple speakers per episode.
+    Evaluate 3 episodes for audio quality and segment yield before bulk download.
+    Note: drama has background music — rely on DNSMOS ≥ 3.0 filter to reject noisy segments.
+
+- name: "TVB Mystery (tvbanywhere)"
+  url: "https://www.youtube.com/@TVB_Mystery"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "drama"
+  style: "scripted"
+  priority: "high"
+  estimated_hours: 300
+  max_age_days: 730
+  status: "evaluate"
+  notes: >
+    CONFIRMED 2026-06-10 (hermes drama agent). 389K subscribers. Official TVB crime/mystery
+    drama channel. Scripted dialogue, professional production. Evaluate before bulk download.
+
+- name: "TVB WuXia (tvbanywhere)"
+  url: "https://www.youtube.com/@TVB_WuXia_KungFu"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "drama"
+  style: "scripted"
+  priority: "medium"
+  estimated_hours: 200
+  max_age_days: 730
+  status: "evaluate"
+  notes: >
+    CONFIRMED 2026-06-10 (hermes drama agent). 452K subscribers. Official TVB martial arts
+    drama channel. Scripted Cantonese. Note: classical/literary vocabulary may differ from
+    modern HK Cantonese — evaluate register before bulk download.
+
+- name: "粵語長片台"
+  url: "https://www.youtube.com/@粵語長片台"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "drama"
+  style: "scripted"
+  priority: "medium"
+  estimated_hours: 300
+  max_age_days: 0
+  status: "evaluate"
+  notes: >
+    CONFIRMED 2026-06-10 (hermes drama agent). 205K subscribers, 1,900+ videos.
+    Classic Cantonese films 1940s-1970s plus radio drama archives. Unique historical
+    register of HK Cantonese. Audio quality varies (older recordings). Evaluate
+    DNSMOS distribution on samples — older films may have poor SNR.
+    max_age_days=0 (no age limit — we want the full archive).
+
+# ──────────────────────────────────────────────
+# Female-Hosted / Narration YouTube (Added 2026-06-10, Hermes female agent)
+# ──────────────────────────────────────────────
+
+- name: "Cantonese Mommy"
+  url: "https://www.youtube.com/@CantoneseMommy"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "narration"
+  priority: "high"
+  estimated_hours: 30
+  max_age_days: 0
+  status: "evaluate"
+  notes: >
+    Found 2026-06-10 (hermes female agent). 188 videos. Studio narration, slow clear
+    Cantonese aimed at learners and children. Female host. Rated EXCELLENT for TTS by
+    agent — clean audio, deliberate pacing, minimal background noise.
+    Evaluate 5+ videos before bulk download.
+
+- name: "風信子與旦那"
+  url: "https://www.youtube.com/@風信子與旦那"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "vlog"
+  style: "casual"
+  priority: "medium"
+  estimated_hours: 150
+  max_age_days: 365
+  status: "evaluate"
+  notes: >
+    Found 2026-06-10 (hermes female agent). 683 videos. HK travel vlog, female host.
+    Large volume, natural conversational HK Cantonese. Audio quality varies (on-location).
+    Evaluate DNSMOS distribution before bulk download. max_age_days=365 required.
+
+# ──────────────────────────────────────────────
+# Sports / Racing / Football (Added 2026-06-10, Hermes sports search)
+# Domain gap filled: casual fast-paced Cantonese, sports vocabulary
+# ──────────────────────────────────────────────
+
+- name: "贏跑賽馬台"
+  url: "https://www.youtube.com/@WHR-HK"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "other"
+  style: "casual"
+  priority: "high"
+  estimated_hours: 500
+  max_age_days: 365
+  status: "evaluate"
+  notes: >
+    Found 2026-06-10 (hermes sports). 203K subs, 2.3K videos. Professional HK horse racing
+    tipping shows and live commentary. Daily uploads on race days. Authentic fast-paced
+    Cantonese, expert vocabulary. Evaluate audio before bulk download.
+
+- name: "HKJC 香港賽馬會"
+  url: "https://www.youtube.com/@HKJC"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "other"
+  style: "casual"
+  priority: "high"
+  estimated_hours: 300
+  max_age_days: 365
+  status: "evaluate"
+  notes: >
+    Found 2026-06-10 (hermes sports). 126K subs, 28K videos. Official HKJC channel.
+    Shows: 聽日有馬跑, 早着先機, 賽馬娛樂新聞, 海外賽事攻略. Mostly HK Cantonese.
+    Large volume — use max_age_days=365 to limit download scope initially.
+
+- name: "let's go梁西華"
+  url: "https://www.youtube.com/@westwah"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "other"
+  style: "casual"
+  priority: "high"
+  estimated_hours: 200
+  max_age_days: 365
+  status: "evaluate"
+  notes: >
+    Found 2026-06-10 (hermes sports). 45.7K subs. Horse racing with 聲音導航 (audio
+    navigation). Long-form live streams 55-60 min/session. Very authentic fast Cantonese
+    commentary. Excellent for prosody diversity.
+
+- name: "香港馬評"
+  url: "https://www.youtube.com/@HKJCOM"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "other"
+  style: "casual"
+  priority: "medium"
+  estimated_hours: 150
+  max_age_days: 365
+  status: "evaluate"
+  notes: >
+    Found 2026-06-10 (hermes sports). 8.2K subs. Pre-race day commentary show. Hosts share
+    horse conditions and odds in Cantonese. Evaluate audio quality (live stream recording).
+
+- name: "賽馬方程式"
+  url: "https://www.youtube.com/@賽馬方程式"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "other"
+  style: "casual"
+  priority: "medium"
+  estimated_hours: 100
+  max_age_days: 365
+  status: "evaluate"
+  notes: >
+    Found 2026-06-10 (hermes sports). Computer-based horse racing analysis. Daily race tips
+    in Cantonese. Evaluate audio quality — may be screen-recorded narration.
+
+- name: "香港本地足球專區"
+  url: "https://www.youtube.com/@faili0804"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "other"
+  style: "casual"
+  priority: "high"
+  estimated_hours: 200
+  max_age_days: 365
+  status: "evaluate"
+  notes: >
+    Found 2026-06-10 (hermes sports). 13.6K subs, 1.1K videos. Cantonese football analysis,
+    coach interviews, tactical analysis, World Cup previews. Diverse speaker pool.
+
+- name: "香港本地足球專區 2"
+  url: "https://www.youtube.com/@hkff02"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "other"
+  style: "casual"
+  priority: "medium"
+  estimated_hours: 150
+  max_age_days: 365
+  status: "evaluate"
+  notes: >
+    Found 2026-06-10 (hermes sports). 7.9K subs. HK local football live streams with
+    Cantonese 聲音導航 (audio commentary). Pre-match analysis. Evaluate live recording quality.
+
+- name: "HKFA Official 香港足總"
+  url: "https://www.youtube.com/@HKFAOfficialChannel"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "other"
+  style: "formal"
+  priority: "medium"
+  estimated_hours: 100
+  max_age_days: 365
+  status: "evaluate"
+  notes: >
+    Found 2026-06-10 (hermes sports). 8.1K subs, 283 videos. Official Hong Kong Football
+    Association. HK national team interviews, training footage in Cantonese.
+
+- name: "HK Eastern 東方體育會"
+  url: "https://www.youtube.com/@hkeasterntv"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "other"
+  style: "casual"
+  priority: "medium"
+  estimated_hours: 80
+  max_age_days: 365
+  status: "evaluate"
+  notes: >
+    Found 2026-06-10 (hermes sports). 4.8K subs, 339 videos. Official Eastern Sports Club.
+    Cantonese football and basketball: match highlights, player interviews, training.
+
+- name: "01體育"
+  url: "https://www.youtube.com/@01體育"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "other"
+  style: "casual"
+  priority: "medium"
+  estimated_hours: 200
+  max_age_days: 365
+  status: "evaluate"
+  notes: >
+    Found 2026-06-10 (hermes sports). 14.1K subs, 267 videos. HK01 sports channel.
+    Talk shows, player interviews, football discussion. Mix of formal and casual Cantonese.
+
+- name: "Hong Kong Sports Institute 香港體育學院"
+  url: "https://www.youtube.com/@hongkongsportsinstitute"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "other"
+  style: "casual"
+  priority: "low"
+  estimated_hours: 50
+  max_age_days: 365
+  status: "evaluate"
+  notes: >
+    Found 2026-06-10 (hermes sports). 3.5K subs, 305 videos. Official HK Sports Institute.
+    Athlete interviews, training docs, sports awards shows. Formal Cantonese athletic speech.
+
+# ──────────────────────────────────────────────
+# Comedy / Variety (Added 2026-06-10, Hermes comedy search)
+# Domain gap filled: casual humour register, monologue, scripted comedy
+# ──────────────────────────────────────────────
+
+- name: "黃子華 棟篤笑"
+  url: "https://www.youtube.com/@tzewahofficial"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "talk_show"
+  style: "casual"
+  priority: "high"
+  estimated_hours: 200
+  max_age_days: 0
+  status: "evaluate"
+  notes: >
+    Found 2026-06-10 (hermes comedy). Pioneer of HK Cantonese stand-up comedy. 13+ full
+    棟篤笑 shows archived. Philosophical-humorous monologue style. EXCELLENT for TTS:
+    long-form single-speaker, no background music, clear studio audio. max_age_days=0 for
+    full archive. High priority — unique speaking style not found in news/documentary.
+
+- name: "棟篤笑Tim 陳樂添"
+  url: "https://www.youtube.com/@timchancomedy"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "talk_show"
+  style: "casual"
+  priority: "medium"
+  estimated_hours: 15
+  max_age_days: 0
+  status: "evaluate"
+  notes: >
+    Found 2026-06-10 (hermes comedy). 2011 HK Stand-up Comedy Champion. Stand-up clips
+    and comedy podcast (痴線架). Younger voice, colloquial HK Cantonese.
+
+- name: "毛記電視 TV Most"
+  url: "https://www.youtube.com/@100MOSTHongKong"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "talk_show"
+  style: "casual"
+  priority: "high"
+  estimated_hours: 500
+  max_age_days: 365
+  status: "evaluate"
+  notes: >
+    Found 2026-06-10 (hermes comedy). Satirical comedy ('全球最冇良心電視台'). Programs:
+    六點半左右新聞報道, 勁曲金曲, political skits. Daily uploads, large archive, multiple
+    presenters. Note: existing entry 毛記葵涌 (@maukeikwaichung) may be same org — check
+    for duplicate content before bulk downloading both channels.
+
+- name: "TVB Comedy 喜劇台"
+  url: "https://www.youtube.com/@TVBComedy"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "drama"
+  style: "casual"
+  priority: "medium"
+  estimated_hours: 300
+  max_age_days: 365
+  status: "evaluate"
+  notes: >
+    Found 2026-06-10 (hermes comedy). Official TVB comedy channel. Sitcoms: 愛回家, 男親女愛,
+    皆大歡喜, 老表你好嘢. Multi-cast — good for speaker diversity. IMPORTANT: sitcom audio
+    has more dialogue-focused mixing vs drama — DNSMOS likely higher than @tvb_hongkong.
+    Evaluate DNSMOS on 3 episodes before bulk download.
+
+- name: "TVB 綜藝 Variety"
+  url: "https://www.youtube.com/@TVB_Variety"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "talk_show"
+  style: "casual"
+  priority: "medium"
+  estimated_hours: 400
+  max_age_days: 365
+  status: "evaluate"
+  notes: >
+    Found 2026-06-10 (hermes comedy). TVB variety shows: 獎門人, 中年好聲音, game shows.
+    High-energy casual Cantonese. Mix of hosted and guest formats. Evaluate DNSMOS on
+    studio vs on-location segments.
+
+- name: "ViuTV World"
+  url: "https://www.youtube.com/c/ViuTVWorld"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "talk_show"
+  style: "casual"
+  priority: "high"
+  estimated_hours: 500
+  max_age_days: 365
+  status: "evaluate"
+  notes: >
+    Found 2026-06-10 (hermes comedy). ViuTV international channel with full episodes.
+    170K subs, 10,000+ videos. Different channel from existing @ViuTV — check for
+    overlap before bulk downloading. Modern casual HK Cantonese, diverse content.
+
+# ──────────────────────────────────────────────
+# Low Priority / Evaluate Carefully
+# ──────────────────────────────────────────────
+
+- name: "HK Vlog Channels (generic)"
+  url: "SEARCH"
+  type: "search"
+  source: "youtube"
+  language: "yue"
+  domain: "vlog"
+  style: "casual"
+  priority: "low"
+  estimated_hours: 0
+  status: "evaluate"
+  notes: >
+    Search YouTube for popular HK Cantonese vloggers. Audio quality varies widely.
+    Only add specific channels after manual evaluation.
+    Minimum 20 episodes with consistent audio quality before adding.
+    Good for casual style diversity, but time-consuming to curate.
+
+# ──────────────────────────────────────────────
+# Skip / Reject
+# ──────────────────────────────────────────────
+
+- name: "TVB YouTube (drama clips)"
+  url: "https://www.youtube.com/@tvb_hongkong"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "drama"
+  style: "formal"
+  priority: "skip"
+  status: "skip"
+  notes: >
+    REJECTED: Most TVB YouTube clips have dialogue mixed with background music and
+    sound effects at high volume. DNSMOS will be < 3.0 for majority of segments.
+    Individual drama episodes from VOD may be better — evaluate separately if needed.
+    Also: copyright enforcement risk with TVB content.
+
+- name: "Overseas Cantonese diaspora channels"
+  url: "SEARCH"
+  type: "search"
+  source: "youtube"
+  language: "yue"
+  domain: "other"
+  style: "casual"
+  priority: "skip"
+  status: "skip"
+  notes: >
+    REJECTED: Cantonese spoken by Hong Kong diaspora in Canada, Australia, UK shows
+    different phonological patterns (tone merging, loan word differences) from native
+    HK speakers. The TTS is targeting HK Cantonese specifically. Do not include.
+
+# ──────────────────────────────────────────────
+# Cooking / Food / Health — Added 2026-06-10
+# ──────────────────────────────────────────────
+
+# High Priority — Cooking & Food (clear HK Cantonese narration, studio quality)
+
+- name: "Chef Chu's Kitchen"
+  url: "https://www.youtube.com/@chefchuskitchen"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "narration"
+  priority: "high"
+  estimated_hours: 100
+  max_age_days: 365
+  status: "evaluate"
+  notes: >
+    280k subs, 338 videos. Professional HK chef demonstrating Cantonese recipes.
+    Clear Cantonese narration, studio setup, minimal background noise.
+    High priority for cooking domain coverage.
+
+- name: "LetsCookHongKongFood"
+  url: "https://www.youtube.com/@letscookhongkongfood1566"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "documentary"
+  style: "casual"
+  priority: "high"
+  estimated_hours: 80
+  max_age_days: 365
+  status: "evaluate"
+  notes: >
+    227k subs, 276 videos. HK-style Cantonese home cooking recipes.
+    Clear Cantonese narration, everyday cooking vocabulary.
+    Good for casual/home-style Cantonese register.
+
+- name: "Cooking with Wah Jai"
+  url: "https://www.youtube.com/@CookingWithWahJai"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "casual"
+  priority: "high"
+  estimated_hours: 80
+  max_age_days: 365
+  status: "evaluate"
+  notes: >
+    89.1k subs, 484 videos. Cantonese cooking tutorials with live streams.
+    HK-based. Long-format content (45-60 min) requires segmentation.
+    Natural conversational style during live cooking demonstrations.
+
+# Medium Priority — Food Review & Lifestyle
+
+- name: "TVB Food & Travel 飲食旅遊"
+  url: "https://www.youtube.com/@TVB_Food_Travel"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "documentary"
+  style: "formal"
+  priority: "medium"
+  estimated_hours: 50
+  max_age_days: 365
+  status: "evaluate"
+  notes: >
+    TVB official channel. HK food documentaries and travel content.
+    Professional Cantonese narration, high production quality.
+    Adds formal food-documentary register diversity.
+
+- name: "柿柿chichi"
+  url: "https://www.youtube.com/@this.is.chichi"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "vlog"
+  style: "casual"
+  priority: "medium"
+  estimated_hours: 50
+  max_age_days: 365
+  status: "evaluate"
+  notes: >
+    HK food review channel. Reviews restaurants and HK food spots in Cantonese.
+    Casual conversational style, on-location audio — check DNSMOS on samples.
+    Good for colloquial food-related vocabulary and expressions.
+
+- name: "Stephen Leung"
+  url: "https://www.youtube.com/@stephen_leung"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "documentary"
+  style: "casual"
+  priority: "high"
+  estimated_hours: 100
+  max_age_days: 365
+  status: "evaluate"
+  notes: >
+    365k subs, 1k+ videos. Major HK food review channel covering restaurants,
+    street food, and HK food culture. Cantonese narration with multiple guest
+    appearances — good speaker diversity within food domain.
+
+# Health & Nutrition
+
+- name: "營養師媽媽Priscilla (Nutritionist Mama Priscilla)"
+  url: "https://www.youtube.com/@nutritionmama"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 100
+  max_age_days: 365
+  status: "evaluate"
+  notes: >
+    188k subs, 711 videos. HK registered nutritionist. Topics: pregnancy nutrition,
+    baby food, health diets, diabetes, blood pressure, cancer prevention.
+    Single speaker, formal educational style — EXCELLENT for TTS (clear, structured,
+    minimal background music). HK Cantonese health/scientific vocabulary.
+
+- name: "Vita 養生資訊台 - 鐘姑娘"
+  url: "https://www.youtube.com/@VitaLee1991"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "casual"
+  priority: "medium"
+  estimated_hours: 40
+  max_age_days: 365
+  status: "evaluate"
+  notes: >
+    19k subs, 173 videos. HK health/wellness channel covering food safety, cooking
+    tips, health myths, diabetes, blood sugar. Mix of food and general lifestyle.
+    Clear HK Cantonese with everyday vocabulary.
+
+- name: "今日講呢啲"
+  url: "https://www.youtube.com/@GznfVideo"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "medium"
+  estimated_hours: 50
+  max_age_days: 365
+  status: "evaluate"
+  notes: >
+    63.8k subs, 509 videos. HK Cantonese cultural commentary covering health topics
+    including 涼茶 (herbal tea), food safety, Hong Kong health culture.
+    Professional single-speaker narration. Good for formal health register.
+
+# ──────────────────────────────────────────────
+# Children / Storytelling / Educational (Added 2026-06-10, Hermes children search)
+# Domain gap filled: slow clear narration, deliberate pronunciation, HK cultural references
+# EXCELLENT for TTS: clean audio, single speaker, natural prosody
+# ──────────────────────────────────────────────
+
+- name: "Uncle Calvin 廣東話教室"
+  url: "https://www.youtube.com/@unclecalvin"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "narration"
+  priority: "high"
+  estimated_hours: 200
+  max_age_days: 0
+  status: "evaluate"
+  notes: >
+    Found 2026-06-10 (hermes children). 37K+ subs, 11M+ views. Former TVB presenter.
+    Cantonese learning for ages 0-6 with visual vocabulary teaching. Professional narration.
+
+- name: "Miss Farley 廣東話兒童故事"
+  url: "https://www.youtube.com/@LittleFarland"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "narration"
+  priority: "high"
+  estimated_hours: 150
+  max_age_days: 0
+  status: "evaluate"
+  notes: >
+    Found 2026-06-10 (hermes children). HK-based, ages 0-8. Original hand-drawn illustrations
+    + Cantonese story narration. Festivals, emotions, daily habits. HK cultural references.
+
+- name: "Fely姐姐 兒童故事頻道"
+  url: "https://www.youtube.com/@Fely"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "narration"
+  priority: "high"
+  estimated_hours: 175
+  max_age_days: 0
+  status: "evaluate"
+  notes: >
+    Found 2026-06-10 (hermes children). 350+ picture book stories read daily since 2020.
+    Conversational Cantonese commentary. Ideal for bedtime story audio. Single female speaker.
+
+- name: "嘉芙姐姐 Ka Foo Musicland"
+  url: "https://www.youtube.com/@kafoomusicland"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "narration"
+  priority: "high"
+  estimated_hours: 120
+  max_age_days: 0
+  status: "evaluate"
+  notes: >
+    Found 2026-06-10 (hermes children). HK-based. Cantonese nursery rhymes, children's
+    stories, animated content. HK cultural content (Mid-Autumn, Dragon Boat).
+
+- name: "冚唪唥 Hambaanglaang"
+  url: "https://www.youtube.com/@hambaanglaang"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "narration"
+  priority: "high"
+  estimated_hours: 80
+  max_age_days: 0
+  status: "evaluate"
+  notes: >
+    Found 2026-06-10 (hermes children). HK Cantonese graded reader stories. Uses 粵文
+    (colloquial Cantonese writing) + Jyutping. Highly recommended by Cantonese learner
+    community. Unique colloquial register not found in broadcast content.
+
+- name: "廣東話睡前兒童故事"
+  url: "https://www.youtube.com/@eliza.cantonese-kid-story"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "narration"
+  priority: "high"
+  estimated_hours: 50
+  max_age_days: 0
+  status: "evaluate"
+  notes: >
+    Found 2026-06-10 (hermes children). Dedicated bedtime stories. Calm, slow-paced
+    pure Cantonese narration. EXCELLENT for TTS prosody: relaxed single-speaker delivery.
+
+- name: "Storybear 粵語兒童故事"
+  url: "https://www.youtube.com/@storybear"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "narration"
+  priority: "high"
+  estimated_hours: 45
+  max_age_days: 0
+  status: "evaluate"
+  notes: >
+    Found 2026-06-10 (hermes children). Run by qualified early childhood educator.
+    Curated picture book stories. HK Cantonese, quality narration.
+
+- name: "咪豬世界 Michu World"
+  url: "https://www.youtube.com/@michuworld"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "narration"
+  priority: "high"
+  estimated_hours: 35
+  max_age_days: 0
+  status: "evaluate"
+  notes: >
+    Found 2026-06-10 (hermes children). Cantonese picture book audiobook channel.
+    Storytelling for vocabulary + oral expression. Diverse themes (festivals, animals).
+
+- name: "麥兜 Mcdull Official"
+  url: "https://www.youtube.com/@mcdull"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "drama"
+  style: "narration"
+  priority: "high"
+  estimated_hours: 50
+  max_age_days: 0
+  status: "evaluate"
+  notes: >
+    Found 2026-06-10 (hermes children). Official Mcdull HK animation. Iconic HK cultural
+    property. Short films, clips. Pure HK Cantonese — unique child-oriented speech register.
+
+- name: "放學ICU TVB Kids"
+  url: "https://www.youtube.com/@TVBKids"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "narration"
+  priority: "high"
+  estimated_hours: 200
+  max_age_days: 0
+  status: "evaluate"
+  notes: >
+    Found 2026-06-10 (hermes children). Official TVB children's program, HK's
+    longest-running (2005-2015, 2,614 episodes). Life knowledge, nature, storytelling.
+    Pure HK Cantonese from TVB professionals. High-quality studio audio.
+
+- name: "香港教育頻道 HK Educational Channel"
+  url: "https://www.youtube.com/@hkedchannel"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "narration"
+  priority: "medium"
+  estimated_hours: 100
+  max_age_days: 0
+  status: "evaluate"
+  notes: >
+    Found 2026-06-10 (hermes children). HK educational content, school-level programming.
+    Professional HK Cantonese narration and presentation style.
+
+- name: "Kala EE 香港兒童教學"
+  url: "https://www.youtube.com/@kalaee"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "narration"
+  priority: "medium"
+  estimated_hours: 60
+  max_age_days: 0
+  status: "evaluate"
+  notes: >
+    Found 2026-06-10 (hermes children). HKU-qualified therapist, 20 yrs experience.
+    Cantonese learning ages 3-7. Filmed on real HK locations.
+
+- name: "BunFun Cantonese for Kids 繽紛學習廣東話"
+  url: "https://www.youtube.com/@BunFunCantoneseforKids"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "narration"
+  priority: "medium"
+  estimated_hours: 40
+  max_age_days: 0
+  status: "evaluate"
+  notes: >
+    Found 2026-06-10 (hermes children). Animated Cantonese teaching for preschool to
+    elementary. HK-based, dedicated young children focus.
+
+- name: "Cantonese Kids Jo Jo Ma"
+  url: "https://www.youtube.com/@CantoneseKids"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "narration"
+  priority: "medium"
+  estimated_hours: 40
+  max_age_days: 0
+  status: "evaluate"
+  notes: >
+    Found 2026-06-10 (hermes children). HK-based mother/piano teacher with linguistics
+    background. Play-based Cantonese: storytelling, baking, cooking. All in Cantonese.
+
+- name: "熊熊粵語兒童故事"
+  url: "https://www.youtube.com/@bearchoir"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "narration"
+  priority: "medium"
+  estimated_hours: 30
+  max_age_days: 0
+  status: "evaluate"
+  notes: >
+    Found 2026-06-10 (hermes children). By 熊熊兒童合唱團. Multiple story volumes —
+    animal tales, moral stories. HK Cantonese narration.
+
+# ──────────────────────────────────────────────
+# New Sources — agy Research 2026-06-12 (verified HTTP 200)
+# ──────────────────────────────────────────────
+
+# --- Drama: TVB / ViuTV ---
+
+- name: "TVB USA Official"
+  url: "https://www.youtube.com/@tvbusa"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "drama"
+  style: "scripted"
+  priority: "high"
+  estimated_hours: 1000
+  max_age_days: 0
+  status: "evaluate"
+  notes: >
+    VERIFIED 2026-06-12. TVB USA official channel with diverse dramas and variety shows.
+    Check individual videos for Cantonese audio track (not Mandarin dubbed).
+
+- name: "美亞影院 Cinema Mei Ah"
+  url: "https://www.youtube.com/@CinemaMeiAh"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "drama"
+  style: "scripted"
+  priority: "medium"
+  estimated_hours: 600
+  max_age_days: 0
+  status: "evaluate"
+  notes: >
+    VERIFIED 2026-06-12. Mei Ah Entertainment official channel — full HK movies.
+    Many are original Cantonese audio. Some videos may be Mandarin-only or dual track.
+    Must spot-check language before bulk download.
+
+# --- Religious: Churches ---
+
+- name: "宣道會北角堂 (North Point Alliance Church NPAC)"
+  url: "https://www.youtube.com/@npac"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 300
+  max_age_days: 0
+  status: "evaluate"
+  notes: >
+    VERIFIED 2026-06-12. Largest C&MA church in HK. Weekly Sunday sermons + bible
+    study in formal HK Cantonese. High audio quality from church PA system.
+    Diverse speakers (multiple pastors). Excellent for formal speech corpus.
+
+- name: "播道會港福堂 (EFCC Kong Fok Church)"
+  url: "https://www.youtube.com/@EFCCKongFokChurch"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 150
+  max_age_days: 0
+  status: "evaluate"
+  notes: >
+    VERIFIED 2026-06-12. EFCC Kong Fok Church weekly sermons. Clear studio-quality
+    Cantonese. Multiple pastors — good speaker diversity.
+
+- name: "播道會雅斤堂 (EFCC Jachin Church)"
+  url: "https://www.youtube.com/@JachinChurch"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "medium"
+  estimated_hours: 150
+  max_age_days: 0
+  status: "evaluate"
+  notes: >
+    VERIFIED 2026-06-12. Active local church uploading weekly sermons.
+    Clear speech, formal register HK Cantonese.
+
+- name: "播道會同福堂 Sunday Sermons (TungFookSunSermons)"
+  url: "https://www.youtube.com/@TungFookSunSermons"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 200
+  max_age_days: 0
+  status: "evaluate"
+  notes: >
+    VERIFIED 2026-06-12. Dedicated Sunday service channel for Tung Fook Church.
+    High-quality formal Cantonese sermons direct from church PA.
+
+- name: "香港聖公會 教聲 (HKSKH Echo)"
+  url: "https://www.youtube.com/@hkskhecho"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "medium"
+  estimated_hours: 60
+  max_age_days: 0
+  status: "evaluate"
+  notes: >
+    VERIFIED 2026-06-12. HK Anglican Church media. News + theological discussions
+    in formal Cantonese. Multiple speakers.
+
+# --- Religious: Buddhist / Taoist ---
+
+- name: "東蓮覺苑 (Tung Lin Kok Yuen)"
+  url: "https://www.youtube.com/@TungLinKokYuen"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 100
+  max_age_days: 0
+  status: "evaluate"
+  notes: >
+    VERIFIED 2026-06-12. Historic HK Buddhist temple. Weekly dharma talks, lectures,
+    and educational series in Cantonese. Formal, clear speech.
+
+- name: "法鼓山香港道場 (Dharma Drum Mountain HK)"
+  url: "https://www.youtube.com/@ddmhongkong"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 120
+  max_age_days: 0
+  status: "evaluate"
+  notes: >
+    VERIFIED 2026-06-12. Cantonese dharma talks by local monastics + Master Sheng
+    Yen audiobook content. Excellent single-speaker TTS material.
+
+- name: "香港佛光道場 (Fo Guang Shan HK)"
+  url: "https://www.youtube.com/@hkfgv"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "medium"
+  estimated_hours: 80
+  max_age_days: 0
+  status: "evaluate"
+  notes: >
+    VERIFIED 2026-06-12. Mix of Mandarin and Cantonese. Local public lectures and
+    community features are in HK Cantonese. Must filter per video language.
+
+- name: "嗇色園黃大仙祠 (Sik Sik Yuen Wong Tai Sin Temple)"
+  url: "https://www.youtube.com/@ssy_wongtaisintemple"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "medium"
+  estimated_hours: 50
+  max_age_days: 0
+  status: "evaluate"
+  notes: >
+    VERIFIED 2026-06-12. Major Taoist temple in HK. Cultural talks, traditional
+    health lectures, and ritual explanations in Cantonese.
+
+# --- Government ---
+
+- name: "香港天文台 (Hong Kong Observatory)"
+  url: "https://www.youtube.com/@hkweather"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "news"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 300
+  max_age_days: 0
+  status: "evaluate"
+  notes: >
+    VERIFIED 2026-06-12. Climate summaries and weather forecasts by professional
+    meteorologists. Extremely precise, standardized HK Cantonese. Clean studio audio.
+
+- name: "香港警務處 (Hong Kong Police Force)"
+  url: "https://www.youtube.com/@HKPChannel"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "news"
+  style: "formal"
+  priority: "medium"
+  estimated_hours: 500
+  max_age_days: 0
+  status: "evaluate"
+  notes: >
+    VERIFIED 2026-06-12. Official press briefings, crime alerts, information shows.
+    Standard formal HK Cantonese. Multiple police spokesperson speakers.
+
+- name: "香港消防處 (Hong Kong Fire Services)"
+  url: "https://www.youtube.com/@HkfsdGovHk"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "news"
+  style: "formal"
+  priority: "low"
+  estimated_hours: 150
+  max_age_days: 0
+  status: "evaluate"
+  notes: >
+    VERIFIED 2026-06-12. Public announcements, fire safety videos, press updates.
+    Clear Cantonese voiceovers.
+
+# --- Educational ---
+
+- name: "香港中文大學 CUHK Official"
+  url: "https://www.youtube.com/@CUHKChannel"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "medium"
+  estimated_hours: 200
+  max_age_days: 0
+  status: "evaluate"
+  notes: >
+    VERIFIED 2026-06-12. CUHK main channel. Public lectures, academic presentations,
+    profile interviews in standard Cantonese. Filter per-video for Cantonese-only.
+
+- name: "香港考試及評核局 HKEAA"
+  url: "https://www.youtube.com/@hkeaachannel"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 50
+  max_age_days: 0
+  status: "evaluate"
+  notes: >
+    VERIFIED 2026-06-12. Official HKDSE exam board channel. Contains
+    '中學文憑考試（廣東話）' series — very clear, standardized examination Cantonese.
+    Excellent for formal, careful articulation training data.
+
+- name: "商業電台 Hong Kong Toolbar"
+  url: "https://www.youtube.com/@cr881903"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "other"
+  style: "casual"
+  priority: "high"
+  estimated_hours: 500
+  status: "evaluate"
+  notes: >
+    VERIFIED 2026-06-12. Official YouTube channel of Commercial Radio Hong Kong (881903.com).
+    Contains radio show segments, interviews, and features. Standard Hong Kong Cantonese,
+    mix of formal news/talk (CR1) and casual/music commentary (CR2). High speaker diversity.
+
+- name: "新城財經台 Metro Finance"
+  url: "https://www.youtube.com/@HKmetroradio"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "news"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 300
+  status: "evaluate"
+  notes: >
+    VERIFIED 2026-06-12. Official YouTube channel for Metro Finance radio channel.
+    Contains financial analysis, stock market updates, investment talks, and professional opinions.
+    Formal register, clear articulation, high-quality studio audio.
+
+- name: "新城知訊台"
+  url: "https://www.youtube.com/@新城知訊台-l2v"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "other"
+  style: "casual"
+  priority: "medium"
+  estimated_hours: 50
+  status: "evaluate"
+  notes: >
+    VERIFIED 2026-06-12. Official YouTube channel for Metro Info radio channel.
+    Features entertainment news, artist interviews, and casual lifestyle radio segments.
+    Natural HK Cantonese, multiple hosts.
+
+- name: "SPORTSROAD 體路"
+  url: "https://www.youtube.com/@hksportsroad"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "sports"
+  style: "casual"
+  priority: "high"
+  estimated_hours: 200
+  status: "evaluate"
+  notes: >
+    VERIFIED 2026-06-12. Major Hong Kong sports news portal.
+    Features live commentary of school championships (basketball, football, etc.), athlete interviews,
+    and sports documentaries. Authentic local sports commentary registers and high voice variety.
+
+- name: "HKFA Official"
+  url: "https://www.youtube.com/@HKFAOfficialChannel"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "sports"
+  style: "formal"
+  priority: "medium"
+  estimated_hours: 30
+  status: "evaluate"
+  notes: >
+    VERIFIED 2026-06-12. Official channel of the Hong Kong Football Association.
+    Features representative team interviews, match highlights (sometimes with Cantonese commentary),
+    and promotional clips. Clear Cantonese speech but speech density varies.
+
+- name: "SwagHK 852"
+  url: "https://www.youtube.com/@SwagHK852"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "sports"
+  style: "casual"
+  priority: "high"
+  estimated_hours: 60
+  status: "evaluate"
+  notes: >
+    VERIFIED 2026-06-12. Popular HK football analysis and storytelling channel.
+    Features detailed narratives of football history, tactics, and player profiles in native Cantonese.
+    Clear monologue speech, good for single-speaker TTS analysis.
+
+- name: "港析足球 Home Kong Football"
+  url: "https://www.youtube.com/@HomeKongFootball"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "sports"
+  style: "casual"
+  priority: "medium"
+  estimated_hours: 20
+  status: "evaluate"
+  notes: >
+    VERIFIED 2026-06-12. Local football analysis channel run by young HK football enthusiasts.
+    Features tactical analysis, player reviews, and local league insights in colloquial Cantonese.
+
+- name: "HKJC 香港賽馬會"
+  url: "https://www.youtube.com/@HKJC"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "sports"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 500
+  status: "evaluate"
+  notes: >
+    VERIFIED 2026-06-12. Official channel of the Hong Kong Jockey Club.
+    Features extensive racing preview programs (e.g. 早着先機, 聽日有馬跑) and post-race analyses.
+    Excellent source of professional, high-speed, fluent Cantonese commentary and discussion.
+
+- name: "教育局 edbgovhk"
+  url: "https://www.youtube.com/@edbgovhk"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 60
+  status: "evaluate"
+  notes: >
+    VERIFIED 2026-06-12. Official HKSAR Education Bureau channel.
+    Contains educational policy explainers, parent guides, and student learning videos.
+    Standardized, clear, formal HK Cantonese articulation.
+
+- name: "香港都會大學 HKMU Channel"
+  url: "https://www.youtube.com/@HKMUChannel"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 150
+  status: "evaluate"
+  notes: >
+    VERIFIED 2026-06-12. Official channel of Hong Kong Metropolitan University.
+    Features "都大講堂" (Talk of the Metropolis) public lectures, academic panels, and talks.
+    Highly professional public speaking Cantonese from various scholars and experts.
+
+- name: "職業訓練局 channelvtc"
+  url: "https://www.youtube.com/@channelvtc"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "medium"
+  estimated_hours: 40
+  status: "evaluate"
+  notes: >
+    VERIFIED 2026-06-12. Official channel of the Vocational Training Council.
+    Features vocational skills training videos, course introductions, and student stories.
+    Clear instruction-style Cantonese narration.
+
+- name: "香港公共圖書館 Hong Kong Public Libraries"
+  url: "https://www.youtube.com/@HongKongPublicLibraries"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 300
+  status: "evaluate"
+  notes: >
+    VERIFIED 2026-06-12. Official channel of Hong Kong Public Libraries.
+    Features recorded public lectures (e.g. on history, literature, science), author interviews,
+    and reading programs. High density of clean, formal Cantonese public speech.
+
+- name: "M+ Museum"
+  url: "https://www.youtube.com/@MPLUSMUSEUM"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "documentary"
+  style: "interview"
+  priority: "medium"
+  estimated_hours: 15
+  status: "evaluate"
+  notes: >
+    VERIFIED 2026-06-12. Official channel of M+ Museum.
+    Features artist talks, exhibition walkthroughs, and curator interviews.
+    Contains mixed language videos, but includes valuable Cantonese segments.
+
+- name: "香港藝術中心"
+  url: "https://www.youtube.com/@HongKongArtsCentre"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "documentary"
+  style: "interview"
+  priority: "medium"
+  estimated_hours: 20
+  status: "evaluate"
+  notes: >
+    VERIFIED 2026-06-12. Official channel of HK Arts Centre.
+    Contains artist interviews, creative talks, and cultural event updates in Cantonese.
+
+- name: "香港管弦樂團 HKPhilharmonic"
+  url: "https://www.youtube.com/@HKPhilharmonic"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "other"
+  style: "formal"
+  priority: "low"
+  estimated_hours: 10
+  status: "evaluate"
+  notes: >
+    VERIFIED 2026-06-12. Official channel of the Hong Kong Philharmonic Orchestra.
+    Contains pre-concert talks, artist interviews, and promotional clips. Focuses on music,
+    but has some clear Cantonese narration/speaking videos.
+
+- name: "BunFun 繽紛學習廣東話"
+  url: "https://www.youtube.com/@BunFunCantoneseforKids"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "casual"
+  priority: "high"
+  estimated_hours: 10
+  status: "evaluate"
+  notes: >
+    VERIFIED 2026-06-12. High-quality children's cartoon Cantonese vocabulary and story videos.
+    Extremely clear, child-friendly, slow Cantonese pronunciation.
+
+- name: "嘉芙姐姐 Miss Ka Foo"
+  url: "https://www.youtube.com/@kafoomusicland"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "casual"
+  priority: "low"
+  estimated_hours: 25
+  status: "skip"
+  notes: >
+    UNVERIFIED 2026-06-12: @kafoomusicland returns HTTP 404. Handle incorrect.
+    Skip until correct handle is found.
+
+- name: "Kala EE 香港兒童教學頻道"
+  url: "https://www.youtube.com/@kalaee"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "casual"
+  priority: "high"
+  estimated_hours: 15
+  status: "evaluate"
+  notes: >
+    VERIFIED 2026-06-12. Cantonese vocabulary and cognitive learning videos for toddlers and kids.
+    Slow, clear, and repetitious speech.
+
+- name: "Uncle Calvin 廣東話教室"
+  url: "https://www.youtube.com/@UncleCalvin"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "casual"
+  priority: "high"
+  estimated_hours: 15
+  status: "evaluate"
+  notes: >
+    VERIFIED 2026-06-12. Structured Cantonese lessons for toddlers and kids (vocabulary, daily dialogues).
+    High-quality audio, slow and clear articulation.
+
+- name: "Piggy Classroom 小豬課室"
+  url: "https://www.youtube.com/@piggyclassroom"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "casual"
+  priority: "low"
+  estimated_hours: 15
+  status: "skip"
+  notes: >
+    UNVERIFIED 2026-06-12: @piggyclassroom returns HTTP 404. Handle incorrect.
+    Skip until correct handle is found.
+
+- name: "香港醫學會 The Hong Kong Medical Association"
+  url: "https://www.youtube.com/@hongkongmedicalassociation1920"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 50
+  status: "evaluate"
+  notes: >
+    VERIFIED 2026-06-12. Official channel of HK Medical Association.
+    Features public health webinars, medical seminars, and expert doctor talks in Cantonese.
+    Clear, formal, medical-themed professional speech.
+
+- name: "香港律師會 The Law Society of Hong Kong"
+  url: "https://www.youtube.com/@TheLawSocietyofHongKong"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 40
+  status: "evaluate"
+  notes: >
+    VERIFIED 2026-06-12. Official channel of the HK Law Society.
+    Features legal seminars, press briefings, constitutional education, and community talks.
+    Formal, legal-themed professional registers in Cantonese.
+
+- name: "香港會計師公會 The Hong Kong Institute of CPAs"
+  url: "https://www.youtube.com/@HKICPA_Official"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "low"
+  estimated_hours: 50
+  status: "skip"
+  notes: >
+    UNVERIFIED 2026-06-12: @HKICPA_Official returns HTTP 404. Handle incorrect.
+    Skip until correct handle is found.
+
+# ──────────────────────────────────────────────
+# Museums / Heritage (Verified 2026-06-12)
+# ──────────────────────────────────────────────
+
+- name: "香港歷史博物館 Hong Kong Museum of History"
+  url: "https://www.youtube.com/@HKMoH"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "documentary"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 40
+  status: "evaluate"
+  notes: >
+    VERIFIED 2026-06-12 via agy. Handle @HKMoH (200 OK).
+    Old handle @hkmuseumofhistory returned 404.
+    Official HKSAR Leisure and Cultural Services museum channel.
+
+- name: "香港中文大學文物館 Art Museum CUHK"
+  url: "https://www.youtube.com/@artmuseumcuhk911"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "documentary"
+  style: "formal"
+  priority: "medium"
+  estimated_hours: 20
+  status: "evaluate"
+  notes: >
+    VERIFIED 2026-06-12 via agy. Handle @artmuseumcuhk911 (channel ID UCFPAZCXhqMXQ2cvtrj3ZkCg, 200 OK).
+    Old handle @artmuseumcuhk returned 404.
+    Exhibition talks, curator tours, academic art lectures in Cantonese.
+
+# ──────────────────────────────────────────────
+# Universities (Verified 2026-06-12)
+# ──────────────────────────────────────────────
+
+- name: "香港大學 The University of Hong Kong"
+  url: "https://www.youtube.com/@abouthku"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 200
+  status: "evaluate"
+  notes: >
+    VERIFIED 2026-06-12 via agy. Handle @abouthku (200 OK).
+    Official HKU main channel. Public lectures, research highlights,
+    graduation ceremonies, and campus events in formal Cantonese.
+
+# ──────────────────────────────────────────────
+# Classic Cantonese Films 粵語長片 (Verified 2026-06-12)
+# ──────────────────────────────────────────────
+
+- name: "粵語長片台 Cantonese Classic Films"
+  url: "https://www.youtube.com/@cantonesefilm_classic"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "drama"
+  style: "narration"
+  priority: "high"
+  estimated_hours: 500
+  status: "evaluate"
+  notes: >
+    VERIFIED 2026-06-12 via agy. Handle @cantonesefilm_classic (200 OK, 1,900+ videos, active).
+    Classic HK Cantonese films from 1950s-1980s. Dialogue-heavy, authentic period Cantonese.
+    Large archive actively uploading. High speaker diversity and historical Cantonese register.
+
+# ──────────────────────────────────────────────
+# Food / Lifestyle Vloggers (agy Search 2026-06-12)
+# ──────────────────────────────────────────────
+
+- name: "有啖好食 Perfect Continuous Eat"
+  url: "https://www.youtube.com/@PerfectContinuousEat"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "other"
+  style: "casual"
+  priority: "medium"
+  estimated_hours: 40
+  status: "evaluate"
+  notes: "FOUND 2026-06-12. 451 videos. HK food review and dining vlog. Casual colloquial Cantonese."
+
+- name: "西DorSi偽中產生活態度"
+  url: "https://www.youtube.com/@saidorsi"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "other"
+  style: "casual"
+  priority: "medium"
+  estimated_hours: 120
+  status: "evaluate"
+  notes: "FOUND 2026-06-12. 1,400 videos. HK lifestyle commentary. Natural conversational Cantonese."
+
+- name: "米紙 ricezi2hk"
+  url: "https://www.youtube.com/@ricezi2hk"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "other"
+  style: "casual"
+  priority: "medium"
+  estimated_hours: 60
+  status: "evaluate"
+  notes: "FOUND 2026-06-12. 699 videos. HK food and street culture. Casual Cantonese."
+
+- name: "Mill MILK"
+  url: "https://www.youtube.com/@mm.millmilk"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "other"
+  style: "casual"
+  priority: "medium"
+  estimated_hours: 130
+  status: "evaluate"
+  notes: "FOUND 2026-06-12. 1,500 videos. HK lifestyle/food vlog. Natural Cantonese."
+
+- name: "Stephen Leung 吃喝玩樂"
+  url: "https://www.youtube.com/@stephen_leung"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "other"
+  style: "casual"
+  priority: "medium"
+  estimated_hours: 90
+  status: "evaluate"
+  notes: "FOUND 2026-06-12. 1,000 videos. Food and travel vlog. Casual Cantonese."
+
+- name: "職人吹水 singsingkitchen"
+  url: "https://www.youtube.com/@singsingkitchen"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "other"
+  style: "casual"
+  priority: "high"
+  estimated_hours: 800
+  status: "evaluate"
+  notes: "FOUND 2026-06-12. 8,700 videos. Long-running HK food/chat channel. Very large archive."
+
+- name: "點 Cook Guide"
+  url: "https://www.youtube.com/@dim_cook_guide"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "narration"
+  priority: "high"
+  estimated_hours: 140
+  status: "evaluate"
+  notes: "FOUND 2026-06-12. 1,600 videos. Cantonese cooking tutorials. Clear instructional narration."
+
+# ──────────────────────────────────────────────
+# Comedy / Entertainment (agy Search 2026-06-12)
+# ──────────────────────────────────────────────
+
+- name: "黃子華 Dayo Wong Official"
+  url: "https://www.youtube.com/@dayowongofficial"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "other"
+  style: "casual"
+  priority: "high"
+  estimated_hours: 30
+  status: "evaluate"
+  notes: "FOUND 2026-06-12. HK legendary 棟篤笑 stand-up comedian. Iconic authentic Cantonese speech."
+
+- name: "棟篤笑Tim Tim Chan Comedy"
+  url: "https://www.youtube.com/@timchancomedy"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "other"
+  style: "casual"
+  priority: "medium"
+  estimated_hours: 20
+  status: "evaluate"
+  notes: "FOUND 2026-06-12. HK stand-up comedy. Colloquial Cantonese."
+
+- name: "ViuTV Official"
+  url: "https://www.youtube.com/@ViuTV"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "drama"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 500
+  status: "evaluate"
+  notes: "FOUND 2026-06-12. Official ViuTV channel. HK drama, variety shows, talk programmes."
+
+- name: "MakerVille ViuTV Production"
+  url: "https://www.youtube.com/@MakerVille_official"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "drama"
+  style: "casual"
+  priority: "high"
+  estimated_hours: 200
+  status: "evaluate"
+  notes: "FOUND 2026-06-12. ViuTV content production arm. Drama clips, variety, artist content."
+
+- name: "FHProductionHK"
+  url: "https://www.youtube.com/@FHProductionHK"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "other"
+  style: "casual"
+  priority: "medium"
+  estimated_hours: 50
+  status: "evaluate"
+  notes: "FOUND 2026-06-12. HK comedy production company. Sketch comedy in Cantonese."
+
+- name: "小薯茄 Pomato"
+  url: "https://www.youtube.com/@PomatoHK"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "other"
+  style: "casual"
+  priority: "medium"
+  estimated_hours: 50
+  status: "evaluate"
+  notes: "FOUND 2026-06-12. HK comedy sketch group. Natural colloquial Cantonese."
+
+- name: "試當真 Trial & Error"
+  url: "https://www.youtube.com/@trialanderror924"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "other"
+  style: "casual"
+  priority: "high"
+  estimated_hours: 100
+  status: "evaluate"
+  notes: "FOUND 2026-06-12. Very popular HK comedy/variety group. High speaker diversity, natural Cantonese."
+
+- name: "啱Channel Arm Channel TV"
+  url: "https://www.youtube.com/@armchanneltv"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "other"
+  style: "casual"
+  priority: "medium"
+  estimated_hours: 40
+  status: "evaluate"
+  notes: "FOUND 2026-06-12. HK comedy channel. Colloquial Cantonese."
+
+# ──────────────────────────────────────────────
+# Finance / Investment (agy Search 2026-06-12)
+# ──────────────────────────────────────────────
+
+- name: "我要做富翁 Money Tab"
+  url: "https://www.youtube.com/@Money-Tab"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "other"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 150
+  status: "evaluate"
+  notes: "FOUND 2026-06-12. ~1,500 videos. HK personal finance education. Clear formal Cantonese."
+
+- name: "Finance730"
+  url: "https://www.youtube.com/@Finance730hk"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "news"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 700
+  status: "evaluate"
+  notes: "FOUND 2026-06-12. ~700h est. HK finance news and analysis. Professional formal Cantonese."
+
+- name: "胡‧說樓市 Property Analysis"
+  url: "https://www.youtube.com/@wuchatprop"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "other"
+  style: "formal"
+  priority: "medium"
+  estimated_hours: 200
+  status: "evaluate"
+  notes: "FOUND 2026-06-12. HK property market analysis. Formal commentary Cantonese."
+
+- name: "Sun Channel HK Finance"
+  url: "https://www.youtube.com/@SunChannelHK"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "news"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 500
+  status: "evaluate"
+  notes: "FOUND 2026-06-12. Large HK finance news channel. Formal professional Cantonese."
+
+- name: "RagaFinance 財經台"
+  url: "https://www.youtube.com/@RagaFinance"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "news"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 500
+  status: "evaluate"
+  notes: "FOUND 2026-06-12. HK financial news channel. Large archive. Formal Cantonese financial commentary."
+
+- name: "InvesTalk 講投資"
+  url: "https://www.youtube.com/@InvesTalk"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "other"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 300
+  status: "evaluate"
+  notes: "FOUND 2026-06-12. Investment education channel. Clear formal Cantonese."
+
+- name: "AASTOCKS 財經新聞"
+  url: "https://www.youtube.com/@AASTOCKS_AATV"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "news"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 400
+  status: "evaluate"
+  notes: "FOUND 2026-06-12. ~2,800 videos. AASTOCKS financial news TV. Professional Cantonese."
+
+- name: "Finsight ED 財務分析"
+  url: "https://www.youtube.com/@finsighted380"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "other"
+  style: "formal"
+  priority: "medium"
+  estimated_hours: 60
+  status: "evaluate"
+  notes: "FOUND 2026-06-12. Finance education/analysis. Formal Cantonese."
+
+# ──────────────────────────────────────────────
+# Tech Reviews (agy Search 2026-06-12)
+# ──────────────────────────────────────────────
+
+- name: "UNWIRE.HK 科技生活"
+  url: "https://www.youtube.com/@unwire"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "other"
+  style: "casual"
+  priority: "high"
+  estimated_hours: 250
+  status: "evaluate"
+  notes: "FOUND 2026-06-12. ~2,800 videos. HK tech review site YouTube. Cantonese tech commentary."
+
+- name: "Price.com.hk 香港格價網"
+  url: "https://www.youtube.com/@pricehongkongofficial"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "other"
+  style: "casual"
+  priority: "medium"
+  estimated_hours: 120
+  status: "evaluate"
+  notes: "FOUND 2026-06-12. ~1,300 videos. HK price comparison site. Product reviews in Cantonese."
+
+- name: "HKEPC Hardware"
+  url: "https://www.youtube.com/@hkepc_hardware"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "other"
+  style: "casual"
+  priority: "medium"
+  estimated_hours: 150
+  status: "evaluate"
+  notes: "FOUND 2026-06-12. ~1,600 videos. HK PC hardware community. Technical Cantonese."
+
+- name: "Edwin H. 誠實豆沙包"
+  url: "https://www.youtube.com/@EdwinH"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "other"
+  style: "casual"
+  priority: "medium"
+  estimated_hours: 50
+  status: "evaluate"
+  notes: "FOUND 2026-06-12. ~546 videos. HK tech reviewer. Clear Cantonese reviews."
+
+- name: "FlashingDroid 雷Ray"
+  url: "https://www.youtube.com/@RayMaFlashingDroid"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "other"
+  style: "casual"
+  priority: "medium"
+  estimated_hours: 130
+  status: "evaluate"
+  notes: "FOUND 2026-06-12. ~1,400 videos. HK Android/tech reviewer. Cantonese commentary."
+
+# ──────────────────────────────────────────────
+# Gaming Commentary (agy Search 2026-06-12)
+# NOTE: Lower priority — heavy background music/SFX reduce usable speech segments
+# ──────────────────────────────────────────────
+
+- name: "TAT GOR 達哥 Underground DV"
+  url: "https://www.youtube.com/@undergroundDV"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "other"
+  style: "casual"
+  priority: "low"
+  estimated_hours: 100
+  status: "evaluate"
+  notes: "FOUND 2026-06-12. 4,200 videos. HK gaming commentary. Background music may reduce usable segments."
+
+- name: "KZee Gaming HK"
+  url: "https://www.youtube.com/@KZee"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "other"
+  style: "casual"
+  priority: "low"
+  estimated_hours: 80
+  status: "evaluate"
+  notes: "FOUND 2026-06-12. ~5,900 videos. HK gaming commentary. Cantonese."
+
+- name: "SMILING BORIS"
+  url: "https://www.youtube.com/@smilingboris1118"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "other"
+  style: "casual"
+  priority: "low"
+  estimated_hours: 80
+  status: "evaluate"
+  notes: "FOUND 2026-06-12. ~5,700 videos. HK gaming channel. Cantonese commentary."
+
+- name: "希治閣 遊戲情報科"
+  url: "https://www.youtube.com/@scaryplayttv"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "other"
+  style: "casual"
+  priority: "low"
+  estimated_hours: 50
+  status: "evaluate"
+  notes: "FOUND 2026-06-12. ~1,400 videos. HK gaming news and commentary."
+
+# ──────────────────────────────────────────────
+# Additional Universities (agy Search 2026-06-12)
+# ──────────────────────────────────────────────
+
+- name: "香港理工大學 PolyU"
+  url: "https://www.youtube.com/@HongKongPolyU"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 200
+  status: "evaluate"
+  notes: "VERIFIED 2026-06-12 via agy. Hong Kong Polytechnic University. Public lectures, research, graduation in Cantonese."
+
+- name: "香港科技大學 HKUST"
+  url: "https://www.youtube.com/@hkust"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 200
+  status: "evaluate"
+  notes: "VERIFIED 2026-06-12 via agy. Hong Kong University of Science and Technology. Academic talks, research presentations."
+
+- name: "香港浸會大學 HKBU"
+  url: "https://www.youtube.com/@hongkongbaptistu"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 150
+  status: "evaluate"
+  notes: "VERIFIED 2026-06-12 via agy. Hong Kong Baptist University. Public lectures and events in Cantonese."
+
+- name: "香港城市大學 CityU"
+  url: "https://www.youtube.com/@CityUHongKong"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 150
+  status: "evaluate"
+  notes: "VERIFIED 2026-06-12 via agy. City University of Hong Kong. Academic lectures and institutional events."
+
+- name: "嶺南大學 Lingnan University"
+  url: "https://www.youtube.com/@lneduhk"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "medium"
+  estimated_hours: 80
+  status: "evaluate"
+  notes: "VERIFIED 2026-06-12 via agy. Lingnan University Hong Kong. Liberal arts lectures and public talks."
+
+- name: "香港教育大學 EdUHK"
+  url: "https://www.youtube.com/@EdUHKnews"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 100
+  status: "evaluate"
+  notes: "FOUND 2026-06-12. Education University of Hong Kong. Academic lectures, education research talks."
+
+- name: "香港恒生大學 HSUHK"
+  url: "https://www.youtube.com/@HSUHKchannel"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "medium"
+  estimated_hours: 50
+  status: "evaluate"
+  notes: "FOUND 2026-06-12. Hang Seng University of Hong Kong. Academic talks and events."
+
+# ──────────────────────────────────────────────
+# Government Departments (agy Search 2026-06-12)
+# ──────────────────────────────────────────────
+
+- name: "醫院管理局 Hospital Authority HK"
+  url: "https://www.youtube.com/@HospitalAuthorityHK"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 60
+  status: "evaluate"
+  notes: "FOUND 2026-06-12. ~76 videos. Medical education, health campaigns, professional Cantonese."
+
+- name: "衞生署衞生防護中心 CHP"
+  url: "https://www.youtube.com/@ChpGovHkChannel"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 40
+  status: "evaluate"
+  notes: "FOUND 2026-06-12. Centre for Health Protection. Public health education in formal Cantonese."
+
+- name: "屋宇署 Buildings Department"
+  url: "https://www.youtube.com/@BDGOVHK"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "medium"
+  estimated_hours: 20
+  status: "evaluate"
+  notes: "FOUND 2026-06-12. HKSAR Buildings Department. Safety and regulatory education videos."
+
+- name: "社會福利署 Social Welfare Department"
+  url: "https://www.youtube.com/@SocialWelfareDepartment"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "medium"
+  estimated_hours: 30
+  status: "evaluate"
+  notes: "FOUND 2026-06-12. HKSAR Social Welfare Dept. Public service announcements and educational content."
+
+- name: "機電工程署 EMSD"
+  url: "https://www.youtube.com/@EMSDGOVHK"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "low"
+  estimated_hours: 15
+  status: "evaluate"
+  notes: "FOUND 2026-06-12. Electrical and Mechanical Services Department. Technical Cantonese."
+
+# ──────────────────────────────────────────────
+# Professional / Legal (agy Search 2026-06-12)
+# ──────────────────────────────────────────────
+
+- name: "法庭線 The Witness HK"
+  url: "https://www.youtube.com/@thewitnesshk"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "news"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 80
+  status: "evaluate"
+  notes: "FOUND 2026-06-12. Independent HK legal journalism. Court reporting, legal commentary in Cantonese."
+
+- name: "香港會計師公會 HKICPA"
+  url: "https://www.youtube.com/@thehkicpa"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "medium"
+  estimated_hours: 50
+  status: "evaluate"
+  notes: >
+    FOUND 2026-06-12. Correct handle @thehkicpa (verified).
+    Previous entry used @HKICPA_Official which returned 404 — that entry is marked skip.
+
+- name: "香港建築師學會 HKIA"
+  url: "https://www.youtube.com/@TheHongKongInstituteofArchitectsHKIA"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "medium"
+  estimated_hours: 30
+  status: "evaluate"
+  notes: "FOUND 2026-06-12. HK Institute of Architects. Professional lectures and design talks in Cantonese."
+
+- name: "香港工程師學會 HKIE"
+  url: "https://www.youtube.com/@HKIEChannel"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "medium"
+  estimated_hours: 40
+  status: "evaluate"
+  notes: "FOUND 2026-06-12. HK Institution of Engineers. Technical engineering seminars in Cantonese."
+
+- name: "同行・對話 The Helping Dialogue"
+  url: "https://www.youtube.com/@thehelpingdialogue"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "casual"
+  priority: "medium"
+  estimated_hours: 20
+  status: "evaluate"
+  notes: "FOUND 2026-06-12. Social work / mental health dialogue. Natural conversational Cantonese."
+
+# ──────────────────────────────────────────────
+# Download Configuration
+# ──────────────────────────────────────────────
+#
+# Applied to all channels in this file by 02_download.py:
+
+download_config:
+  format: "bestaudio/best"
+  audio_format: "wav"
+  audio_quality: 0
+  postprocessor_args: "ffmpeg:-ar 48000 -ac 1"  # 48 kHz mono master — NEVER lower (KNOWN_ISSUES §11)
+  restrict_filenames: true
+  sleep_interval: 3        # seconds between downloads — be polite
+  max_sleep_interval: 8
+  retries: 5
+  fragment_retries: 5
+  max_filesize: "500M"     # skip files > 500 MB (likely music videos or streams)
+  match_filter: "duration > 120 & duration < 14400"  # 2 min to 4 hours
+  # Exclude: music videos, shorts (< 2 min), streams (> 4 hours)

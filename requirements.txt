@@ -1,0 +1,30 @@
+# Core audio
+soundfile>=0.12
+numpy>=1.24
+torch>=2.1
+librosa>=0.10
+
+# ASR
+faster-whisper>=1.0
+
+# Diarization
+pyannote.audio>=3.1
+
+# Speaker embedding
+speechbrain>=1.0
+
+# Audio quality scoring
+speechmos>=0.1
+
+# G2P — Cantonese romanisation
+# Install from source: https://github.com/typangaa/canto-hk-g2p
+# pip install canto-hk-g2p  (once published to PyPI)
+
+# Source discovery & download
+yt-dlp>=2024.1
+feedparser>=6.0
+requests>=2.31
+PyYAML>=6.0
+
+# Utilities (stdlib, no install needed)
+# argparse, json, logging, pathlib, re, subprocess, hashlib, itertools
