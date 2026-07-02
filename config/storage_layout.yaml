@@ -1,0 +1,73 @@
+# Storage layout SSOT — all data paths resolve from here.
+# Downstream code should import config/storage_layout.py (wrapper) rather than
+# hardcoding paths. Symlinks in data/ are legacy; new code reads this file.
+#
+# Drive map (post §3 Phase A+B, 2026-07-02 — see docs/PIPELINE_REARCHITECTURE_PLAN.md §3 執行結果):
+#   nvme0n1  ext4  /             hot: repo, metadata, nvme cache (+ canto-tts training, temp-parked)
+#   sdb1     ext4  /mnt/Drive2   warm: raw corpus (transient — delete after segment)
+#   sdd1     ext4  /mnt/Drive4   warm: filtered + segments (working corpus)
+#   sda1     NTFS  /mnt/Drive1   cold: personal archive (Windows share)
+#   sdc1     ext4  /mnt/Drive3   warm: reformatted 2026-07-02, empty — awaiting §3 step 9 sharding
+#
+# Raw policy: TRANSIENT — delete raw source after segment+label pass is complete.
+# Never publish raw audio / source URLs / reconstruction recipe (zero-risk policy).
+
+storage:
+  # ── Hot tier: NVMe (OS drive, ext4) ──────────────────────────────────────
+  nvme_root: /
+
+  # Repo + working metadata stay on nvme (fast random read for training dataloaders)
+  repo: /home/typangaa/Documents/canto-hk-speech-pipeline
+  metadata: /home/typangaa/Documents/canto-hk-speech-pipeline/metadata
+
+  # NVMe decode cache: decode-once fan-out stores resampled variants here (LRU)
+  nvme_cache: /home/typangaa/Documents/canto-hk-speech-pipeline/.cache/decoded
+
+  # ── Warm tier: Drive2 ext4 (sdb1, 1.9T) — raw corpus ────────────────────
+  drive2: /mnt/Drive2
+
+  # Raw audio (transient — exists only until segmented; delete after Stage 3)
+  raw_root: /mnt/Drive2/canto-corpus/data/raw
+  raw_youtube: /mnt/Drive2/canto-corpus/data/raw/youtube
+  raw_rthk: /mnt/Drive2/canto-corpus/data/raw/rthk
+  raw_podcast: /mnt/Drive2/canto-corpus/data/raw/podcast
+
+  # ── Warm tier: Drive4 ext4 (sdd1, 1.8T) — working corpus ────────────────
+  drive4: /mnt/Drive4
+
+  # Filtered audio (post Stage 5 DNSMOS gate)
+  filtered_root: /mnt/Drive4/canto/filtered
+
+  # Segments (Stage 3 output — the primary training-ready wavs)
+  # data/segments/ is a dir with per-source symlinks → Drive4 (all sources post Phase-A S6)
+  segments_root: /mnt/Drive4/canto/segments
+  segments_youtube: /mnt/Drive4/canto/segments/youtube
+  segments_podcast: /mnt/Drive4/canto/segments/podcast
+  segments_rthk: /mnt/Drive4/canto/segments/rthk
+
+  # Label store (Stage 11+ unified labels; id-keyed; written by build_label_store.py)
+  labels_store: /mnt/Drive4/canto/labels
+
+  # ── Cold tier: Drive1 NTFS (sda1, 1.9T) — personal archive ──────────────
+  drive1: /mnt/Drive1
+  personal_archive: /mnt/Drive1/Personal
+
+  # ── Warm tier: Drive3 ext4 (sdc1, 1.8T) — reformatted 2026-07-02, empty ───
+  # Awaiting §3 step 9 (final 3-way raw/segments/filtered sharding decision).
+  # Not yet assigned a role — do not write here until step 9 lands.
+  drive3: /mnt/Drive3
+
+# Cross-disk sharding for 5-10x scale (5-10k h filtered)
+# Each source gets pinned to a shard by consistent hash(source_id) % n_shards
+sharding:
+  enabled: false   # flip true once §3 step 9 assigns Drive3's role and repartitions data
+  n_shards: 2      # currently: Drive2 (raw) + Drive4 (filtered/seg). Drive3 ext4 is ready but unassigned.
+  shard_roots:
+    - /mnt/Drive2/canto-corpus   # shard 0 — raw (transient)
+    - /mnt/Drive4/canto          # shard 1 — filtered + segments
+
+# Decoder cache config (decode-once fan-out)
+decode_cache:
+  root: /home/typangaa/Documents/canto-hk-speech-pipeline/.cache/decoded
+  max_gb: 200          # LRU eviction threshold (nvme has 594G free; leave headroom)
+  sample_rates: [16000, 32000, 48000]   # variants pre-computed per clip

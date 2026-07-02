@@ -14,8 +14,8 @@ Every session, in this order before writing any code:
 # 1. Read progress from last session
 cat PROGRESS.md
 
-# 2. Check disk space (dataset will be 50–200 GB)
-df -h /mnt/Drive3/
+# 2. Check disk space (corpus lives across ext4 warm drives — Drive3 is now empty/ext4, reserved for sharding)
+df -h /mnt/Drive2/ /mnt/Drive3/ /mnt/Drive4/
 
 # 3. Check GPU availability (needed for WhisperX and DNSMOS)
 nvidia-smi --query-gpu=name,memory.free --format=csv
@@ -114,22 +114,15 @@ Full implementation spec: `docs/PIPELINE_SPEC.md`
 
 ## Data Sources
 
-### Existing RTHK Data (Already Collected — Do Not Re-download)
+### Existing RTHK Data — resolved (2026-07-02)
 
-Prior pipeline collected segments from `創科新里程` (tech documentaries). Audio files are at:
-```
-../cantonese-tts-old/data/segments/
-```
-Manifests (with Windows paths — need remapping) are at:
-```
-../cantonese-tts-old/data/dataset/cantonese_manifest_fixed.jsonl
-```
-
-**What to do with existing RTHK data:**
-1. Remap Windows paths (`/mnt/d/cantonese-tts/` → find actual Linux location)
-2. Re-run quality filtering with new thresholds (DNSMOS ≥ 3.0, not old threshold)
-3. Re-run G2P with new validated pipeline (old Jyutping may have concatenation bug)
-4. Integrate passing segments into new manifest with full schema
+`../cantonese-tts-old/` (the prior pipeline's low-quality 22050 Hz RTHK/TVB/LegCo segments) is
+**no longer on disk** — it was never reused directly. Instead `scripts/00_reingest.py` read its
+filenames only, to recover the YouTube video IDs, then re-downloaded fresh 48 kHz audio through
+the normal pipeline (all 6 non-skipped legacy categories completed 2026-06-09; see
+`metadata/logs/00_reingest.log`). Per-category filename lists are archived at
+`metadata/legacy_filenames/*.txt` in case `tier2_legco` (skipped by default — parliament noise,
+poor TTS) ever needs enabling.
 
 **What to add — RTHK expansion:**
 See `sources/rthk_sources.yaml` for target programs. RTHK publishes content on YouTube at `https://www.youtube.com/@rthkhongkong` and various sub-channels. Target programs with multiple presenters and diverse content styles.
@@ -160,9 +153,12 @@ These are non-negotiable. Never override for any technical reason.
    ../cantonese-tts/        ../cantonese-tts-old/    ../CantoNeu/
    ../gemini-hk-canto-tts/  ../gemma-hermes--tts/    ../qwen36-hermes-tts/
    ```
-   Their **lessons** are encoded in `docs/KNOWN_ISSUES.md`. Read that instead.
+   (`cantonese-tts-old` and `gemma-hermes--tts` were deleted from disk 2026-07-02 — fully
+   consumed/superseded, see `docs/PIPELINE_REARCHITECTURE_PLAN.md` §3 執行結果 — the rule still
+   applies to any remaining ones.) Their **lessons** are encoded in `docs/KNOWN_ISSUES.md`. Read
+   that instead.
 
-4. **Absolute Linux paths only.** Every `audio_path` in every manifest must be an absolute path under your data root (e.g. `/mnt/Drive3/Development/AI-ML/canto-hk-speech-pipeline/`). No relative paths, no Windows-style paths (`/mnt/d/`, `/mnt/c/Users/`).
+4. **Absolute Linux paths only.** Every `audio_path` in every manifest must be an absolute path under your data root — corpus **raw** lives on `/mnt/Drive2/canto-corpus/data/raw/`, **filtered/segments** on `/mnt/Drive4/canto/{filtered,segments}/` (both ext4; `/mnt/Drive3/` is ext4 too but currently empty, reserved for future sharding — see `docs/PIPELINE_REARCHITECTURE_PLAN.md` §3). No relative paths, no Windows-style paths (`/mnt/d/`, `/mnt/c/Users/`).
 
 5. **Single-speaker, VAD-based segmentation only.** Never hard-cut audio at a fixed duration. Segment at natural speech pause boundaries (Silero VAD) *within* diarization-detected single-speaker turns, so no clip spans a speaker change. Target 3–20 seconds. See `docs/KNOWN_ISSUES.md §2, §10`.
 
@@ -171,6 +167,8 @@ These are non-negotiable. Never override for any technical reason.
 7. **Never `language="yue"` in Whisper.** It causes decoder collapse on large-v3. Use a Cantonese fine-tuned model and/or `language="zh"` with a written-Cantonese prompt. Run multiple ASR models; a human calibrates the canonical text. See `docs/KNOWN_ISSUES.md §9`.
 
 8. **Validate Jyutping format explicitly.** Every Jyutping output must be validated: each space-separated token must match `^[a-z]+[1-6]$`. Reject segments where > 5% of tokens fail. Run G2P on the **human-verified** text, never raw single-ASR output. See `docs/KNOWN_ISSUES.md §1`.
+
+9. **NEVER publish the dataset — zero-risk policy (decided 2026-06-29).** The corpus is private, for training the owner's own canto-tts model only. Do **not** publish, upload, or share — to Hugging Face or anywhere — any of: the dataset/manifests, the raw or filtered audio, the per-segment `source_url`s, or the reconstruction recipe (`reconstruct.py`, `metadata/manifest_release.jsonl`, `metadata/excluded_no_url.jsonl`). A canto-tts **model** trained on this data *may* be released later (weights only, never the data). The pipeline *code* stays open source. The release/reconstruction scripts are kept **dormant** (the no-release decision is not necessarily permanent) and must never be acted on without explicit owner approval. See `DECISIONS.md 2026-06-29`.
 
 ---
 
@@ -189,7 +187,11 @@ Prior pipeline cut all audio at exactly 15s, leaving 44.5% of segments mid-sente
 
 **Issue 3 — Windows absolute paths in manifests**
 Old manifests reference `/mnt/d/` and `/mnt/c/Users/TY_Windows/` — these break on Linux.
-→ Always write `/mnt/Drive3/...` paths. Run `grep -c "/mnt/d/" metadata/manifest.jsonl` before finalising; must return 0.
+→ Always write `/mnt/Drive2/...` (raw) or `/mnt/Drive4/...` (filtered/segments) paths — not
+`/mnt/Drive1/` (moved off there 2026-07-02, see `docs/PIPELINE_REARCHITECTURE_PLAN.md` §3).
+Run `grep -c "/mnt/d/" metadata/manifest.jsonl` before finalising; must return 0.
+⚠️ `metadata/manifest.jsonl` itself still has **stale `/mnt/Drive1/canto/...` `audio_path`
+values** from before the 2026-07-02 migration — needs a path-remap pass before next use.
 
 **Issue 9 — Whisper `yue` decoder collapse**
 Forcing `language="yue"` on large-v3 produces repetition loops / garbage. → Cantonese fine-tuned model and/or `language="zh"` + prompt; multi-ASR + human calibration.
