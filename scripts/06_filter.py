@@ -27,6 +27,26 @@ import numpy as np
 import soundfile as sf
 import torch
 
+# --- Cap onnxruntime (DNSMOS) intra-op threads --------------------------------
+# speechmos builds ort.InferenceSession with no SessionOptions → it defaults to
+# intra_op_num_threads = physical cores (~47 here). Running many Stage-6 shards
+# then spawns N×47 threads on 48 cores → heavy oversubscription/thrashing with
+# almost no speedup. Patch InferenceSession to cap threads so M shards × K threads
+# ≈ core count. Tune via env ORT_INTRA_THREADS (default 4).
+import os as _os
+import onnxruntime as _ort
+_ORT_THREADS = int(_os.environ.get("ORT_INTRA_THREADS", "4"))
+_orig_ort_session = _ort.InferenceSession
+def _capped_ort_session(*a, **kw):
+    if kw.get("sess_options") is None:
+        _so = _ort.SessionOptions()
+        _so.intra_op_num_threads = _ORT_THREADS
+        _so.inter_op_num_threads = 1
+        kw["sess_options"] = _so
+    return _orig_ort_session(*a, **kw)
+_ort.InferenceSession = _capped_ort_session
+# ------------------------------------------------------------------------------
+
 ROOT = Path(__file__).resolve().parent.parent
 LOG_PATH = ROOT / "metadata" / "logs" / "06_filter.log"
 LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -110,6 +130,10 @@ def compute_dnsmos(wav48: np.ndarray) -> tuple[float, float]:
     t = torch.from_numpy(wav48).float().unsqueeze(0)
     resampler = torchaudio.transforms.Resample(TARGET_SR, DNSMOS_SR)
     wav16 = resampler(t).squeeze(0).numpy()
+    # Normalize to [-1, 1] as required by speechmos dnsmos.run()
+    peak = np.abs(wav16).max()
+    if peak > 1.0:
+        wav16 = wav16 / peak
     result = dnsmos.run(wav16, sr=DNSMOS_SR)
     sig = float(result.get("sig_mos", 0.0))
     ovrl = float(result.get("ovrl_mos", 0.0))
@@ -452,9 +476,17 @@ def main() -> None:
     parser.add_argument("--incremental", action="store_true",
                         help="Skip segments that already have a .filter.json in data/filtered/ "
                              "(safe for new-segment runs; use without --incremental to re-evaluate all)")
+    parser.add_argument("--shard", default=None,
+                        help="Process only shard n/m of the segment list, e.g. 0/8. "
+                             "Each segment is independent (own .filter.json), so shards are "
+                             "embarrassingly parallel — run several across CPU cores.")
     args = parser.parse_args()
 
     segments = find_segments(args.source, incremental=args.incremental)
+    if args.shard:
+        n, m = (int(x) for x in args.shard.split("/"))
+        segments = segments[n::m]
+        log.info(f"Shard {n}/{m}: processing {len(segments)} segments")
     log.info(f"Found {len(segments)} segments with transcripts")
 
     # Sanity check: verify DNSMOS gives valid range on first 5 files

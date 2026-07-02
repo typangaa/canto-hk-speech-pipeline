@@ -69,28 +69,57 @@ def extract_embedding(wav_path: Path) -> np.ndarray:
     return emb.squeeze().cpu().numpy()
 
 
+# Agglomerative clustering is O(n²) memory (full pairwise matrix). Above this many
+# embeddings it would OOM (e.g. 280k² × 8B ≈ 627 GB), so we cluster a random sample
+# then assign every point to its nearest sample-centroid by cosine similarity.
+_CLUSTER_SAMPLE_MAX = int(__import__("os").environ.get("SPK_CLUSTER_SAMPLE_MAX", "12000"))
+
+
 def cluster_embeddings(
     embeddings: np.ndarray,
     source_prefix: str,
     threshold: float = 0.25,
 ) -> np.ndarray:
-    """Agglomerative clustering with cosine distance. Returns cluster label per row."""
+    """Cluster by cosine distance. Exact agglomerative for small N; scalable
+    sample-then-assign for large N (keeps memory bounded). Returns label per row."""
     from sklearn.cluster import AgglomerativeClustering
     from sklearn.preprocessing import normalize
 
     emb_norm = normalize(embeddings)
     n = len(emb_norm)
-
     if n < 2:
         return np.zeros(n, dtype=int)
 
-    clustering = AgglomerativeClustering(
-        n_clusters=None,
-        distance_threshold=threshold,
-        metric="cosine",
-        linkage="average",
-    )
-    labels = clustering.fit_predict(emb_norm)
+    def _agglom(x: np.ndarray) -> np.ndarray:
+        return AgglomerativeClustering(
+            n_clusters=None, distance_threshold=threshold,
+            metric="cosine", linkage="average",
+        ).fit_predict(x)
+
+    if n <= _CLUSTER_SAMPLE_MAX:
+        return _agglom(emb_norm)
+
+    # --- Large source: sample → cluster → assign-to-nearest-centroid ----------
+    log.info(f"  {source_prefix}: {n} embeddings > {_CLUSTER_SAMPLE_MAX}; "
+             f"using scalable sample-and-assign clustering")
+    rng = np.random.default_rng(0)
+    sample_idx = rng.choice(n, _CLUSTER_SAMPLE_MAX, replace=False)
+    sample = emb_norm[sample_idx]
+    sample_labels = _agglom(sample)
+
+    uniq = np.unique(sample_labels)
+    # centroid = renormalized mean of each sample cluster
+    centroids = np.stack([
+        normalize(sample[sample_labels == c].mean(axis=0, keepdims=True))[0]
+        for c in uniq
+    ])
+    # cosine sim = dot (both normalized); assign each point to argmax centroid.
+    labels = np.empty(n, dtype=int)
+    BATCH = 8192
+    for start in range(0, n, BATCH):
+        block = emb_norm[start:start + BATCH]
+        best = (block @ centroids.T).argmax(axis=1)
+        labels[start:start + len(block)] = best  # contiguous 0..len(uniq)-1
     return labels
 
 

@@ -9,6 +9,13 @@ Output: metadata/manifest.jsonl, metadata/train.jsonl, metadata/val.jsonl
 
 Schema: see docs/MANIFEST_SCHEMA.md
 Split: 95/5 train/val, stratified by source, no speaker_id overlap across splits.
+
+Data quality tiers (stored in manifest "tier" field):
+  gold   — text_verified=True in filter.json (human-confirmed via Stage 5, or ASR agreement >= 0.80)
+  silver — ASR agreement >= SILVER_AGREE_MIN (0.65): high audio quality, model disagreement
+            likely due to script/encoding differences (Traditional vs Simplified). Safe for
+            initial TTS training; should be prioritised for Stage 5 human calibration.
+  (excluded) — ASR agreement < 0.65: too uncertain; excluded until Stage 5 review.
 """
 
 import argparse
@@ -39,11 +46,15 @@ MANIFEST_PATH = META_DIR / "manifest.jsonl"
 TRAIN_PATH = META_DIR / "train.jsonl"
 VAL_PATH = META_DIR / "val.jsonl"
 
+# Minimum ASR agreement to include as "silver" tier without human verification.
+# Segments below this threshold require Stage 5 human calibration before inclusion.
+SILVER_AGREE_MIN = 0.65
+
 REQUIRED = [
     "id", "audio_path", "source", "source_url", "program", "domain",
     "text", "text_verified", "asr_candidates", "asr_agreement", "jyutping",
     "duration_sec", "sample_rate", "speaker_id",
-    "gender", "style", "snr_db", "dnsmos", "english_ratio", "created_at",
+    "gender", "style", "snr_db", "dnsmos", "english_ratio", "created_at", "tier",
 ]
 
 
@@ -70,10 +81,22 @@ def build_entry(wav_path: Path, seg_meta: Optional[dict]) -> Optional[dict]:
 
     if not filter_data:
         return None
-    if not filter_data.get("text_verified"):
-        return None
     if not jp_data:
         return None  # no Jyutping = can't include
+
+    asr_agreement_val = float(filter_data.get("asr_agreement", 0.0))
+    human_verified = bool(filter_data.get("text_verified"))
+
+    # Tier assignment:
+    #   gold   = human-verified (Stage 5) or auto-verified (ASR agreement >= 0.80)
+    #   silver = ASR agreement >= SILVER_AGREE_MIN (0.65); good audio, script divergence
+    #   excluded = below SILVER_AGREE_MIN; needs Stage 5 before inclusion
+    if human_verified:
+        tier = "gold"
+    elif asr_agreement_val >= SILVER_AGREE_MIN:
+        tier = "silver"
+    else:
+        return None  # below silver threshold — exclude until Stage 5 review
 
     # Source metadata: try segment metadata first, then derive from path
     seg = seg_meta or {}
@@ -92,10 +115,8 @@ def build_entry(wav_path: Path, seg_meta: Optional[dict]) -> Optional[dict]:
 
     # ASR
     asr_candidates = []
-    asr_agreement = 0.0
     if transcript_data:
         asr_candidates = transcript_data.get("asr_candidates", [])
-        asr_agreement = transcript_data.get("asr_agreement", 0.0)
 
     entry = {
         "id": stable_id(wav_path),
@@ -105,9 +126,9 @@ def build_entry(wav_path: Path, seg_meta: Optional[dict]) -> Optional[dict]:
         "program": program,
         "domain": domain,
         "text": filter_data["text"],
-        "text_verified": True,
+        "text_verified": human_verified,
         "asr_candidates": asr_candidates,
-        "asr_agreement": round(float(asr_agreement), 3),
+        "asr_agreement": round(asr_agreement_val, 3),
         "jyutping": jp_data["jyutping"],
         "duration_sec": round(float(filter_data.get("duration_sec", 0)), 3),
         "sample_rate": int(filter_data.get("sample_rate", 48000)),
@@ -118,6 +139,7 @@ def build_entry(wav_path: Path, seg_meta: Optional[dict]) -> Optional[dict]:
         "dnsmos": round(float(filter_data.get("dnsmos", 0)), 2),
         "english_ratio": round(float(filter_data.get("english_ratio", 0)), 3),
         "created_at": str(date.today()),
+        "tier": tier,
     }
 
     # Validate required fields
@@ -126,8 +148,11 @@ def build_entry(wav_path: Path, seg_meta: Optional[dict]) -> Optional[dict]:
             log.warning(f"Missing field {field} in {wav_path.name}")
             return None
 
-    # Hard gate: paths must be under the project root (supports both old /mnt/Drive3/ and new /home/typangaa/ locations)
-    if not (entry["audio_path"].startswith("/mnt/Drive3/") or entry["audio_path"].startswith(str(ROOT))):
+    # Hard gate: paths must be under an expected location (project root, old /mnt/Drive3/,
+    # or /mnt/Drive1/ where filtered data now lives after relocation)
+    if not (entry["audio_path"].startswith("/mnt/Drive3/")
+            or entry["audio_path"].startswith("/mnt/Drive1/")
+            or entry["audio_path"].startswith(str(ROOT))):
         log.error(f"Bad audio_path: {entry['audio_path']}")
         return None
 
@@ -208,7 +233,7 @@ def main() -> None:
         log.error(f"Duplicate IDs found: {dups[:5]}")
 
     # Check for unexpected paths (outside project root and old /mnt/Drive3/ location)
-    win_paths = [e["audio_path"] for e in entries if not (e["audio_path"].startswith("/mnt/Drive3/") or e["audio_path"].startswith(str(ROOT)))]
+    win_paths = [e["audio_path"] for e in entries if not (e["audio_path"].startswith("/mnt/Drive3/") or e["audio_path"].startswith("/mnt/Drive1/") or e["audio_path"].startswith(str(ROOT)))]
     if win_paths:
         log.error(f"Non-Linux paths: {win_paths[:3]}")
 

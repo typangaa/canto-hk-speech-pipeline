@@ -132,6 +132,8 @@ def main() -> None:
     parser.add_argument("--source", default="all",
                         choices=["rthk", "youtube", "podcast", "hktv", "all"])
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--shard", default=None,
+                        help="Process only shard n/m of the todo list, e.g. 0/8 (parallel-safe).")
     args = parser.parse_args()
 
     if args.source == "all":
@@ -140,6 +142,10 @@ def main() -> None:
         wavs = sorted((FILTERED_DIR / args.source).rglob("*.wav"))
 
     todo = [w for w in wavs if not w.with_suffix(".jyutping.json").exists()]
+    if args.shard:
+        n, m = (int(x) for x in args.shard.split("/"))
+        todo = todo[n::m]
+        log.info(f"Shard {n}/{m}: processing {len(todo)} of todo")
     log.info(f"Found {len(wavs)} WAVs, {len(todo)} need G2P")
 
     processed = skipped = rejected = 0

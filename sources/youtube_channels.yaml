@@ -2568,6 +2568,199 @@
   notes: "FOUND 2026-06-12. Social work / mental health dialogue. Natural conversational Cantonese."
 
 # ──────────────────────────────────────────────
+# Diversity expansion — FOUND 2026-06-29 (agy-gemini research)
+# Goal: broaden beyond news/talk → drama, variety, audiobook, storytelling,
+# radio-drama, lifestyle, expressive/emotional speech. All status "evaluate":
+# sample 5-10 segments before promoting to "active". Music/overlap caveats are
+# now auto-handled downstream by Stage 11 (music) + Stage 13 (overlap) tagging.
+# Handle verification (2026-06-29): VERIFIED = first video resolved via yt-dlp;
+# UNVERIFIED = handle resolves but content not confirmed (yt-dlp anti-bot wall).
+# ──────────────────────────────────────────────
+
+# --- (3) Audiobooks / storytelling / radio drama — cleanest, best for TTS base ---
+- name: "老娘有聲台 x 緣學堂"
+  url: "https://www.youtube.com/@CantonAudioBookXEndlessLove"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "audiobook"
+  style: "narration"
+  priority: "high"
+  estimated_hours: 100
+  max_age_days: 3650
+  status: "evaluate"
+  notes: >
+    VERIFIED 2026-06-29 (first video resolved, Cantonese audiobook). TTS GOLDMINE:
+    pure clean single-speaker narration, zero background music, stable prosody,
+    excellent pronunciation. Ideal Tier-B clean fine-tune material.
+
+- name: "碌斌深夜粵語廣播"
+  url: "https://www.youtube.com/@lubinlost"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "storytelling"
+  style: "expressive"
+  priority: "high"
+  estimated_hours: 80
+  max_age_days: 3650
+  status: "evaluate"
+  notes: >
+    VERIFIED 2026-06-29 (ghost-story/true-crime storytelling, Cantonese). Clean
+    single-speaker, highly expressive (whispers, dramatic pauses, varied pacing).
+    Great prosody range for an otherwise flat news-heavy corpus.
+
+- name: "ChatCAN 不日廣播"
+  url: "https://www.youtube.com/@ChatCAN"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "radiodrama"
+  style: "expressive"
+  priority: "medium"
+  estimated_hours: 40
+  max_age_days: 3650
+  status: "evaluate"
+  notes: >
+    UNVERIFIED 2026-06-29 (handle resolves; content not confirmed via yt-dlp).
+    Original Cantonese radio dramas, studio-mic'd, emotional. Multi-speaker but
+    cleanly separated — Stage 13 overlap tagging will gate.
+
+# --- (5) Talk / variety / entertainment — clean studio conversation ---
+- name: "好青年荼毒室 - 哲學部"
+  url: "https://www.youtube.com/@corrupttheyouth"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "talk"
+  style: "conversational"
+  priority: "high"
+  estimated_hours: 60
+  max_age_days: 3650
+  status: "evaluate"
+  notes: >
+    UNVERIFIED 2026-06-29 (handle resolves; /videos tab empty via yt-dlp — confirm
+    handle). Long-form unscripted intellectual conversation, clean studio audio,
+    almost no BGM, speakers take turns well. Strong clean conversational material.
+
+- name: "JFFT (Just For Fun Team)"
+  url: "https://www.youtube.com/@JFFT"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "variety"
+  style: "expressive"
+  priority: "low"
+  estimated_hours: 50
+  max_age_days: 3650
+  status: "evaluate"
+  notes: >
+    VERIFIED 2026-06-29. Live streams / call-in talk. EXTREME emotional prosody
+    (yelling, animated colloquial). Heavy cleaning needed — overlap + variable
+    caller mic quality; rely on Stage 13 overlap + DNSMOS gates. Use sparingly.
+
+# --- (2)(4)(7) Drama / variety / expressive short-form ---
+- name: "ViuTV"
+  url: "https://www.youtube.com/@ViuTV"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "variety"
+  style: "expressive"
+  priority: "medium"
+  estimated_hours: 300
+  max_age_days: 3650
+  status: "evaluate"
+  notes: >
+    VERIFIED 2026-06-29 (晚吹 variety clip, Cantonese). Dramas/variety/reality/
+    lifestyle, very diverse speakers + expressive. Heavy BGM/SFX/overlapping
+    laughter in variety — depends on Stage 11 music + Stage 13 overlap filtering.
+
+- name: "試當真 Trial & Error"
+  url: "https://www.youtube.com/@TrialAndError924"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "comedy"
+  style: "expressive"
+  priority: "medium"
+  estimated_hours: 60
+  max_age_days: 3650
+  status: "evaluate"
+  notes: >
+    VERIFIED 2026-06-29. Skits / fake-docs / short films, modern youth slang,
+    highly emotional acting. Pro mic'd; some BGM to filter. Good prosody diversity.
+
+- name: "FHProductionHK (熊仔頭)"
+  url: "https://www.youtube.com/@FHProductionHK"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "drama"
+  style: "expressive"
+  priority: "medium"
+  estimated_hours: 40
+  max_age_days: 3650
+  status: "evaluate"
+  notes: >
+    VERIFIED 2026-06-29. Emotional relationship micro-dramas — sadness/anger/
+    romance inflections. Note some member-only videos. Good emotional range.
+
+- name: "小薯茄 Pomato"
+  url: "https://www.youtube.com/@Pomato"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "comedy"
+  style: "expressive"
+  priority: "medium"
+  estimated_hours: 50
+  max_age_days: 3650
+  status: "evaluate"
+  notes: >
+    UNVERIFIED 2026-06-29 (handle resolves; content not confirmed). Comedy shorts /
+    situational drama, high-energy cheerful prosody. Some overlap in game segments.
+
+# --- (6) Lifestyle / vlog narration ---
+- name: "Mill MILK"
+  url: "https://www.youtube.com/@MillMILK"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "lifestyle"
+  style: "narration"
+  priority: "high"
+  estimated_hours: 80
+  max_age_days: 3650
+  status: "evaluate"
+  notes: >
+    VERIFIED 2026-06-29. Mini-docs / lifestyle. Mix of clean high-quality voiceover
+    narration (excellent for TTS) + natural street interviews. High content volume.
+
+- name: "啱Channel (Arm Channel)"
+  url: "https://www.youtube.com/@ArmChannel"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "lifestyle"
+  style: "casual"
+  priority: "low"
+  estimated_hours: 30
+  max_age_days: 3650
+  status: "evaluate"
+  notes: >
+    VERIFIED 2026-06-29 (channel exists; first video had an English/music title —
+    CONFIRM Cantonese speech ratio before activating). Everyday conversational.
+
+# --- Channel name confirmed but agy handle returned 404 — find correct handle ---
+# These are real HK Cantonese channels but the researched @handle is wrong (404).
+# Look up the correct handle, then uncomment + set fields like the entries above.
+#  - 杜汶澤 喱騷 (Chapman To's Late Show) — talk/standup/variety, expressive   [bad: @LateShowHK]
+#  - 拾陸比玖 16:9                          — indie web-series drama, cinematic   [bad: @16by9hk]
+#  - 米紙 (Rice Paper)                      — cultural/food narration, clean      [bad: @ricepaperhk]
+#  - Kiki & May 隨意吃樂部                   — travel/food vlog, natural casual    [bad: @kikiandmay]
+
+# ──────────────────────────────────────────────
 # Download Configuration
 # ──────────────────────────────────────────────
 #
