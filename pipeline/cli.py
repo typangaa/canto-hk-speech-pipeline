@@ -36,6 +36,25 @@ def cmd_golden_build(args: argparse.Namespace) -> int:
     return golden_main()
 
 
+def cmd_run_label_music(args: argparse.Namespace) -> int:
+    import asyncio
+    import logging
+
+    from pipeline.nodes.label_music import run_label_music
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    devices = [d.strip() for d in args.devices.split(",")]
+    result = asyncio.run(run_label_music(
+        devices,
+        gpu_policy=args.gpu_policy,
+        batch_size=args.batch,
+        mem_fraction=args.mem_fraction,
+        limit=args.limit,
+    ))
+    print(f"\nDone: {result}")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="pipe")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -58,6 +77,18 @@ def main() -> int:
     golden_sub = p_golden.add_subparsers(dest="golden_command", required=True)
     p_golden_build = golden_sub.add_parser("build", help="Build stratified golden set + legacy snapshot")
     p_golden_build.set_defaults(func=cmd_golden_build)
+
+    p_run = sub.add_parser("run", help="Run a DAG node via the orchestrator")
+    run_sub = p_run.add_subparsers(dest="run_command", required=True)
+    p_run_music = run_sub.add_parser("label.music", help="P1 pilot: PANNs music-family tagging")
+    p_run_music.add_argument("--devices", default="cuda:0,cuda:1",
+                              help="comma-separated device list, one worker per device")
+    p_run_music.add_argument("--gpu-policy", default="cap", choices=["yield", "cap", "exempt"])
+    p_run_music.add_argument("--batch", type=int, default=16)
+    p_run_music.add_argument("--mem-fraction", type=float, default=0.15)
+    p_run_music.add_argument("--limit", type=int, default=None,
+                              help="process only the first N discovered segments (testing)")
+    p_run_music.set_defaults(func=cmd_run_label_music)
 
     args = parser.parse_args()
     return args.func(args)

@@ -1,4 +1,10 @@
-"""P0 gate tests — verify the DuckDB catalog matches the legacy jsonl source-of-truth exactly. Run: pytest tests/test_catalog.py -v"""
+"""P0 gate tests — verify the DuckDB catalog matches the legacy jsonl source-of-truth exactly. Run: pytest tests/test_catalog.py -v
+
+labels_music (and task_runs) are excluded from the frozen EXPECTED counts below:
+since P1's label.music orchestrator node went live, they are live-growing tables
+that new pilot/production runs append to — see test_labels_music_monotonic_growth
+and test_labels_music_provenance_breakdown for their invariants instead.
+"""
 
 import os
 
@@ -7,6 +13,8 @@ import pytest
 from pipeline.catalog.catalog import connect_ro
 from pipeline.config import CATALOG_PATH
 
+# P0 legacy-import baseline, frozen — these tables are never written to again
+# after the one-time P0 import (their source jsonl files are static).
 EXPECTED = {
     "segments": 455299,
     "raw_files": 6272,
@@ -17,8 +25,11 @@ EXPECTED = {
     "tiers": 455299,
     "labels_lang": 455275,
     "labels_overlap": 455275,
-    "labels_music": 105668,
 }
+
+# P0 import baseline for labels_music, before P1's orchestrator started
+# appending new rows — a floor, not an exact count.
+LABELS_MUSIC_P0_BASELINE = 105668
 
 
 @pytest.fixture(scope="module")
@@ -84,16 +95,36 @@ def test_discovery_sql_matches_arithmetic(catalog_conn):
     )
 
 
+def test_labels_music_monotonic_growth(catalog_conn):
+    total = catalog_conn.execute("SELECT COUNT(*) FROM labels_music").fetchone()[0]
+    assert total >= LABELS_MUSIC_P0_BASELINE, (
+        f"labels_music has {total} rows, below the P0 import baseline of "
+        f"{LABELS_MUSIC_P0_BASELINE} — rows should only ever be added, never lost"
+    )
+    dupes = catalog_conn.execute(
+        "SELECT id, COUNT(*) FROM labels_music GROUP BY id HAVING COUNT(*) != 1"
+    ).fetchall()
+    assert not dupes, f"duplicate ids in labels_music: {dupes[:5]}"
+
+
 def test_labels_music_provenance_breakdown(catalog_conn):
+    """s0/s1/tag_calib are the frozen P0 import — never written to again.
+    p1_pilot/read_failed are P1's orchestrator output and only ever grow.
+    """
     rows = catalog_conn.execute(
         "SELECT provenance, COUNT(*) FROM labels_music GROUP BY provenance"
     ).fetchall()
     actual = {row[0]: row[1] for row in rows}
-    expected = {"s0": 52795, "s1": 52404, "tag_calib": 469}
-    assert actual == expected, (
-        f"labels_music provenance breakdown mismatch.\n"
-        f"  expected: {expected}\n"
-        f"  actual:   {actual}"
+    frozen = {"s0": 52795, "s1": 52404, "tag_calib": 469}
+    for provenance, expected_count in frozen.items():
+        assert actual.get(provenance) == expected_count, (
+            f"frozen P0 provenance {provenance!r} changed: "
+            f"expected {expected_count}, got {actual.get(provenance)}"
+        )
+    live_provenances = set(actual) - set(frozen)
+    assert live_provenances <= {"p1_pilot", "read_failed"}, (
+        f"unexpected provenance value(s) in labels_music: "
+        f"{live_provenances - {'p1_pilot', 'read_failed'}}"
     )
 
 

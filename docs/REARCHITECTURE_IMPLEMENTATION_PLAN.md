@@ -521,13 +521,32 @@ re-filter 唔使再 copy 一次 corpus;10× 下 5.7T 複製本來就不可行。
 - **Gate**:catalog row counts 同 jsonl 全對數;`pipe catalog verify` 抽樣 path exists;
   discovery SQL(music 未做清單)結果 == 現行 `load_done_ids` 邏輯結果
 
-### P1 — Orchestrator core + pilot node(2-3 sessions)
+### P1 — Orchestrator core + pilot node(2-3 sessions)—— ✅ 機制已完成、驗證,backlog 清剩留待另約
+
 - scheduler / pools / sampler / worker protocol / journal
 - GPU worker base class(fp16 / mem-fraction / OOM-halving 標配)
 - **Pilot = `label.music`:用新框架完成 PANNs 剩低 77%**(實際工作,唔係 demo)
-- **Gate**:throughput ≥ 舊 `11_audio_tag`(~33/s);kill -9 restart 唔重做已 journal batch;
-  手動開一個假 training proc → GPU pool 讓路 ≤10s;music pass **完成**(遞交 quality-tagging
-  嘅下一步)
+- **Gate 結果(2026-07-02 實測,對住真係行緊嘅 canto-tts training)**:
+  - kill -9 restart 唔重做已 commit batch:✅ PASS(`tests/test_orchestrator.py`;每個 batch
+    一次過 atomic upsert + discover() 每次重新 anti-join,天然 idempotent,唔使額外
+    journal-based resume 邏輯)
+  - GPU pool target 響應 foreign proc ≤10s:✅ PASS(對住真 training pid,~2.1s 內
+    `gpu.0` target 由 1 調到 0,遠低於 10s gate)
+  - throughput ≥ 舊 `11_audio_tag`(~33/s):⚠️ **未達標** —— dual-GPU cap policy 實測
+    28.6/s、單卡 19.9/s。33/s 基準係 GPU 冇其他嘢跑嗰陣量出嚟;而家兩隻卡都俾
+    canto-tts training 食緊 94–100% util,orchestrator 用 `cap` policy
+    (mem_fraction=0.15)同佢並存 —— dispatch 機制本身冇問題(細規模測試証實
+    dual-GPU 真係兩邊都攞緊 batch,比單卡快 ~44%),淨係因為要分 GPU compute
+    先量唔到 33/s。呢個係 coexist 策略嘅真實代價,唔係 bug。
+  - music pass **完成**:⏸ **deferred**——剩低 344,727 個(2026-07-02 量度),
+    28.6/s 計要 ~3.3 小時。owner 話而家唔好 background 行,留返揀啱時間(例如
+    training 停咗嗰陣)先至跑全量。
+- **交付物**:`pipeline/orchestrator/{pools,resources,worker,journal}.py`、
+  `pipeline/workers/gpu_base.py`、`pipeline/nodes/label_music.py`、
+  `pipe run label.music --devices --gpu-policy --batch --mem-fraction --limit`、
+  `tests/test_orchestrator.py`(3 個 test,全過)。`task_runs` 表補咗 PRIMARY KEY
+  (run_id, node, item_id)—— P0 原始 schema 冇呢個 constraint,`upsert_rows()`
+  嘅 INSERT OR REPLACE 需要佢先得(P0 嗰陣呢個表仲未有人寫,冇發現)。
 
 ### P2 — Decode-once label suite(2 sessions)
 - `audio/bus.py` + `cache.py`;label worker host lid+osd+panns(+emotion slot)

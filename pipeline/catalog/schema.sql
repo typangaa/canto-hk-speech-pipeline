@@ -155,7 +155,8 @@ CREATE TABLE IF NOT EXISTS verified (
     verified_at DATE
 );
 
--- Future: task-run audit log for pipeline node executions, one row per item per run.
+-- Orchestrator audit log for pipeline node executions, one row per item per run.
+-- PK enables the same INSERT OR REPLACE upsert_rows() helper every other table uses.
 CREATE TABLE IF NOT EXISTS task_runs (
     run_id   TEXT,
     node     TEXT,
@@ -164,7 +165,8 @@ CREATE TABLE IF NOT EXISTS task_runs (
     started  TIMESTAMP,
     finished TIMESTAMP,
     error    TEXT,
-    metrics  JSON
+    metrics  JSON,
+    PRIMARY KEY (run_id, node, item_id)
 );
 
 
