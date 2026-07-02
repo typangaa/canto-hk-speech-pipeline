@@ -4,10 +4,12 @@ version = "0.1.0"
 description = "Reproducible data pipeline for building a Hong Kong Cantonese speech corpus for TTS training"
 requires-python = ">=3.12"
 dependencies = [
+    "duckdb>=1.5.4",
     "faster-whisper>=1.2.1",
     "feedparser>=6.0.12",
     "librosa>=0.11.0",
     "numpy>=2.4.6",
+    "panns-inference>=0.1.1",
     "pyannote-audio>=4.0.4",
     "pyloudnorm>=0.2.0",
     "requests>=2.34.2",
@@ -27,3 +29,11 @@ dependencies = [
 override-dependencies = [
     "tokenizers>=0.22,<0.23.1",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

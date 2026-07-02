@@ -1,0 +1,13 @@
+# pipeline/ package config — orchestrator settings land here from P1 onward.
+# P0 only needs the catalog + golden-set paths; pool sizes / GPU policy / batch
+# windows are added in P1 (see docs/REARCHITECTURE_IMPLEMENTATION_PLAN.md §5).
+
+catalog:
+  path: metadata/corpus.duckdb   # relative to repo root; nvme (hot tier) by design
+
+golden:
+  manifest: tests/golden/manifest.jsonl
+  legacy_snapshot: tests/golden/legacy_snapshot.jsonl
+  sample_size: 500
+
+logs_dir: metadata/logs

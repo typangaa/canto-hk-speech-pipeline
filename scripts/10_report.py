@@ -91,7 +91,13 @@ def generate_report(entries: list[dict]) -> str:
 
     n_verified = sum(1 for e in entries if e.get("text_verified"))
     n_48k = sum(1 for e in entries if e.get("sample_rate") == 48000)
-    n_win = sum(1 for e in entries if not e.get("audio_path", "").startswith("/mnt/Drive3/"))
+    # Genuine Windows-style paths (KNOWN_ISSUES.md §3) — not a check against any
+    # particular ext4 drive letter, since which Drive hosts filtered/segments
+    # changes across storage migrations (see docs/PIPELINE_REARCHITECTURE_PLAN.md §3).
+    n_win = sum(
+        1 for e in entries
+        if e.get("audio_path", "").lower().startswith(("/mnt/c/", "/mnt/d/"))
+    )
 
     source_counts = Counter(e["source"] for e in entries)
     domain_counts = Counter(e["domain"] for e in entries)

@@ -1,0 +1,112 @@
+"""P0 gate tests — verify the DuckDB catalog matches the legacy jsonl source-of-truth exactly. Run: pytest tests/test_catalog.py -v"""
+
+import os
+
+import pytest
+
+from pipeline.catalog.catalog import connect_ro
+from pipeline.config import CATALOG_PATH
+
+EXPECTED = {
+    "segments": 455299,
+    "raw_files": 6272,
+    "asr_results": 910598,
+    "asr_agreement": 455299,
+    "filters": 455299,
+    "g2p": 455299,
+    "tiers": 455299,
+    "labels_lang": 455275,
+    "labels_overlap": 455275,
+    "labels_music": 105668,
+}
+
+
+@pytest.fixture(scope="module")
+def catalog_conn():
+    if not os.path.exists(CATALOG_PATH):
+        pytest.skip("catalog not built — run: python -m pipeline.cli catalog build")
+    conn = connect_ro()
+    yield conn
+    conn.close()
+
+
+def test_row_counts(catalog_conn):
+    failures = []
+    for table, expected in EXPECTED.items():
+        actual = catalog_conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        if actual != expected:
+            failures.append(
+                f"  table={table!r}: expected {expected}, got {actual}"
+            )
+    assert not failures, "Row count mismatches:\n" + "\n".join(failures)
+
+
+def test_segments_primary_key_unique(catalog_conn):
+    total = catalog_conn.execute("SELECT COUNT(*) FROM segments").fetchone()[0]
+    distinct = catalog_conn.execute("SELECT COUNT(DISTINCT id) FROM segments").fetchone()[0]
+    assert total == distinct, (
+        f"segments.id is not unique: total rows={total}, distinct ids={distinct}"
+    )
+
+
+def test_path_exists_sample(catalog_conn):
+    rows = catalog_conn.execute(
+        "SELECT audio_path FROM segments USING SAMPLE 500 ROWS"
+    ).fetchall()
+    missing = [row[0] for row in rows if not os.path.exists(row[0])]
+    if missing:
+        preview = missing[:5]
+        pytest.fail(
+            f"{len(missing)} sampled audio_path(s) do not exist on disk. "
+            f"First up to 5 missing:\n" + "\n".join(f"  {p}" for p in preview)
+        )
+
+
+def test_no_stale_drive1_paths(catalog_conn):
+    count = catalog_conn.execute(
+        "SELECT COUNT(*) FROM segments WHERE audio_path LIKE ?", ["/mnt/Drive1/%"]
+    ).fetchone()[0]
+    assert count == 0, (
+        f"Found {count} segment(s) with stale /mnt/Drive1/ paths in segments.audio_path"
+    )
+
+
+def test_discovery_sql_matches_arithmetic(catalog_conn):
+    total_segments = catalog_conn.execute("SELECT COUNT(*) FROM segments").fetchone()[0]
+    total_music = catalog_conn.execute("SELECT COUNT(*) FROM labels_music").fetchone()[0]
+    anti_join_count = catalog_conn.execute(
+        "SELECT COUNT(*) FROM segments s LEFT JOIN labels_music m ON s.id = m.id WHERE m.id IS NULL"
+    ).fetchone()[0]
+    expected_anti_join = total_segments - total_music
+    assert anti_join_count == expected_anti_join, (
+        f"Anti-join result ({anti_join_count}) != total_segments - total_music "
+        f"({total_segments} - {total_music} = {expected_anti_join})"
+    )
+
+
+def test_labels_music_provenance_breakdown(catalog_conn):
+    rows = catalog_conn.execute(
+        "SELECT provenance, COUNT(*) FROM labels_music GROUP BY provenance"
+    ).fetchall()
+    actual = {row[0]: row[1] for row in rows}
+    expected = {"s0": 52795, "s1": 52404, "tag_calib": 469}
+    assert actual == expected, (
+        f"labels_music provenance breakdown mismatch.\n"
+        f"  expected: {expected}\n"
+        f"  actual:   {actual}"
+    )
+
+
+def test_asr_results_two_models_per_segment(catalog_conn):
+    offenders = catalog_conn.execute(
+        "SELECT id, COUNT(*) FROM asr_results GROUP BY id HAVING COUNT(*) != 2"
+    ).fetchall()
+    if offenders:
+        preview = offenders[:5]
+        preview_str = "\n".join(
+            f"  id={row[0]!r}, count={row[1]}" for row in preview
+        )
+        pytest.fail(
+            f"{len(offenders)} segment id(s) in asr_results do not have exactly 2 rows. "
+            f"First up to 5 offenders:\n{preview_str}"
+        )
