@@ -548,7 +548,8 @@ re-filter 唔使再 copy 一次 corpus;10× 下 5.7T 複製本來就不可行。
   (run_id, node, item_id)—— P0 原始 schema 冇呢個 constraint,`upsert_rows()`
   嘅 INSERT OR REPLACE 需要佢先得(P0 嗰陣呢個表仲未有人寫,冇發現)。
 
-### P2 — Decode-once label suite(2 sessions)
+### P2 — Decode-once label suite(2 sessions)—— ✅ 機制已完成、驗證,backlog 清剩留待另約
+
 - `audio/bus.py` + `cache.py`;label worker host lid+osd+panns(+emotion slot)
 - `label.prosody`(14,CPU)新寫 —— LABEL_FRAMEWORK stage 2 就位
 - **emotion2vec 粵語 spot-check**(§10 Q3:P1-P2 期間;~100 段人手聽對)—— 過咗
@@ -556,6 +557,46 @@ re-filter 唔使再 copy 一次 corpus;10× 下 5.7T 複製本來就不可行。
 - **Stereo 可行性 report**(§10 Q6):由 `ingest.probe` 統計出 short report 俾 owner
 - **Gate**:單一 pass 出多 label,I/O 讀數(iostat)對比單 detector pass ≤1.3×;
   cache 命中後重跑速度 ≥3×;prosody 分佈合理(LABEL_FRAMEWORK §12.2)
+
+**執行結果(2026-07-02)**:4 個組件全部起好、細規模驗證過(owner 未批全量 backlog 跑,
+跟 P1 一樣守「唔開未批准嘅背景長跑」呢條)。
+
+- `pipeline/audio/bus.py`+`cache.py` —— `weir chat agy-sonnet` 起(同 P1 手法),零修改直接用。
+  `decode()`/`decode_multi()` 取代 11/12/13/label_music.py 4 份各自 hand-roll 嘅 resample code；
+  `cache.py` 係 (id,sample_rate) 鍵嘅 on-disk LRU,掛喺 `config/storage_layout.py` 嘅
+  `DECODE_CACHE`(nvme,200GB budget)。驗證:decode_multi 同分開兩次 decode() 對同一檔位元組級
+  一致;cache round-trip 一致;evict_lru/stats 行為對。
+- `pipeline/nodes/ingest_probe.py`(新)—— CPU-only ffprobe + L/R correlation,thread-pool
+  fan-out(唔使 orchestrator GPU pool/Sampler)。餵 §11/§10 Q6 stereo 可行性問題。細規模(30 個
+  raw file)驗證 resume 冪等。
+- `pipeline/nodes/label_prosody.py`(新)—— Silero VAD → voiced_sec+gaps(≥0.2s)、parselmouth
+  → F0 median、rate_raw = jyutping 音節(g2p 表)÷ voiced_sec。同 label_music.py 一樣嘅
+  GPUWorkerBase + JSONL worker-subprocess 架構,但由「每 GPU 裝置一個 pool」推廣做「每 CPU
+  worker process 一個 pool」(`cpu.0`..`cpu.{n-1}`)。細規模(84 個真實 segment)驗證:rate_raw
+  1.98–7.59 音節/秒(avg 4.76)、f0_median_hz 87–329Hz(avg 150Hz),分佈合理。
+- `pipeline/nodes/label_suite.py`(新,本 milestone 核心)—— 一個 GPU worker 同時載
+  mms-lid + pyannote/segmentation-3.0(OSD)+ PANNs CNN14,每個 segment 用 `bus.decode_multi()`
+  讀**一次**,淨係跑嗰個 segment 仲欠嘅 label(lang/overlap/music 三向 anti-join discover())。
+  驗證咗 pyannote 嘅 dict-input 路徑(`{"waveform":tensor,"sample_rate":16000}`)同 path-input
+  路徑喺**同一份**已解碼音頻上輸出完全一致(diff=0.0)—— 之前見到嘅 ~1.0 max-diff 純粹係
+  soxr(bus.py)同 torchaudio(pyannote 內建)兩個唔同 resampler 嘅正常誤差,唔關 API 事(bus.py
+  嘅 resampler 揀擇本身已經係 §已接受嘅取捨,冇要求 bit-match)。因為 P0 導入時
+  label.lang/label.overlap 已經 ~100% 完成,discover() 淨係搵到 24 個仲欠 lang/overlap 嘅
+  segment(同 P1 gate 測試搵到嘅嗰批零位元組 podcast 檔案係**同一組**,證實係單一局部化嘅
+  數據損毀事件,唔係散落全 corpus)、加埋 344,679 個仲欠 music 嘅 —— 呢個 node 喺同一個
+  decode pass 就手填埋嗰 24 個舊 gap。`labels_music` 加咗新 provenance 值 `p2_suite`。
+- Gate 結果(細規模,唔係全量 backlog):I/O 比率 0.89×(單 detector pass,gate ≤1.3×)✅;
+  cache-hit 重跑快 23.0×(gate ≥3×)✅;kill-9 resume 兩個新 orchestrator node 都冪等
+  (新 pytest case)✅;prosody 分佈喺 84 個真實 segment 上合理 ✅。14/14 tests pass。
+- **未做**:全量 label.suite/label.prosody/ingest.probe backlog(344,679/455,299/6,272
+  項)、emotion2vec 粵語 spot-check(要 owner 聽)、stereo 可行性 report(要全量 ingest.probe
+  先出到)—— 全部因為 owner「未批准背景長跑」呢條指示而刻意擱置。
+- 意外收穫:session 中段一次例行 `uv sync`(加 praat-parselmouth/soxr 依賴後)清走咗
+  `nvidia-cusparselt-cu12` 等 13 個冇入 lock tracking 嘅 CUDA 套件,`import torch` 即刻壞——
+  用 `uv pip install <pkg>==<version>` 逐個裝返修復,記錄咗「呢個 repo 以後唔好淨係
+  `uv sync`」呢條教訓入 memory。另外喺加 `raw_probe` 表時撞到 `init_schema()` 一個潛在
+  parser 陷阱:inline SQL comment 入面嘅分號唔會被去除(淨係成行 `--` comment 先會),已
+  修正個別 comment 措辭,並記錄低留意未來 schema.sql 修改。
 
 ### P3 — Heavy stage ports(3-4 sessions)
 - `segment.*`、`asr.*`、`filter.*`、`g2p`、`speaker.*` 逐個 port + golden parity

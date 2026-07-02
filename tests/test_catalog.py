@@ -1,9 +1,11 @@
 """P0 gate tests — verify the DuckDB catalog matches the legacy jsonl source-of-truth exactly. Run: pytest tests/test_catalog.py -v
 
-labels_music (and task_runs) are excluded from the frozen EXPECTED counts below:
-since P1's label.music orchestrator node went live, they are live-growing tables
-that new pilot/production runs append to — see test_labels_music_monotonic_growth
-and test_labels_music_provenance_breakdown for their invariants instead.
+labels_music / labels_lang / labels_overlap (and task_runs) are excluded from the
+frozen EXPECTED counts below: since P1's label.music and P2's label.suite
+orchestrator nodes went live, they are live-growing tables that new pilot/
+production runs append to — see test_labels_music_monotonic_growth,
+test_labels_music_provenance_breakdown, and test_labels_lang_overlap_monotonic_growth
+for their invariants instead.
 """
 
 import os
@@ -23,13 +25,16 @@ EXPECTED = {
     "filters": 455299,
     "g2p": 455299,
     "tiers": 455299,
-    "labels_lang": 455275,
-    "labels_overlap": 455275,
 }
 
 # P0 import baseline for labels_music, before P1's orchestrator started
 # appending new rows — a floor, not an exact count.
 LABELS_MUSIC_P0_BASELINE = 105668
+
+# P0 import baseline for labels_lang / labels_overlap, before P2's label.suite
+# node started filling the ~24-row legacy-import gap in each — a floor, not an
+# exact count. Full corpus size (455299) is the ceiling both approach.
+LABELS_LANG_OVERLAP_P0_BASELINE = 455275
 
 
 @pytest.fixture(scope="module")
@@ -109,7 +114,8 @@ def test_labels_music_monotonic_growth(catalog_conn):
 
 def test_labels_music_provenance_breakdown(catalog_conn):
     """s0/s1/tag_calib are the frozen P0 import — never written to again.
-    p1_pilot/read_failed are P1's orchestrator output and only ever grow.
+    p1_pilot/p2_suite/read_failed are orchestrator output and only ever grow
+    (p1_pilot from label.music, p2_suite from label.suite's decode-once fan-out).
     """
     rows = catalog_conn.execute(
         "SELECT provenance, COUNT(*) FROM labels_music GROUP BY provenance"
@@ -122,10 +128,34 @@ def test_labels_music_provenance_breakdown(catalog_conn):
             f"expected {expected_count}, got {actual.get(provenance)}"
         )
     live_provenances = set(actual) - set(frozen)
-    assert live_provenances <= {"p1_pilot", "read_failed"}, (
+    allowed_live = {"p1_pilot", "p2_suite", "read_failed"}
+    assert live_provenances <= allowed_live, (
         f"unexpected provenance value(s) in labels_music: "
-        f"{live_provenances - {'p1_pilot', 'read_failed'}}"
+        f"{live_provenances - allowed_live}"
     )
+
+
+def test_labels_lang_overlap_monotonic_growth(catalog_conn):
+    """P0 imported 455275/455299 rows for both tables (24-segment gap — an
+    isolated batch of zero-byte podcast files, see docs/REARCHITECTURE_
+    IMPLEMENTATION_PLAN.md). P2's label.suite node fills this gap opportunistically
+    alongside its music pass; rows should only ever be added, never lost, and
+    never exceed the full corpus size.
+    """
+    total_segments = catalog_conn.execute("SELECT COUNT(*) FROM segments").fetchone()[0]
+    for table in ("labels_lang", "labels_overlap"):
+        total = catalog_conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        assert total >= LABELS_LANG_OVERLAP_P0_BASELINE, (
+            f"{table} has {total} rows, below the P0 import baseline of "
+            f"{LABELS_LANG_OVERLAP_P0_BASELINE} — rows should only ever be added, never lost"
+        )
+        assert total <= total_segments, (
+            f"{table} has {total} rows, more than segments ({total_segments})"
+        )
+        dupes = catalog_conn.execute(
+            f"SELECT id, COUNT(*) FROM {table} GROUP BY id HAVING COUNT(*) != 1"
+        ).fetchall()
+        assert not dupes, f"duplicate ids in {table}: {dupes[:5]}"
 
 
 def test_asr_results_two_models_per_segment(catalog_conn):

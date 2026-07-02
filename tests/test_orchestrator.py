@@ -121,3 +121,85 @@ def test_label_music_kill_resume_no_duplicates():
 
     assert not dupes, f"duplicate ids in labels_music after kill+resume: {dupes[:5]}"
     assert after >= before, "labels_music row count must not decrease"
+
+
+def test_label_prosody_kill_resume_no_duplicates():
+    """Same kill -9 / resume idempotency contract as label.music, exercised
+    against label.prosody's N-CPU-worker-process supervisor instead of the
+    per-GPU-device one — proves the pattern generalises across the CPU/GPU
+    pool axis, not just for label_music's specific pool-naming scheme.
+    """
+    _require_catalog()
+    conn = connect_ro()
+    before = conn.execute("SELECT COUNT(*) FROM labels_prosody").fetchone()[0]
+    conn.close()
+
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "pipeline.cli", "run", "label.prosody",
+         "--workers", "2", "--limit", "12", "--batch", "3"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    time.sleep(4.0)  # let workers load Silero VAD and process at least one batch
+    proc.send_signal(signal.SIGKILL)
+    proc.wait(timeout=10)
+
+    subprocess.run(
+        [sys.executable, "-m", "pipeline.cli", "run", "label.prosody",
+         "--workers", "2", "--limit", "12", "--batch", "3"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        timeout=60, check=True,
+    )
+
+    conn = connect_ro()
+    after = conn.execute("SELECT COUNT(*) FROM labels_prosody").fetchone()[0]
+    dupes = conn.execute(
+        "SELECT id, COUNT(*) FROM labels_prosody GROUP BY id HAVING COUNT(*) != 1"
+    ).fetchall()
+    conn.close()
+
+    assert not dupes, f"duplicate ids in labels_prosody after kill+resume: {dupes[:5]}"
+    assert after >= before, "labels_prosody row count must not decrease"
+
+
+def test_label_suite_kill_resume_no_duplicates():
+    """Same kill -9 / resume idempotency contract, exercised against label.suite's
+    3-table (labels_lang / labels_overlap / labels_music) decode-once fan-out —
+    each batch's per-table upserts commit together before the next batch is
+    dispatched, so a kill mid-run leaves at most one batch's worth of tables
+    partially ahead of each other, never duplicated or corrupted.
+    """
+    _require_catalog()
+    conn = connect_ro()
+    before = {
+        t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+        for t in ("labels_lang", "labels_overlap", "labels_music")
+    }
+    conn.close()
+
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "pipeline.cli", "run", "label.suite",
+         "--devices", "cpu", "--limit", "12", "--batch", "3",
+         "--gpu-policy", "exempt"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    time.sleep(8.0)  # 3 models to load (mms-lid + pyannote + PANNs) before first batch
+    proc.send_signal(signal.SIGKILL)
+    proc.wait(timeout=10)
+
+    subprocess.run(
+        [sys.executable, "-m", "pipeline.cli", "run", "label.suite",
+         "--devices", "cpu", "--limit", "12", "--batch", "3",
+         "--gpu-policy", "exempt"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        timeout=90, check=True,
+    )
+
+    conn = connect_ro()
+    for t in ("labels_lang", "labels_overlap", "labels_music"):
+        after = conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+        dupes = conn.execute(
+            f"SELECT id, COUNT(*) FROM {t} GROUP BY id HAVING COUNT(*) != 1"
+        ).fetchall()
+        assert not dupes, f"duplicate ids in {t} after kill+resume: {dupes[:5]}"
+        assert after >= before[t], f"{t} row count must not decrease"
+    conn.close()

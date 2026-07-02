@@ -36,6 +36,56 @@ def cmd_golden_build(args: argparse.Namespace) -> int:
     return golden_main()
 
 
+def cmd_run_ingest_probe(args: argparse.Namespace) -> int:
+    import asyncio
+    import logging
+
+    from pipeline.nodes.ingest_probe import run_ingest_probe
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    result = asyncio.run(run_ingest_probe(
+        workers=args.workers, batch_size=args.batch, limit=args.limit,
+    ))
+    print(f"\nDone: {result}")
+    return 0
+
+
+def cmd_run_label_prosody(args: argparse.Namespace) -> int:
+    import asyncio
+    import logging
+
+    from pipeline.nodes.label_prosody import run_label_prosody
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    result = asyncio.run(run_label_prosody(
+        n_workers=args.workers,
+        threads_per_worker=args.threads,
+        batch_size=args.batch,
+        limit=args.limit,
+    ))
+    print(f"\nDone: {result}")
+    return 0
+
+
+def cmd_run_label_suite(args: argparse.Namespace) -> int:
+    import asyncio
+    import logging
+
+    from pipeline.nodes.label_suite import run_label_suite
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    devices = [d.strip() for d in args.devices.split(",")]
+    result = asyncio.run(run_label_suite(
+        devices,
+        gpu_policy=args.gpu_policy,
+        batch_size=args.batch,
+        mem_fraction=args.mem_fraction,
+        limit=args.limit,
+    ))
+    print(f"\nDone: {result}")
+    return 0
+
+
 def cmd_run_label_music(args: argparse.Namespace) -> int:
     import asyncio
     import logging
@@ -80,6 +130,25 @@ def main() -> int:
 
     p_run = sub.add_parser("run", help="Run a DAG node via the orchestrator")
     run_sub = p_run.add_subparsers(dest="run_command", required=True)
+    p_run_probe = run_sub.add_parser("ingest.probe", help="P2: ffprobe metadata + L/R correlation per raw file")
+    p_run_probe.add_argument("--workers", type=int, default=8)
+    p_run_probe.add_argument("--batch", type=int, default=200)
+    p_run_probe.add_argument("--limit", type=int, default=None)
+    p_run_probe.set_defaults(func=cmd_run_ingest_probe)
+    p_run_prosody = run_sub.add_parser("label.prosody", help="P2: rate/pitch/pause raw detector (CPU)")
+    p_run_prosody.add_argument("--workers", type=int, default=4, help="number of CPU worker processes")
+    p_run_prosody.add_argument("--threads", type=int, default=2, help="torch threads per worker")
+    p_run_prosody.add_argument("--batch", type=int, default=8)
+    p_run_prosody.add_argument("--limit", type=int, default=None)
+    p_run_prosody.set_defaults(func=cmd_run_label_prosody)
+    p_run_suite = run_sub.add_parser("label.suite", help="P2: decode-once lang+overlap+music fan-out")
+    p_run_suite.add_argument("--devices", default="cuda:0,cuda:1",
+                              help="comma-separated device list, one worker per device")
+    p_run_suite.add_argument("--gpu-policy", default="cap", choices=["yield", "cap", "exempt"])
+    p_run_suite.add_argument("--batch", type=int, default=16)
+    p_run_suite.add_argument("--mem-fraction", type=float, default=0.15)
+    p_run_suite.add_argument("--limit", type=int, default=None)
+    p_run_suite.set_defaults(func=cmd_run_label_suite)
     p_run_music = run_sub.add_parser("label.music", help="P1 pilot: PANNs music-family tagging")
     p_run_music.add_argument("--devices", default="cuda:0,cuda:1",
                               help="comma-separated device list, one worker per device")

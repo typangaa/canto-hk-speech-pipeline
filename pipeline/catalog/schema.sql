@@ -120,6 +120,21 @@ CREATE TABLE IF NOT EXISTS labels_music (
 );
 
 
+-- P2 ingest.probe node output: ffprobe (duration/sr/channels/codec) + an L/R correlation
+-- sample for stereo-vs-dual-mono discrimination, feeding the LABEL_FRAMEWORK §11 /
+-- REARCHITECTURE_IMPLEMENTATION_PLAN §10 Q6 production-audio stereo feasibility report.
+-- Keyed by raw_id (raw_files.raw_id), not segment id — probes the source file, not clips.
+CREATE TABLE IF NOT EXISTS raw_probe (
+    raw_id         TEXT    PRIMARY KEY,
+    channels       INTEGER,
+    codec          TEXT,
+    sample_rate    INTEGER,
+    duration_sec   DOUBLE,
+    lr_correlation DOUBLE,   -- Pearson r over a sampled window (NULL if channels != 2)
+    probed_at      TIMESTAMP
+);
+
+
 -- Forward-compatible stubs (empty until a later milestone; DDL only, created now so imports never need a migration)
 
 -- Future: per-segment prosody features (speaking rate, pitch, voiced duration, pause gaps).
