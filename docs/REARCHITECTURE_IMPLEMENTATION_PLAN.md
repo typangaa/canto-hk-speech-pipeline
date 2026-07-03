@@ -648,6 +648,52 @@ re-filter 唔使再 copy 一次 corpus;10× 下 5.7T 複製本來就不可行。
   嗰次一樣屬於「依賴版本漂移,唔關呢個 node 事」,冇再另外起 golden check script
   (核心正確性閘係逐 token regex `^[a-z]+[1-6]$`,唔係同 legacy byte-match)。
 
+**Session 3 執行結果(2026-07-03)**:`speaker.embed`/`speaker.cluster`(`pipeline/nodes/speaker.py`,
+commit `1d629c7`)完成——同 filter/g2p 一樣嘅 hybrid reuse-first 設計,呢次係喺 speaker.embed
+先發現:對現有 catalog 隨機抽 2,000 個樣本,100% 已經有舊 `scripts/08_speaker_id.py` 留低嘅
+`.embed.npy` sidecar,於是全量 backlog(455,269 段)淨係使 CPU thread-pool 做 sidecar
+existence check 就搞掂(455,245 reused + 24 corrupt file,0 GPU compute),~65 分鐘走完。
+`speaker.cluster` verbatim port 咗 `cluster_embeddings()`(agglomerative + 大源
+sample-and-assign fallback),用 co-clustering Adjusted Rand Index(唔係 speaker_id 字串對
+拍,因為 cluster 整數 id 本身冇意義)驗證:rthk 全源(36,726 段)ARI=0.8248,同舊版高度
+吻合。9/9 新 test 過。呢個係第一個由 `agy-sonnet` 起草、我 review+接線+補測試+commit 嘅 node
+(建立咗呢個 session 起沿用嘅分工模式)。
+
+**Session 4 執行結果(2026-07-03)**:`segment.diarize`/`segment.vad_cut`/`pregate.snr`
+(`pipeline/nodes/segment.py`,port 自 `scripts/03_segment.py` + `scripts/03b_acoustic_pregate.py`)
+起好,`agy-sonnet` 起草、我 review+接線+補測試+commit(同 S3 一樣嘅分工)。
+
+- Schema 加咗 4 樣嘢:`segments.raw_id`(連返 raw_files,legacy 455,299 行 NULL)、
+  `diarization_turns`(segment.diarize 自己嘅輸出——每個 speaker turn 一行,俾
+  segment.vad_cut 讀)、`raw_segments`(per-raw-file 完成 marker,`provenance` 分
+  `legacy_reused`/`segment_vad_cut`/`diarize_failed` 三種,兩個 node 都憑呢張表
+  anti-join 判斷「呢個 raw file 洗唔洗再做」)、`pregate`(pregate.snr 自己嘅輸出,
+  獨立於 `filters_acoustic`,因為呢個係 ASR 之前嘅平早 reject,同最終權威嘅
+  filter.acoustic 用緊唔同嘅 SNR 公式,故意唔要求數值一致)。
+- **關鍵發現(抽查證實)**:現有 6,272 個 `raw_files` 幾乎全部(隨機 50 個抽樣 48/50 命中)
+  已經有舊 `scripts/03_segment.py` 留低嘅 `{stem}_segments.jsonl` sidecar——即係話呢批
+  raw file 已經俾舊 pipeline 全面 diarize+VAD-cut 完,再行一次全量 GPU diarization
+  會係純浪費(重複起新 id 嘅 segment WAV)。故此 segment.diarize 抄返 speaker.embed
+  嗰個 hybrid reuse-first 設計:sidecar 命中就淨係寫一行 `raw_segments`
+  marker(`legacy_reused`),唔起 GPU;剩低嗰 4-5% 真係冇 sidecar 嘅先至真係走 GPU
+  fallback(pyannote 3.1,或者冇 HF token 就跌落 VAD-only 模式——同舊 script 一樣)。
+- **真實(非合成)gate test**:`pipe run segment.diarize --limit 20`——20 個真 raw_files 入面
+  16 個 sidecar 命中(`legacy_reused`),4 個真係冇 sidecar,自動起咗 2 隻 GPU worker
+  (呢個環境冇設 `HUGGING_FACE_HUB_TOKEN`,故正確跌落 VAD-only fallback,每個 file 寫低
+  一行 `SPEAKER_UNKNOWN` 全長 turn),`diarization_turns` 表寫入 4 行、`raw_segments`
+  寫入 16 行,全部行為符合預期。
+- **`segment.vad_cut`/`pregate.snr` 嘅真實剪片邏輯**:淨係喺 unit test 用 monkeypatch
+  嘅 VAD window(唔靠 Silero VAD 對合成噪音嘅真實判斷,但 audio I/O / WAV 寫檔 /
+  segment id 生成 / duration 邊界 gate 全部行緊真代碼)驗證,冇喺 production 走全套
+  真實剪片——因為呢一步會喺 `/mnt/Drive4/canto/segments/` 底下寫低**新嘅實體 segment
+  WAV 檔**同喺 catalog 新增真 `segments` 行,同之前 P3 S1-S3 淨係寫 metadata 行嘅性質
+  唔同,故意留返俾 owner 話事先至喺 production 對住嗰 4 個真 raw_id 跑
+  `segment.vad_cut`。14/14 新 test 過,90/90 全 suite 過。
+- **下一步(owner 話事)**:(a) 對住嗰 4 個已經有 `diarization_turns` 嘅真 raw_id 跑
+  `segment.vad_cut` + `pregate.snr`,驗證真實剪片+SNR gate 喺 production 數據上work;
+  (b) P3 全部 4 個 session 完成後,標誌住 P3 milestone 全部 node port 完(asr→
+  filter/g2p→speaker→segment),可以開始諗 P4(metadata cutover)。
+
 ### P4 — Metadata cutover(1-2 sessions)
 - `manifest.build/export`、`label.calibrate/store`、`tier.assign` 上線;
   per-segment sidecar 對新數據停寫(舊有保留唔郁)

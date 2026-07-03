@@ -49,6 +49,11 @@ CREATE TABLE IF NOT EXISTS segments (
     style        TEXT,
     created_at   DATE
 );
+-- P3 session 4 (pipeline/nodes/segment.py): links a segment back to the raw_files row it
+-- was cut from. NULL for all 455,299 P0 legacy-imported rows (manifest.jsonl never
+-- recorded this link — segments.audio_path was the only surviving pointer). Populated
+-- going forward by segment.vad_cut for every newly-created segment.
+ALTER TABLE segments ADD COLUMN IF NOT EXISTS raw_id TEXT;
 
 -- From manifest.jsonl 'asr_candidates' list; one row per candidate ASR model per segment.
 CREATE TABLE IF NOT EXISTS asr_results (
@@ -195,6 +200,62 @@ CREATE TABLE IF NOT EXISTS raw_probe (
     probed_at      TIMESTAMP
 );
 
+
+-- P3 session 4 (pipeline/nodes/segment.py): segment.diarize's own output — one row per
+-- speaker turn found by pyannote (or the single VAD-only-mode "SPEAKER_UNKNOWN" turn
+-- spanning the whole file when no HF token / gated-model access is available, exactly
+-- matching scripts/03_segment.py's fallback). Consumed by segment.vad_cut, which runs
+-- Silero VAD *within* each turn to find single-speaker silence-boundary clips (hard
+-- constraint #5). Kept as its own table (not inlined into raw_segments) because the two
+-- nodes are separate DAG resources (gpu vs cpu+io) that must be able to pipeline without a
+-- barrier — segment.vad_cut discovers work the moment a raw file's turns exist.
+CREATE TABLE IF NOT EXISTS diarization_turns (
+    raw_id      TEXT,
+    turn_idx    INTEGER,
+    start_sec   DOUBLE,
+    end_sec     DOUBLE,
+    speaker_tag TEXT,
+    PRIMARY KEY (raw_id, turn_idx)
+);
+
+-- P3 session 4 (pipeline/nodes/segment.py): per-raw-file completion marker for the
+-- diarize+vad_cut chain. A random sample confirmed every current raw_files row already
+-- has a legacy `{stem}_segments.jsonl` sidecar on disk (scripts/03_segment.py's own
+-- idempotency marker) — i.e. it was already fully diarized+cut by the old monolithic
+-- script. Re-running real pyannote+VAD over all 6,272 raw files would be pure waste (and
+-- would duplicate already-existing segment WAVs under new ids). Both segment.diarize and
+-- segment.vad_cut anti-join against this table (same hybrid reuse-first shape as
+-- speaker_embeddings, see pipeline/nodes/speaker.py): on a sidecar hit, skip straight to
+-- writing this marker with provenance='legacy_reused' (no diarization_turns row needed —
+-- there is nothing new to hand off to segment.vad_cut); a genuine cache miss (a real new
+-- raw file with no legacy sidecar) runs the real pipeline and writes
+-- provenance='segment_vad_cut' once cutting finishes (or 'diarize_failed' if pyannote
+-- itself errored, so the raw file is not retried forever).
+CREATE TABLE IF NOT EXISTS raw_segments (
+    raw_id       TEXT PRIMARY KEY,
+    n_segments   INTEGER,
+    provenance   TEXT,
+    segmented_at TIMESTAMP
+);
+
+-- P3 session 4 (pipeline/nodes/segment.py, ported from scripts/03b_acoustic_pregate.py):
+-- fast SNR(+DNSMOS) pre-gate applied to freshly-cut segments (raw_id IS NOT NULL) BEFORE
+-- they ever reach ASR — avoids wasting GPU transcription time on clips filter.acoustic
+-- would reject anyway. Deliberately a separate table from filters_acoustic: this runs
+-- earlier in the DAG (no ASR text exists yet) and uses 03b's own SNR formula (percentile
+-- energy ratio with a sliding hop), not filter.py's non-overlapping-frame variant used by
+-- the later, authoritative filter.acoustic gate — the two are intentionally not required
+-- to numerically agree, only to agree in spirit (reject the same obviously-bad clips
+-- early). Only ever populated for pipeline-cut segments; the 455,299 legacy segments were
+-- already filtered by the time they reached the catalog and never pass through this gate.
+CREATE TABLE IF NOT EXISTS pregate (
+    id          TEXT PRIMARY KEY,
+    snr_db      DOUBLE,
+    dnsmos      DOUBLE,
+    pass        BOOLEAN,
+    fail_reason TEXT,
+    provenance  TEXT
+);
 
 -- Forward-compatible stubs (empty until a later milestone; DDL only, created now so imports never need a migration)
 

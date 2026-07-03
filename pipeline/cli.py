@@ -212,6 +212,58 @@ def cmd_run_speaker_embed(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_run_segment_diarize(args: argparse.Namespace) -> int:
+    import asyncio
+    import logging
+
+    from pipeline.nodes.segment import run_segment_diarize
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    devices = [d.strip() for d in args.devices.split(",")]
+    result = asyncio.run(run_segment_diarize(
+        devices,
+        gpu_policy=args.gpu_policy,
+        batch_size=args.batch,
+        mem_fraction=args.mem_fraction,
+        limit=args.limit,
+    ))
+    print(f"\nDone: {result}")
+    return 0
+
+
+def cmd_run_segment_vad_cut(args: argparse.Namespace) -> int:
+    import asyncio
+    import logging
+
+    from pipeline.nodes.segment import run_segment_vad_cut
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    result = asyncio.run(run_segment_vad_cut(
+        n_threads=args.threads,
+        limit=args.limit,
+    ))
+    print(f"\nDone: {result}")
+    return 0
+
+
+def cmd_run_pregate_snr(args: argparse.Namespace) -> int:
+    import asyncio
+    import logging
+
+    from pipeline.nodes.segment import run_pregate_snr
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    result = asyncio.run(run_pregate_snr(
+        min_snr=args.min_snr,
+        min_dnsmos=args.min_dnsmos,
+        n_threads=args.threads,
+        batch_size=args.batch,
+        limit=args.limit,
+    ))
+    print(f"\nDone: {result}")
+    return 0
+
+
 def cmd_run_speaker_cluster(args: argparse.Namespace) -> int:
     import asyncio
     import logging
@@ -275,6 +327,27 @@ def main() -> int:
                                    "needs more headroom than label.music's single-model 0.15")
     p_run_suite.add_argument("--limit", type=int, default=None)
     p_run_suite.set_defaults(func=cmd_run_label_suite)
+    p_run_diarize = run_sub.add_parser("segment.diarize", help="P3: pyannote speaker diarization (reuse-first, GPU fallback)")
+    p_run_diarize.add_argument("--devices", default="cuda:0,cuda:1",
+                                help="comma-separated device list, one worker per device (only spawned for cache misses)")
+    p_run_diarize.add_argument("--gpu-policy", default="cap", choices=["yield", "cap", "exempt"])
+    p_run_diarize.add_argument("--batch", type=int, default=32)
+    p_run_diarize.add_argument("--mem-fraction", type=float, default=0.5)
+    p_run_diarize.add_argument("--limit", type=int, default=None,
+                                help="process only the first N discovered raw files (testing)")
+    p_run_diarize.set_defaults(func=cmd_run_segment_diarize)
+    p_run_vadcut = run_sub.add_parser("segment.vad_cut", help="P3: Silero VAD within turns -> 48kHz WAV segments (CPU+IO, in-supervisor)")
+    p_run_vadcut.add_argument("--threads", type=int, default=None, help="thread-pool size (default: min(16, 2*ncpu))")
+    p_run_vadcut.add_argument("--limit", type=int, default=None,
+                               help="process only the first N discovered raw files (testing)")
+    p_run_vadcut.set_defaults(func=cmd_run_segment_vad_cut)
+    p_run_pregate = run_sub.add_parser("pregate.snr", help="P3: fast SNR+DNSMOS pre-gate before ASR (CPU, pipeline-cut segments only)")
+    p_run_pregate.add_argument("--min-snr", type=float, default=25.0)
+    p_run_pregate.add_argument("--min-dnsmos", type=float, default=3.0, help="set 0 to skip DNSMOS")
+    p_run_pregate.add_argument("--threads", type=int, default=None, help="thread-pool size (default: min(16, 2*ncpu))")
+    p_run_pregate.add_argument("--batch", type=int, default=500)
+    p_run_pregate.add_argument("--limit", type=int, default=None)
+    p_run_pregate.set_defaults(func=cmd_run_pregate_snr)
     p_run_asr = run_sub.add_parser("asr.transcribe", help="P3: dual faster-whisper models split across GPUs")
     p_run_asr.add_argument("--models", default="canto_ft,whisper_v3",
                             help="comma-separated model keys, paired positionally with --devices")
