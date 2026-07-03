@@ -146,7 +146,9 @@ def main() -> int:
                               help="comma-separated device list, one worker per device")
     p_run_suite.add_argument("--gpu-policy", default="cap", choices=["yield", "cap", "exempt"])
     p_run_suite.add_argument("--batch", type=int, default=16)
-    p_run_suite.add_argument("--mem-fraction", type=float, default=0.15)
+    p_run_suite.add_argument("--mem-fraction", type=float, default=0.35,
+                              help="hosts 3 models (mms-lid+pyannote+PANNs) in one process — "
+                                   "needs more headroom than label.music's single-model 0.15")
     p_run_suite.add_argument("--limit", type=int, default=None)
     p_run_suite.set_defaults(func=cmd_run_label_suite)
     p_run_music = run_sub.add_parser("label.music", help="P1 pilot: PANNs music-family tagging")

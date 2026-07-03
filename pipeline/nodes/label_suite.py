@@ -311,12 +311,24 @@ class SuiteWorker(GPUWorkerBase):
         log.info(f"loading PANNs CNN14 on {self.device} ...")
         from panns_inference import AudioTagging
         from panns_inference.config import labels as panns_labels
+        # panns_inference.AudioTagging does an *exact* string match `device == 'cuda'`
+        # to decide GPU vs CPU — "cuda:0"/"cuda:1" silently fall through to CPU.
+        # set_device() pins the process's default GPU so unqualified "cuda" resolves
+        # to the right physical card.
+        panns_device = "cuda" if str(self.device).startswith("cuda") else "cpu"
+        if panns_device == "cuda":
+            torch.cuda.set_device(self.device)
         real_stdout = sys.stdout
         sys.stdout = sys.stderr  # panns_inference prints to stdout on init — would
         try:                     # corrupt the JSONL worker protocol stream.
-            self.panns = AudioTagging(checkpoint_path=None, device=self.device)
+            self.panns = AudioTagging(checkpoint_path=None, device=panns_device)
         finally:
             sys.stdout = real_stdout
+        if isinstance(self.panns.model, torch.nn.DataParallel):
+            # See label_music.py's identical fix: AudioTagging's DataParallel wrap
+            # assumes cuda:0 regardless of which GPU set_device() actually pinned —
+            # unwrap since we want one GPU per worker process, not data splitting.
+            self.panns.model = self.panns.model.module
         self.panns_labels = panns_labels
         self.music_idx = np.array(music_indices(panns_labels))
 

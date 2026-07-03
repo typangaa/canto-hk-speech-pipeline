@@ -274,12 +274,28 @@ class MusicWorker(GPUWorkerBase):
         # panns_inference prints "Checkpoint path: ..." / "Using CPU." straight to
         # stdout on init, which would corrupt the JSONL worker protocol stream —
         # redirect stdout to stderr for the duration of the load only.
+        # panns_inference.AudioTagging does an *exact* string match `device == 'cuda'`
+        # to decide GPU vs CPU — "cuda:0"/"cuda:1" silently fall through to CPU.
+        # set_device() pins the process's default GPU so unqualified "cuda" resolves
+        # to the right physical card.
+        panns_device = "cuda" if str(self.device).startswith("cuda") else "cpu"
+        if panns_device == "cuda":
+            torch.cuda.set_device(self.device)
+
         real_stdout = sys.stdout
         sys.stdout = sys.stderr
         try:
-            at = AudioTagging(checkpoint_path=None, device=self.device)
+            at = AudioTagging(checkpoint_path=None, device=panns_device)
         finally:
             sys.stdout = real_stdout
+        if isinstance(at.model, torch.nn.DataParallel):
+            # AudioTagging always wraps in DataParallel(device_ids=None) when its
+            # (now-unqualified) device is "cuda" — DataParallel's default device_ids
+            # scans ALL visible GPUs and assumes the model lives on cuda:0, which
+            # breaks true one-GPU-per-worker-process fan-out on non-zero devices.
+            # The weights are already correctly placed via set_device() above, so
+            # just unwrap — no data-parallel splitting is wanted here anyway.
+            at.model = at.model.module
 
         self.labels = labels
         self.mus_idx = np.array(music_indices(labels))
