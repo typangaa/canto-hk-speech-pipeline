@@ -240,6 +240,13 @@ WHERE m.id IS NULL ORDER BY s.duration_sec;   -- 順便 length-sort 俾 batcher
 
 ### 3.2 Journal + catalog(event-sourcing lite)
 
+> **2026-07-03 更新**:P0-P2 為求快,實際 shipped 咗嘅 P1/P2 node 全部揀咗捷徑
+> 直接寫 DuckDB(冇行呢度原本畫嘅 journal-first 設計),代價喺 P2 backlog 顯露
+> 咗——任何兩個 node 都唔可以真正並行跑(見 P2 backlog 2026-07-03 嘅 operational
+> finding)。呢個 §3.2 嘅具體可執行版本已經寫成獨立文件
+> `docs/JOURNAL_FIRST_PLAN.md`(草擬,等 owner 拍板),包含 journal 格式、
+> compactor 設計、migration 順序、gate——執行咗之後呢個 note 應該更新做已完成。
+
 現 pipeline 最證明咗有效嘅嘢 = **id-keyed append-only jsonl sidecar**(crash-safe、resumable、
 永不 corrupt 已寫數據)。新設計**保留佢做寫入媒介**,catalog 只係佢嘅 queryable 視圖:
 
@@ -631,7 +638,36 @@ re-filter 唔使再 copy 一次 corpus;10× 下 5.7T 複製本來就不可行。
 ### 9.1 Golden set
 ~500 clips 分層抽樣(source × duration bucket × gold/silver),連同舊 pipeline 對應輸出
 snapshot 一齊釘版。每個 node port = 跑 golden → diff。音頻處理容忍浮點誤差(|Δ|≤1e-4
-或分類結果全等);ASR 輸出因 model 版本釘死(uv.lock)應全等。
+或分類結果全等)。
+
+> **2026-07-03 更新(ASR parity 規則修正)**:原本呢度寫「ASR 輸出因 model 版本釘死
+> (uv.lock)應全等」—— P3 session 1 port `asr.transcribe` 之後發現呢個假設錯:
+> `ctranslate2==4.8.0`/`faster-whisper==1.2.1` 由 `.venv` 建立(2026-06-09)到而家
+> 一直冇變過(早過原本轉錄語料嘅時間 2026-06-11),audio bytes 亦核實一致,但同一段
+> segment 今日重新轉錄 vs 舊 snapshot,輸出**穩定但唔完全一樣**(唔係 random——同一
+> 環境入面重複跑、跨 process 重新起 CUDA context 都 100% 一致)。forensic 追到最底層,
+> 剩返 GPU driver(595.71.05,冇歷史記錄可比對)呢個唯一冇辦法核實嘅變數,判斷係
+> driver-level 數值 heuristic 漂移,唔係 code/package/audio 出錯。
+>
+> 用 20 條隨機非 golden segment 覆核(`char_agreement()`,`tests/golden/` 8 個原本
+> golden id 之外):`canto_ft` median=1.0 mean=0.991 min=0.929(16 可比較);
+> `whisper_v3` median=1.0 mean=0.961 min=0.759(20 可比較)——絕大部份完全一致,只有
+> 少數(較長/較嘈雜)segment 有明顯分歧,唔係普遍性問題。
+>
+> **新規則**:ASR 輸出(`asr.transcribe`)改用 **similarity-tolerance**,唔用
+> exact-match:整批 median `char_agreement(new, legacy) ≥ 0.95`(gate 用嘅聚合門檻,
+> 符合以上實測);單條 < 0.75 只 log 警告、唔算 gate fail(個別語音難轉錄係正常現象,
+> 唔應該令成個 gate flaky)。驗證腳本:`tests/golden/check_asr_parity.py`(獨立於
+> `pytest tests/` 自動跑——載入兩個 whisper model 要幾秒 + GPU,唔適合放入普通 unit
+> test suite;手動 / gate 時執行)。其餘 node(音頻分類、分類結果)繼續用原本
+> |Δ|≤1e-4 / 全等規則,冇改。
+>
+> 呢次調查亦意外揭發一個獨立 bug(唔關 ASR parity 事,但影響緊 dataset 本身):
+> `metadata/manifest.jsonl`/`train.jsonl`/`val.jsonl` 入面 `asr_candidates[].model`
+> 有 110,168 條停留喺 repo 搬遷前嘅舊絕對路徑(同 `pipeline/catalog/fix_stale_asr_model.py`
+> 修嘅 DuckDB 版本一樣嘅根源),令任何用 `model_field()` 對比嘅工具都會誤判做「查唔到」。
+> 已用 `scripts/fix_stale_asr_model_manifest.py` 修好(dry-run 核實數目、備份
+> `.pre-asr-remap.bak`、三個檔案共 110,168 條 remap,remap 之後行數不變、0 殘留)。
 
 ### 9.2 Unit tests(`tests/`)
 純邏輯抽出嚟先測得:agreement 計算、mandarin/english ratio、bucket()、shard hash、

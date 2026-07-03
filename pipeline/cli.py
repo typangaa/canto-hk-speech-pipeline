@@ -86,6 +86,41 @@ def cmd_run_label_suite(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_run_asr_transcribe(args: argparse.Namespace) -> int:
+    import asyncio
+    import logging
+
+    from pipeline.nodes.asr import run_asr_transcribe
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    model_keys = [m.strip() for m in args.models.split(",")]
+    devices = [d.strip() for d in args.devices.split(",")]
+    if len(model_keys) != len(devices):
+        raise SystemExit(f"--models ({len(model_keys)}) and --devices ({len(devices)}) must have the same count")
+    assignments = list(zip(model_keys, devices))
+    result = asyncio.run(run_asr_transcribe(
+        assignments,
+        gpu_policy=args.gpu_policy,
+        batch_size=args.batch,
+        mem_fraction=args.mem_fraction,
+        limit=args.limit,
+    ))
+    print(f"\nDone: {result}")
+    return 0
+
+
+def cmd_run_asr_agreement(args: argparse.Namespace) -> int:
+    import asyncio
+    import logging
+
+    from pipeline.nodes.asr import run_asr_agreement
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    result = asyncio.run(run_asr_agreement(batch_size=args.batch, limit=args.limit))
+    print(f"\nDone: {result}")
+    return 0
+
+
 def cmd_run_label_music(args: argparse.Namespace) -> int:
     import asyncio
     import logging
@@ -151,6 +186,20 @@ def main() -> int:
                                    "needs more headroom than label.music's single-model 0.15")
     p_run_suite.add_argument("--limit", type=int, default=None)
     p_run_suite.set_defaults(func=cmd_run_label_suite)
+    p_run_asr = run_sub.add_parser("asr.transcribe", help="P3: dual faster-whisper models split across GPUs")
+    p_run_asr.add_argument("--models", default="canto_ft,whisper_v3",
+                            help="comma-separated model keys, paired positionally with --devices")
+    p_run_asr.add_argument("--devices", default="cuda:0,cuda:1",
+                            help="comma-separated device list, one worker per (model,device) pair")
+    p_run_asr.add_argument("--gpu-policy", default="cap", choices=["yield", "cap", "exempt"])
+    p_run_asr.add_argument("--batch", type=int, default=8)
+    p_run_asr.add_argument("--mem-fraction", type=float, default=None)
+    p_run_asr.add_argument("--limit", type=int, default=None)
+    p_run_asr.set_defaults(func=cmd_run_asr_transcribe)
+    p_run_agree = run_sub.add_parser("asr.agreement", help="P3: cross-model char-overlap agreement (CPU)")
+    p_run_agree.add_argument("--batch", type=int, default=2000)
+    p_run_agree.add_argument("--limit", type=int, default=None)
+    p_run_agree.set_defaults(func=cmd_run_asr_agreement)
     p_run_music = run_sub.add_parser("label.music", help="P1 pilot: PANNs music-family tagging")
     p_run_music.add_argument("--devices", default="cuda:0,cuda:1",
                               help="comma-separated device list, one worker per device")
