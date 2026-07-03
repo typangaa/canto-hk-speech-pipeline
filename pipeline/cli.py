@@ -193,6 +193,42 @@ def cmd_run_label_music(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_run_speaker_embed(args: argparse.Namespace) -> int:
+    import asyncio
+    import logging
+
+    from pipeline.nodes.speaker import run_speaker_embed
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    devices = [d.strip() for d in args.devices.split(",")]
+    result = asyncio.run(run_speaker_embed(
+        devices,
+        gpu_policy=args.gpu_policy,
+        batch_size=args.batch,
+        mem_fraction=args.mem_fraction,
+        limit=args.limit,
+    ))
+    print(f"\nDone: {result}")
+    return 0
+
+
+def cmd_run_speaker_cluster(args: argparse.Namespace) -> int:
+    import asyncio
+    import logging
+
+    from pipeline.nodes.speaker import run_speaker_cluster
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    sources = [s.strip() for s in args.sources.split(",")] if args.sources else None
+    result = asyncio.run(run_speaker_cluster(
+        threshold=args.threshold,
+        sources=sources,
+        limit=args.limit,
+    ))
+    print(f"\nDone: {result}")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="pipe")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -280,6 +316,22 @@ def main() -> int:
     p_run_music.add_argument("--limit", type=int, default=None,
                               help="process only the first N discovered segments (testing)")
     p_run_music.set_defaults(func=cmd_run_label_music)
+    p_run_spk_embed = run_sub.add_parser("speaker.embed", help="P3: ECAPA-TDNN d-vector embedding (reuse-first, GPU fallback)")
+    p_run_spk_embed.add_argument("--devices", default="cuda:0,cuda:1",
+                                  help="comma-separated device list, one worker per device (only spawned for cache misses)")
+    p_run_spk_embed.add_argument("--gpu-policy", default="cap", choices=["yield", "cap", "exempt"])
+    p_run_spk_embed.add_argument("--batch", type=int, default=5000)
+    p_run_spk_embed.add_argument("--mem-fraction", type=float, default=0.15)
+    p_run_spk_embed.add_argument("--limit", type=int, default=None,
+                                  help="process only the first N discovered segments (testing)")
+    p_run_spk_embed.set_defaults(func=cmd_run_speaker_embed)
+    p_run_spk_cluster = run_sub.add_parser("speaker.cluster", help="P3: cross-file speaker clustering (CPU, whole-source recompute)")
+    p_run_spk_cluster.add_argument("--threshold", type=float, default=0.25)
+    p_run_spk_cluster.add_argument("--sources", default=None,
+                                    help="comma-separated source allow-list (default: all sources)")
+    p_run_spk_cluster.add_argument("--limit", type=int, default=None,
+                                    help="cap segments loaded per source (testing)")
+    p_run_spk_cluster.set_defaults(func=cmd_run_speaker_cluster)
 
     args = parser.parse_args()
     return args.func(args)

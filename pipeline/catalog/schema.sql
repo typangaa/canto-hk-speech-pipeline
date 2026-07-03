@@ -216,12 +216,36 @@ CREATE TABLE IF NOT EXISTS labels_emotion (
     probs JSON
 );
 
--- Future: per-segment speaker identity with embedding reference paths.
+-- P3 session 3 (pipeline/nodes/speaker.py): speaker.embed's own raw output — one ECAPA-TDNN
+-- d-vector .npy ref per segment. Kept separate from `speakers` (rather than both nodes
+-- partial-writing the same table) for the same upsert-clobbering reason as
+-- filters_text/filters_acoustic: speaker.cluster is the sole writer of the final `speakers`
+-- row. Unlike filters/g2p, this table was NOT pre-populated by the P0 legacy import (the
+-- legacy embedding cache lived as sibling .embed.npy files next to each filtered WAV, never
+-- in manifest.jsonl/DuckDB) — a sample of the live corpus found ~100% of current segments
+-- already have a matching sidecar .embed.npy from scripts/08_speaker_id.py's prior runs, so
+-- speaker.embed's discovery-time policy is: reuse the sidecar file if present (near-zero
+-- cost, no GPU), only invoke the GPU ECAPA encoder for genuine cache misses.
+CREATE TABLE IF NOT EXISTS speaker_embeddings (
+    id            TEXT PRIMARY KEY,
+    source        TEXT,
+    embedding_ref TEXT,
+    provenance    TEXT   -- 'legacy_reused' (sidecar .npy found) | 'speaker_embed_node' (freshly computed on GPU)
+);
+
+-- Per-segment final speaker identity. segments.speaker_id already carries the legacy
+-- manifest-derived value for all 455,299 P0 rows (a plain column, not this table — this
+-- `speakers` table itself was never populated by the P0 import, so no provenance-collision
+-- fix is needed here unlike filters/g2p). speaker.cluster is the sole writer, always writing
+-- the full row (id, speaker_id, cluster_id, embedding_ref, gender, provenance) once per run.
 CREATE TABLE IF NOT EXISTS speakers (
     id            TEXT PRIMARY KEY,
     speaker_id    TEXT,
     embedding_ref TEXT
 );
+ALTER TABLE speakers ADD COLUMN IF NOT EXISTS cluster_id INTEGER;
+ALTER TABLE speakers ADD COLUMN IF NOT EXISTS gender TEXT;
+ALTER TABLE speakers ADD COLUMN IF NOT EXISTS provenance TEXT;
 
 -- Future: human-verified transcripts with verifier identity and timestamp.
 CREATE TABLE IF NOT EXISTS verified (
