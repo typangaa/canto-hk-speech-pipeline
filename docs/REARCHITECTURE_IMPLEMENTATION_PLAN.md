@@ -702,6 +702,56 @@ sample-and-assign fallback),用 co-clustering Adjusted Rand Index(唔係 speaker
 - **Gate**:由 catalog export 嘅 manifest.jsonl 同現行版本 diff == 僅預期差異
   (stale path 修復);canto-tts 側 smoke-load train.jsonl
 
+**執行結果(2026-07-03)**:`tiers.provenance` 欄(同 filters/g2p 一樣嘅 legacy-row-collision
+修法)+ `pipeline/nodes/tier.py`(`tier.assign`)+ `pipeline/nodes/manifest.py`
+(`manifest.build`/`manifest.export`)+ `pipeline/nodes/label_calibrate.py`/`label_store.py`
+(`label.calibrate`/`label.store`)全部起好、對住真 catalog gate 測試過。分工:三組 node 嘅初稿
+交 `weir chat agy-sonnet`(精確 spec 先寫、agy 出碼、我 review+wire CLI+test+commit),
+manifest.py 因為涉及 legacy-row-collision 正確性(hard-constraint 敏感)自己直接寫。
+
+- **asr_results carryover(P3 S2 遺留、標為「非常可能有同一個 bug」)先查清**:對住真 catalog 直接
+  驗證,證實**冇呢個 bug**——`asr_results` 用 `(id, model)` 做 composite PK,discovery 用
+  `a.model = model_field(key)` 精確字串比對(唔係淨睇 row 存唔存在),新 segment 嘅 id 本身就唔喺
+  表入面,天然唔會撞到 filters/g2p 嗰種「成表俾 legacy 佔晒」嘅陷阱——刻意設計成咁,因為 GPU
+  Whisper 全 corpus 重跑成本極高,唔應該好似 filters/g2p 咁畀所有 legacy row 都排隊等重新驗證。
+  冇改任何 code。
+- **tier.assign**:port `09_manifest.py` 內嵌嘅 gold/silver 邏輯做獨立 node,`excluded`(agreement
+  <0.65 且未人手驗證)呢個 sentinel 係新加嘅(舊 script 淨係 `return None` 唔寫嘢,呢度改成一定
+  寫一行,同 g2p_node 嘅「always write a row」原則一致,唔使 discovery 每次都重新掃到)。真實
+  20,000 行 backfill 中途停低(邏輯太簡單,唔係 gate-critical,manifest.build 讀 `tier IN
+  ('gold','silver')` 唔理 provenance)——驗證 0 重複、分布合理、`tiers` 行數仍然啱好
+  455,299。全量 legacy backlog 重新標記留返 owner 決定要唔要跑,唔影響 manifest 正確性。
+- **manifest.build/export**:單一 catalog join 取代 `09_manifest.py` 嘅 file-glob+sidecar 讀法。
+  關鍵設計:「新 node 旗標 OR legacy 冇 provenance 嘅舊 row」呢個 OR 條件用嚟喺**讀端**處理
+  filters.pass/g2p.valid_fraction 嘅 legacy-row-collision(filter.py/g2p.py 之前淨係喺**寫端**
+  fix 咗,讀端要自己諗清楚);刻意**冇** join `speakers` 表(淨係 `rthk` 一個 source 做過真正
+  clustering,join 咗會靜雞雞淨改一個 source 嘅 speaker_id,同現行 manifest 唔一致);train/val
+  split 讀番現有 train.jsonl/val.jsonl 嘅 id 做「保留現有 membership」,淨係將**真係新**嘅 id
+  行返 legacy 嘅 stratified-split 邏輯——唔係次次 export 都由頭切一次(嗰個「揀邊個 speaker 做
+  val」次序本身就係 filesystem glob 順序嘅意外產物,唔係有意義嘅 key,由頭切會靜雞雞 leak 返
+  之前揀開做 val 嘅 speaker 入 train)。
+- **label.calibrate/label.store**:對應 `docs/LABEL_FRAMEWORK_SPEC.md` §§7-9,統一現有
+  lang/overlap/music/prosody 做 `metadata/labels.jsonl`,rate 用 corpus P25/P75、pitch 用
+  per-speaker z-score(<5 樣本 fallback corpus 統計,σ=0 clamp 落 1.0Hz epsilon)做 bucket。
+  Emotion/energy 刻意剔除(emotion 未過 owner 粵語 spot-check;energy 淨係 schema 位,detector
+  未跑過)。
+- **真實全量 gate test**(先備份 3 個現有檔案先再覆寫):`manifest.build()` 完全重現現有已知
+  基線(455,299 entries / 1004.5h / 9,169 speakers / gold=16,585 / silver=438,714 —— 同持久化
+  memory 完全一致)。真正重新 export 之後同備份逐行 diff:**455,299 行入面淨係 2 行有差**
+  (一個 `jyutping`、一個 `snr_db`),兩個都解釋到——係 P3 S2 自己嗰次細規模 gate test 已經真係
+  行過 20 個真實 segment 過新嘅 filter.decide/g2p_node,啱啱好改咗嗰兩個 catalog row(係真係
+  live 嘅更新,唔係壞咗)。val.jsonl 100% 一模一樣(唔理順序)。呢個結果好過原本 plan 預期嘅
+  gate criterion(「淨係預期嘅 stale-path 差異」——因為 stale path 早喺 P0 已經修好咗)。
+- 23 條新 unit test + 2 條新 catalog gate test(tiers 行數/重複/合法值 invariant、manifest.build
+  總數同已知基線一致),全套 116/116 過。
+- §7.3 filtered 去物理化(刪 569G)**刻意未執行**——plan 本身要求 canto-tts 側 smoke-load
+  train.jsonl 先,呢個係跨 repo 動作,唔喺呢個 session 範圍入面,留返 owner 明確授權先做。
+
+**未做/留返 owner 決定**:(1) tier.assign 全量 legacy backlog 重新標記(non-blocking,manifest
+正確性唔受影響);(2) canto-tts 側 train.jsonl smoke-load(跨 repo);(3) §7.3 569G 刪除嘅明確
+授權。呢三樣搞掂之前,P4 都算 code-complete + gate-verified,但未算完全 close。下一個 milestone
+係 P5(storage 執行:raw→opus 轉碼 + 三碟 sharding)。
+
 ### P5 — Storage 執行(2 sessions + 轉碼 wall-clock 數日)
 - 存量 raw → opus(分批 + 驗證 gate + 簽收刪 WAV)
 - step 9 rebalance:segments 三碟 sharding + storage_layout.yaml 定案

@@ -264,6 +264,64 @@ def cmd_run_pregate_snr(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_run_tier_assign(args: argparse.Namespace) -> int:
+    import asyncio
+    import logging
+
+    from pipeline.nodes.tier import run_tier_assign
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    result = asyncio.run(run_tier_assign(batch_size=args.batch, limit=args.limit))
+    print(f"\nDone: {result}")
+    return 0
+
+
+def cmd_run_manifest_build(args: argparse.Namespace) -> int:
+    import logging
+
+    from pipeline.nodes.manifest import run_manifest_build
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    result = run_manifest_build(limit=args.limit)
+    summary = {k: v for k, v in result.items() if k != "entries"}
+    print(f"\nDone: {summary}")
+    return 0
+
+
+def cmd_run_manifest_export(args: argparse.Namespace) -> int:
+    import logging
+
+    from pipeline.nodes.manifest import run_manifest_export
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    result = run_manifest_export(limit=args.limit, dry_run=args.dry_run)
+    summary = {k: v for k, v in result.items() if k != "entries"}
+    print(f"\nDone: {summary}")
+    return 0
+
+
+def cmd_run_label_calibrate(args: argparse.Namespace) -> int:
+    import logging
+
+    from pipeline.nodes.label_calibrate import run_label_calibrate
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    result = run_label_calibrate()
+    print(f"\nDone: {result}")
+    return 0
+
+
+def cmd_run_label_store(args: argparse.Namespace) -> int:
+    import logging
+
+    from pipeline.nodes.label_store import run_label_store
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    result = run_label_store()
+    print(f"\nDone: {result}")
+    return 0
+
+
 def cmd_run_speaker_cluster(args: argparse.Namespace) -> int:
     import asyncio
     import logging
@@ -405,6 +463,21 @@ def main() -> int:
     p_run_spk_cluster.add_argument("--limit", type=int, default=None,
                                     help="cap segments loaded per source (testing)")
     p_run_spk_cluster.set_defaults(func=cmd_run_speaker_cluster)
+    p_run_tier = run_sub.add_parser("tier.assign", help="P4: verification-confidence tier (gold/silver/excluded), CPU in-supervisor")
+    p_run_tier.add_argument("--batch", type=int, default=5000)
+    p_run_tier.add_argument("--limit", type=int, default=None)
+    p_run_tier.set_defaults(func=cmd_run_tier_assign)
+    p_run_mbuild = run_sub.add_parser("manifest.build", help="P4: build manifest entries from the catalog (in-memory, no file write)")
+    p_run_mbuild.add_argument("--limit", type=int, default=None)
+    p_run_mbuild.set_defaults(func=cmd_run_manifest_build)
+    p_run_mexport = run_sub.add_parser("manifest.export", help="P4: build + write metadata/manifest.jsonl + train.jsonl + val.jsonl")
+    p_run_mexport.add_argument("--limit", type=int, default=None)
+    p_run_mexport.add_argument("--dry-run", action="store_true")
+    p_run_mexport.set_defaults(func=cmd_run_manifest_export)
+    p_run_lcalib = run_sub.add_parser("label.calibrate", help="P4: compute rate/pitch calibration constants -> metadata/labels/calibration.json")
+    p_run_lcalib.set_defaults(func=cmd_run_label_calibrate)
+    p_run_lstore = run_sub.add_parser("label.store", help="P4: join+bucket label tables -> metadata/labels.jsonl (requires label.calibrate first)")
+    p_run_lstore.set_defaults(func=cmd_run_label_store)
 
     args = parser.parse_args()
     return args.func(args)

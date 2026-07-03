@@ -11,3 +11,19 @@ golden:
   sample_size: 500
 
 logs_dir: metadata/logs
+
+# P4: manifest export artifact paths (pipeline/nodes/manifest.py). External interface
+# unchanged from the legacy scripts/09_manifest.py — canto-tts and the zero-risk policy
+# (CLAUDE.md hard constraint #9) are unaffected; only the build side moved to the catalog.
+manifest:
+  path: metadata/manifest.jsonl
+  train: metadata/train.jsonl
+  val: metadata/val.jsonl
+  val_frac: 0.05
+
+# P4: label store export (pipeline/nodes/label_calibrate.py, label_store.py), per
+# docs/LABEL_FRAMEWORK_SPEC.md §5/§9. calibration.json is versioned (date + git_rev +
+# n_samples written inside the file itself, not the filename).
+labels:
+  store: metadata/labels.jsonl
+  calibration: metadata/labels/calibration.json

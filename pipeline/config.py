@@ -17,3 +17,11 @@ GOLDEN_MANIFEST = REPO_ROOT / _CFG["golden"]["manifest"]
 GOLDEN_LEGACY_SNAPSHOT = REPO_ROOT / _CFG["golden"]["legacy_snapshot"]
 GOLDEN_SAMPLE_SIZE = int(_CFG["golden"]["sample_size"])
 LOGS_DIR = REPO_ROOT / _CFG["logs_dir"]
+
+MANIFEST_PATH = REPO_ROOT / _CFG["manifest"]["path"]
+TRAIN_PATH = REPO_ROOT / _CFG["manifest"]["train"]
+VAL_PATH = REPO_ROOT / _CFG["manifest"]["val"]
+VAL_FRAC = float(_CFG["manifest"]["val_frac"])
+
+LABELS_STORE_PATH = REPO_ROOT / _CFG["labels"]["store"]
+LABELS_CALIBRATION_PATH = REPO_ROOT / _CFG["labels"]["calibration"]

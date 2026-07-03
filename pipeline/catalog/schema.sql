@@ -148,10 +148,19 @@ ALTER TABLE g2p ADD COLUMN IF NOT EXISTS valid_fraction DOUBLE;
 ALTER TABLE g2p ADD COLUMN IF NOT EXISTS provenance TEXT;
 
 -- From manifest.jsonl tier field; one row per segment recording quality tier ('gold'/'silver').
+-- P4 (pipeline/nodes/tier.py): same legacy-row-collision fix as filters.provenance/g2p.provenance —
+-- all 455,299 P0 legacy-imported rows have provenance IS NULL (manifest.jsonl only ever contained
+-- gold/silver segments, never a "pending" one, so a bare row-existence anti-join finds zero
+-- undone work forever). tier.assign tags its own writes provenance = 'tier_assign' and anti-joins
+-- on that exact value. NOTE: this 'gold'/'silver' verification-confidence tier is a DIFFERENT axis
+-- from LABEL_FRAMEWORK_SPEC.md §10's proposed 'A'/'B' (pretrain/clean) TTS-quality tier — that is a
+-- separate, not-yet-built consumer of the full label store (needs calibrate+build finished first,
+-- plus emotion which is gated on an owner spot-check). Do not conflate the two when extending this.
 CREATE TABLE IF NOT EXISTS tiers (
     id   TEXT PRIMARY KEY,
     tier TEXT
 );
+ALTER TABLE tiers ADD COLUMN IF NOT EXISTS provenance TEXT;
 
 -- From metadata/lang_id.jsonl; per-segment language identification probabilities.
 CREATE TABLE IF NOT EXISTS labels_lang (

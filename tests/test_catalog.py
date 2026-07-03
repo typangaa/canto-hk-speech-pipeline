@@ -193,3 +193,38 @@ def test_asr_results_two_models_per_segment(catalog_conn):
             f"{len(offenders)} segment id(s) in asr_results do not have exactly 2 rows. "
             f"First up to 5 offenders:\n{preview_str}"
         )
+
+
+def test_tiers_provenance_row_count_unchanged(catalog_conn):
+    """P4 tier.assign re-tags legacy rows' provenance (NULL -> 'tier_assign') but must
+    never add/remove/duplicate a row -- tiers stays exactly EXPECTED['tiers'] regardless
+    of how many rows have been re-tagged so far (a mix of both provenances is normal
+    and expected -- see docs/REARCHITECTURE_IMPLEMENTATION_PLAN.md P4 session write-up)."""
+    total = catalog_conn.execute("SELECT COUNT(*) FROM tiers").fetchone()[0]
+    assert total == EXPECTED["tiers"], (
+        f"tiers has {total} rows, expected exactly {EXPECTED['tiers']} regardless of provenance mix"
+    )
+    dupes = catalog_conn.execute(
+        "SELECT id, COUNT(*) FROM tiers GROUP BY id HAVING COUNT(*) != 1"
+    ).fetchall()
+    assert not dupes, f"duplicate ids in tiers: {dupes[:5]}"
+    bad_tiers = catalog_conn.execute(
+        "SELECT DISTINCT tier FROM tiers WHERE tier NOT IN ('gold', 'silver', 'excluded')"
+    ).fetchall()
+    assert not bad_tiers, f"unexpected tier value(s): {bad_tiers}"
+
+
+def test_manifest_build_matches_expected_corpus_totals(catalog_conn):
+    """P4 gate: manifest.build()'s catalog join must reproduce the exact totals the
+    current on-disk metadata/manifest.jsonl was built with (455,299 entries / 9,169
+    speakers / gold=16,585 / silver=438,714 -- see persisted memory
+    canto-corpus-pipeline.md). A mismatch here means the eligibility join (filters.pass
+    OR legacy-no-provenance, g2p.valid_fraction OR legacy-no-provenance, tier IN
+    (gold,silver)) regressed."""
+    from pipeline.nodes.manifest import run_manifest_build
+
+    result = run_manifest_build()
+    assert result["count"] == 455299
+    assert result["n_speakers"] == 9169
+    assert result["tier_counts"].get("gold") == 16585
+    assert result["tier_counts"].get("silver") == 438714
