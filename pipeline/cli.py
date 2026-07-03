@@ -121,6 +121,59 @@ def cmd_run_asr_agreement(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_run_filter_text(args: argparse.Namespace) -> int:
+    import asyncio
+    import logging
+
+    from pipeline.nodes.filter import run_filter_text
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    result = asyncio.run(run_filter_text(batch_size=args.batch, limit=args.limit))
+    print(f"\nDone: {result}")
+    return 0
+
+
+def cmd_run_filter_acoustic(args: argparse.Namespace) -> int:
+    import asyncio
+    import logging
+
+    from pipeline.nodes.filter import run_filter_acoustic
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    result = asyncio.run(run_filter_acoustic(
+        n_workers=args.workers,
+        threads_per_worker=args.threads,
+        batch_size=args.batch,
+        limit=args.limit,
+    ))
+    print(f"\nDone: {result}")
+    return 0
+
+
+def cmd_run_filter_decide(args: argparse.Namespace) -> int:
+    import asyncio
+    import logging
+
+    from pipeline.nodes.filter import run_filter_decide
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    result = asyncio.run(run_filter_decide(batch_size=args.batch, limit=args.limit))
+    print(f"\nDone: {result}")
+    return 0
+
+
+def cmd_run_g2p(args: argparse.Namespace) -> int:
+    import asyncio
+    import logging
+
+    from pipeline.nodes.g2p import run_g2p
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    result = asyncio.run(run_g2p(batch_size=args.batch, limit=args.limit))
+    print(f"\nDone: {result}")
+    return 0
+
+
 def cmd_run_label_music(args: argparse.Namespace) -> int:
     import asyncio
     import logging
@@ -200,6 +253,24 @@ def main() -> int:
     p_run_agree.add_argument("--batch", type=int, default=2000)
     p_run_agree.add_argument("--limit", type=int, default=None)
     p_run_agree.set_defaults(func=cmd_run_asr_agreement)
+    p_run_ftext = run_sub.add_parser("filter.text", help="P3: sample_rate/duration hard gates + CJK-length/eng/mandarin text gates (CPU, no audio)")
+    p_run_ftext.add_argument("--batch", type=int, default=5000)
+    p_run_ftext.add_argument("--limit", type=int, default=None)
+    p_run_ftext.set_defaults(func=cmd_run_filter_text)
+    p_run_facoustic = run_sub.add_parser("filter.acoustic", help="P3: SNR + DNSMOS (CPU worker pool, requires filter.text pass)")
+    p_run_facoustic.add_argument("--workers", type=int, default=4, help="number of CPU worker processes")
+    p_run_facoustic.add_argument("--threads", type=int, default=4, help="onnxruntime intra_op_num_threads per worker")
+    p_run_facoustic.add_argument("--batch", type=int, default=8)
+    p_run_facoustic.add_argument("--limit", type=int, default=None)
+    p_run_facoustic.set_defaults(func=cmd_run_filter_acoustic)
+    p_run_fdecide = run_sub.add_parser("filter.decide", help="P3: merge filters_text + filters_acoustic into filters.pass")
+    p_run_fdecide.add_argument("--batch", type=int, default=5000)
+    p_run_fdecide.add_argument("--limit", type=int, default=None)
+    p_run_fdecide.set_defaults(func=cmd_run_filter_decide)
+    p_run_g2p = run_sub.add_parser("g2p", help="P3: canto-hk-g2p Cantonese text -> Jyutping (CPU, in-supervisor)")
+    p_run_g2p.add_argument("--batch", type=int, default=2000)
+    p_run_g2p.add_argument("--limit", type=int, default=None)
+    p_run_g2p.set_defaults(func=cmd_run_g2p)
     p_run_music = run_sub.add_parser("label.music", help="P1 pilot: PANNs music-family tagging")
     p_run_music.add_argument("--devices", default="cuda:0,cuda:1",
                               help="comma-separated device list, one worker per device")

@@ -68,18 +68,79 @@ CREATE TABLE IF NOT EXISTS asr_agreement (
 );
 
 -- From manifest.jsonl quality fields; one row per segment with acoustic quality filter scores.
+-- P3 session 2 (filter.decide node) added mandarin_ratio/dnsmos_ovrl/detected_language/
+-- language_confidence/pass/fail_reason — NULL for the 455,299 legacy-imported rows (which
+-- predate this node and only ever contained passing segments by construction); populated
+-- going forward by filter.decide, which always writes the full row (sole writer of the
+-- final merged table, so no partial-column upsert ever clobbers these).
 CREATE TABLE IF NOT EXISTS filters (
-    id            TEXT    PRIMARY KEY,
-    snr_db        DOUBLE,
-    dnsmos        DOUBLE,
-    english_ratio DOUBLE
+    id                   TEXT    PRIMARY KEY,
+    snr_db               DOUBLE,
+    dnsmos               DOUBLE,
+    english_ratio        DOUBLE
+);
+ALTER TABLE filters ADD COLUMN IF NOT EXISTS mandarin_ratio DOUBLE;
+ALTER TABLE filters ADD COLUMN IF NOT EXISTS dnsmos_ovrl DOUBLE;
+ALTER TABLE filters ADD COLUMN IF NOT EXISTS detected_language TEXT;
+ALTER TABLE filters ADD COLUMN IF NOT EXISTS language_confidence DOUBLE;
+ALTER TABLE filters ADD COLUMN IF NOT EXISTS pass BOOLEAN;
+ALTER TABLE filters ADD COLUMN IF NOT EXISTS fail_reason TEXT;
+-- provenance distinguishes the 455,299 P0 legacy-imported rows (provenance IS NULL —
+-- see catalog/ingest.py's import_segments_and_manifest_tables, which never sets it)
+-- from rows filter.decide itself writes (provenance = 'filter_decide'). Necessary
+-- because EVERY segment already has a legacy filters row (manifest.jsonl only ever
+-- contained already-passing segments) — an anti-join on bare row-existence would
+-- find zero "undone" work forever. filter.decide's discovery instead anti-joins on
+-- provenance = 'filter_decide' specifically, so legacy rows are correctly treated as
+-- not-yet-decided-by-this-node (relevant once a legacy segment also gains
+-- filters_text/filters_acoustic rows) without needing a backfill migration.
+ALTER TABLE filters ADD COLUMN IF NOT EXISTS provenance TEXT;
+
+-- P3 session 2 (pipeline/nodes/filter.py): filter.text's own raw output — gates that need
+-- only catalog columns + ASR text, no audio decode (sample_rate/duration/text-length/
+-- english_ratio/mandarin_ratio). Kept separate from filters_acoustic (rather than both
+-- upserting partial columns into one table) because upsert_rows() does INSERT OR REPLACE,
+-- which resets any column not in the write's column list — two nodes partial-writing the
+-- same table would clobber each other's columns on every run. filter.decide is the only
+-- node that reads both and writes the merged `filters` row.
+CREATE TABLE IF NOT EXISTS filters_text (
+    id                   TEXT    PRIMARY KEY,
+    english_ratio        DOUBLE,
+    mandarin_ratio       DOUBLE,
+    detected_language    TEXT,
+    language_confidence  DOUBLE,
+    pass                 BOOLEAN,
+    fail_reason          TEXT
+);
+
+-- P3 session 2 (pipeline/nodes/filter.py): filter.acoustic's own raw output — SNR + DNSMOS,
+-- both requiring an actual audio decode. Discovery only picks up ids where filters_text.pass
+-- = TRUE (skips the expensive DNSMOS pass entirely for segments already rejected on text
+-- grounds — the same short-circuit scripts/06_filter.py's --use-pregate flag approximated,
+-- but item-level rather than a separate shard-parallel hack).
+CREATE TABLE IF NOT EXISTS filters_acoustic (
+    id           TEXT    PRIMARY KEY,
+    snr_db       DOUBLE,
+    dnsmos_sig   DOUBLE,
+    dnsmos_ovrl  DOUBLE,
+    pass         BOOLEAN,
+    fail_reason  TEXT
 );
 
 -- From manifest.jsonl jyutping field; one row per segment with Cantonese romanisation.
+-- valid_fraction added P3 session 2 (pipeline/nodes/g2p.py) — NULL for legacy rows (which,
+-- like `filters`, only ever contained already-accepted output, i.e. valid_fraction >= 0.80
+-- by construction, just never recorded numerically).
 CREATE TABLE IF NOT EXISTS g2p (
     id       TEXT PRIMARY KEY,
     jyutping TEXT
 );
+ALTER TABLE g2p ADD COLUMN IF NOT EXISTS valid_fraction DOUBLE;
+-- Same legacy-row-collision fix as filters.provenance above: all 455,299 P0
+-- legacy-imported g2p rows have provenance IS NULL; g2p node writes tag
+-- provenance = 'g2p_node' so its own discovery anti-join can tell "never
+-- processed by this node" apart from "row exists" (which is otherwise always true).
+ALTER TABLE g2p ADD COLUMN IF NOT EXISTS provenance TEXT;
 
 -- From manifest.jsonl tier field; one row per segment recording quality tier ('gold'/'silver').
 CREATE TABLE IF NOT EXISTS tiers (

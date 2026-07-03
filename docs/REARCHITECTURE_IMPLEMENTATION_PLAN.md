@@ -610,6 +610,44 @@ re-filter 唔使再 copy 一次 corpus;10× 下 5.7T 複製本來就不可行。
 - 兩 ASR model 分卡並行(舊版串行兩 pass → wall-clock 接近減半,training 唔行時)
 - **Gate**:golden set parity 全過;舊 scripts 搬 `legacy/`;新 segment 產出直接寫 shard 路徑
 
+**Session 2 執行結果(2026-07-03)**:`filter.text`/`filter.acoustic`/`filter.decide`
+(`pipeline/nodes/filter.py`)+ `g2p`(`pipeline/nodes/g2p.py`)port 完成,細規模 gate test
+喺真實 catalog 上跑通(filter.text→acoustic→decide→g2p 全鏈,20 段,100% pass、
+100% Jyutping valid)。
+
+- 拆 3 個 node(唔係跟 06_filter.py 一個 script):`filter.text`(CPU,in-supervisor,
+  sample_rate/duration 硬閘 + CJK 長度/English/Mandarin ratio,唔使讀 audio)、
+  `filter.acoustic`(CPU worker-subprocess pool,SNR+DNSMOS,discovery 靠
+  `filters_text.pass=TRUE` 先至跑,唔使全部都做 DNSMOS)、`filter.decide`(CPU,
+  in-supervisor,合併寫入 `filters`)。三張分表(`filters_text`/`filters_acoustic`)
+  唔直接 partial-write `filters`,因為 `upsert_rows()` 係 INSERT OR REPLACE——
+  兩個 node 各寫一部分 column 會互相冚走對方個 column。
+- DNSMOS ORT thread cap 唔再靠 monkeypatch `onnxruntime.InferenceSession`(06_filter.py
+  嘅做法),改為 worker 自己整一個帶 capped `SessionOptions` 嘅 `speechmos.dnsmos.DNSMOS`
+  instance(`_build_capped_dnsmos()`),沿用佢原本嘅 `audio_melspec`/`get_polyfit_val`/
+  `__call__`,淨係換咗 session 建構方式。
+- **發現一個一般性 bug,兩個 node 都中招**:`filters`/`g2p` 兩張表已經俾 P0 legacy
+  import 塞晒 455,299/455,299 行(manifest.jsonl 本身淨係得已經 pass 嘅 segment),
+  導致 bare row-existence anti-join(`WHERE f.id IS NULL`)永遠搵唔到「未做」嘅嘢——
+  同 golden set 都冇關,細規模 gate test 一行都跑唔到先發現。修法:加
+  `provenance` 欄(legacy import 行 `provenance IS NULL`,新 node 寫嘅行標
+  `'filter_decide'`/`'g2p_node'`),discovery 嘅 anti-join 揀呢個欄嚟判斷,唔淨係睇
+  row 存唔存在(同 `labels_music.provenance` 嘅做法同一設計)。**⚠️ `asr_results`
+  表都係 legacy import 咗全部 910,598 行(2 model × 455,299)—— `asr.transcribe`
+  極可能中埋呢個同款 bug,但 P3 session 1 從來冇用 `pipe run asr.transcribe --limit N`
+  對住真 catalog 跑過(嗰陣淨係用獨立嘅 `check_asr_parity.py` 繞過 catalog 直接讀
+  golden snapshot)——呢個未驗證,下次碰 `asr.py` 或者要跑呢類 gate test 之前應該
+  先查一查。**
+- G2P 呢層額外執行咗一次庫版本核實:legacy `07_g2p.py` 用私有 API
+  `_canto_hk_g2p.PyPipeline.from_dir()` 手砌一個淨喺 editable/source 安裝先啱嘅
+  data 路徑;而家 PyPI 版(`canto-hk-g2p` 1.5.0,呢個 repo 一直未鎖版)已經有公開
+  `canto_hk_g2p.Pipeline` wrapper 自己搵返 bundled data/,改用呢個。同 40 個隨機
+  golden 樣本對拍舊 `jyutping` snapshot:38/40 完全一致,mean ratio=0.982——兩個
+  分歧樣本分別係(a)舊庫英文逐字母出 `[X]` bracket placeholder,新庫正確剔走英文
+  token(符合而家文檔行為);(b)一兩個字嘅 tone 因字典版本升級而變。判斷同 ASR
+  嗰次一樣屬於「依賴版本漂移,唔關呢個 node 事」,冇再另外起 golden check script
+  (核心正確性閘係逐 token regex `^[a-z]+[1-6]$`,唔係同 legacy byte-match)。
+
 ### P4 — Metadata cutover(1-2 sessions)
 - `manifest.build/export`、`label.calibrate/store`、`tier.assign` 上線;
   per-segment sidecar 對新數據停寫(舊有保留唔郁)
