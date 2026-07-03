@@ -17,8 +17,13 @@ from pipeline.config import CATALOG_PATH
 
 # P0 legacy-import baseline, frozen — these tables are never written to again
 # after the one-time P0 import (their source jsonl files are static).
+#
+# `segments` is NOT in this dict (moved out 2026-07-03): P3 session 4's
+# segment.vad_cut node writes genuinely new segments for newly-ingested raw
+# files (raw_id IS NOT NULL) — see test_segments_monotonic_growth below for
+# its floor-based invariant instead, the same pattern already used for
+# labels_music/labels_lang/labels_overlap.
 EXPECTED = {
-    "segments": 455299,
     "raw_files": 6272,
     "asr_results": 910598,
     "asr_agreement": 455299,
@@ -26,6 +31,11 @@ EXPECTED = {
     "g2p": 455299,
     "tiers": 455299,
 }
+
+# P0 import baseline for segments, before P3 S4's segment.vad_cut node started
+# appending newly pipeline-cut segments (raw_id IS NOT NULL) — a floor, not an
+# exact count.
+SEGMENTS_P0_BASELINE = 455299
 
 # P0 import baseline for labels_music, before P1's orchestrator started
 # appending new rows — a floor, not an exact count.
@@ -55,6 +65,18 @@ def test_row_counts(catalog_conn):
                 f"  table={table!r}: expected {expected}, got {actual}"
             )
     assert not failures, "Row count mismatches:\n" + "\n".join(failures)
+
+
+def test_segments_monotonic_growth(catalog_conn):
+    total = catalog_conn.execute("SELECT COUNT(*) FROM segments").fetchone()[0]
+    assert total >= SEGMENTS_P0_BASELINE, (
+        f"segments has {total} rows, below the P0 import baseline of "
+        f"{SEGMENTS_P0_BASELINE} — rows should only ever be added, never lost"
+    )
+    dupes = catalog_conn.execute(
+        "SELECT id, COUNT(*) FROM segments GROUP BY id HAVING COUNT(*) != 1"
+    ).fetchall()
+    assert not dupes, f"duplicate ids in segments: {dupes[:5]}"
 
 
 def test_segments_primary_key_unique(catalog_conn):

@@ -87,9 +87,18 @@ Design decisions and rationale
     and the GIL is released during inference, so a plain thread pool is
     both correct and sufficient.
 
-    The Silero VAD model is loaded once, lazily, into a module-level singleton
-    (same pattern as scripts/03_segment.py's ``get_vad_model()``) and shared
-    across threads.  Silero VAD is documented as thread-safe for inference.
+    CORRECTION (found via a real production run, 2026-07-03): a shared
+    module-level singleton model, called concurrently from multiple worker
+    threads, segfaulted — Silero VAD's TorchScript module carries internal
+    mutable state that is NOT safe for concurrent inference calls, contrary
+    to what an earlier draft of this docstring claimed. The GIL is released
+    during the C++/TorchScript inference call itself, which is exactly what
+    allows two threads to be inside ``get_speech_timestamps()`` on the same
+    model object at once and corrupt its internal state. Fix: each worker
+    thread gets its OWN lazily-loaded model+utils via ``threading.local()``
+    (see ``_get_vad_model()``) — no two threads ever touch the same model
+    instance. The model is tiny (a few MB), so one instance per thread is
+    cheap; this is not the same tradeoff as GPU model loading.
 
 (d) pregate.snr's SNR formula deliberately does NOT match filter.py's compute_snr
     filter.py's ``compute_snr()`` (ported verbatim from scripts/06_filter.py)
@@ -196,24 +205,44 @@ def _segment_id(seg_path: Path) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Silero VAD singleton — loaded once, lazily, shared across threads.
-# (Same pattern as scripts/03_segment.py's get_vad_model().)
+# Silero VAD model — one instance PER THREAD (thread-local), not a shared
+# singleton.
+#
+# scripts/03_segment.py used a true global singleton, but that script never
+# actually exercised concurrent VAD calls (--workers defaults to 1, one file
+# processed at a time). segment.vad_cut runs a ThreadPoolExecutor with
+# multiple worker threads, and a real production run (2026-07-03) segfaulted
+# with 3 threads simultaneously inside the same loaded TorchScript module's
+# get_speech_timestamps() (confirmed via faulthandler traceback — all 3
+# crashing threads shared one frame calling the same model instance). Silero
+# VAD's TorchScript module carries internal mutable state that is NOT safe
+# for concurrent calls from multiple threads, despite the model being
+# advertised as CPU-friendly/fast — that claim is about single-threaded
+# throughput, not thread-safety. Fix: each worker thread lazily loads and
+# keeps its own model+utils in threading.local() storage, so no two threads
+# ever call into the same model object. The one-time main-thread pre-load in
+# run_segment_vad_cut() still runs first to warm the local torch.hub repo
+# cache before any threads start, avoiding a first-load race on the cache dir
+# itself; each thread's own first _get_vad_model() call is then a cheap local
+# re-load from that already-warm cache, not a fresh download/verify.
 # ---------------------------------------------------------------------------
 
-_vad_model = None
-_vad_utils = None
+import threading as _threading
+
+_vad_tls = _threading.local()
 
 
 def _get_vad_model():
-    global _vad_model, _vad_utils
-    if _vad_model is None:
-        log.info("Loading Silero VAD ...")
-        _vad_model, _vad_utils = torch.hub.load(
+    if not hasattr(_vad_tls, "model"):
+        log.info(f"Loading Silero VAD (thread {_threading.get_ident()}) ...")
+        model, utils = torch.hub.load(
             "snakers4/silero-vad", "silero_vad", trust_repo=True
         )
         # Keep VAD on CPU — Silero VAD is fast enough on CPU and avoids
         # device mismatch issues when passing numpy-derived tensors.
-    return _vad_model, _vad_utils
+        _vad_tls.model = model
+        _vad_tls.utils = utils
+    return _vad_tls.model, _vad_tls.utils
 
 
 # ---------------------------------------------------------------------------
