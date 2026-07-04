@@ -23,8 +23,14 @@ from pipeline.config import CATALOG_PATH
 # files (raw_id IS NOT NULL) — see test_segments_monotonic_growth below for
 # its floor-based invariant instead, the same pattern already used for
 # labels_music/labels_lang/labels_overlap.
+#
+# `raw_files` is NOT in this dict either (moved out 2026-07-04): discovered
+# metadata/downloaded.jsonl was missing ~4,648 raw files that already existed
+# on disk (mostly youtube — a pre-existing logging gap, cause not identified,
+# unrelated to any code in this repo). Backfilled via
+# scripts/backfill_downloaded_jsonl.py (6,272 -> 10,910 unique ids) — see
+# test_raw_files_monotonic_growth below for its floor-based invariant instead.
 EXPECTED = {
-    "raw_files": 6272,
     "asr_results": 910598,
     "asr_agreement": 455299,
     "filters": 455299,
@@ -36,6 +42,12 @@ EXPECTED = {
 # appending newly pipeline-cut segments (raw_id IS NOT NULL) — a floor, not an
 # exact count.
 SEGMENTS_P0_BASELINE = 455299
+
+# Baseline for raw_files as of the 2026-07-04 downloaded.jsonl backfill — a
+# floor, not an exact count. Was 6,272 before the backfill recovered ~4,648
+# previously-unlogged files; future 02_download.py runs / further backfills
+# should only ever grow this, never shrink it.
+RAW_FILES_BASELINE = 10910
 
 # P0 import baseline for labels_music, before P1's orchestrator started
 # appending new rows — a floor, not an exact count.
@@ -77,6 +89,18 @@ def test_segments_monotonic_growth(catalog_conn):
         "SELECT id, COUNT(*) FROM segments GROUP BY id HAVING COUNT(*) != 1"
     ).fetchall()
     assert not dupes, f"duplicate ids in segments: {dupes[:5]}"
+
+
+def test_raw_files_monotonic_growth(catalog_conn):
+    total = catalog_conn.execute("SELECT COUNT(*) FROM raw_files").fetchone()[0]
+    assert total >= RAW_FILES_BASELINE, (
+        f"raw_files has {total} rows, below the 2026-07-04 backfill baseline of "
+        f"{RAW_FILES_BASELINE} — rows should only ever be added, never lost"
+    )
+    dupes = catalog_conn.execute(
+        "SELECT raw_id, COUNT(*) FROM raw_files GROUP BY raw_id HAVING COUNT(*) != 1"
+    ).fetchall()
+    assert not dupes, f"duplicate raw_ids in raw_files: {dupes[:5]}"
 
 
 def test_segments_primary_key_unique(catalog_conn):

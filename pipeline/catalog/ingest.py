@@ -104,6 +104,8 @@ def import_segments_and_manifest_tables(conn: duckdb.DuckDBPyConnection) -> dict
     conn.execute("TRUNCATE segments")
     conn.execute(f"""
         INSERT INTO segments
+            (id, audio_path, source, source_url, program, domain,
+             duration_sec, sample_rate, speaker_id, gender, style, created_at)
         SELECT
             id, audio_path, source, source_url, program, domain,
             duration_sec, sample_rate, speaker_id, gender, style,
@@ -130,7 +132,7 @@ def import_segments_and_manifest_tables(conn: duckdb.DuckDBPyConnection) -> dict
 
     conn.execute("TRUNCATE filters")
     conn.execute(f"""
-        INSERT INTO filters
+        INSERT INTO filters (id, snr_db, dnsmos, english_ratio)
         SELECT id, snr_db, dnsmos, english_ratio
         FROM read_json_auto('{src}')
     """)
@@ -138,7 +140,7 @@ def import_segments_and_manifest_tables(conn: duckdb.DuckDBPyConnection) -> dict
 
     conn.execute("TRUNCATE g2p")
     conn.execute(f"""
-        INSERT INTO g2p
+        INSERT INTO g2p (id, jyutping)
         SELECT id, jyutping
         FROM read_json_auto('{src}')
     """)
@@ -146,7 +148,7 @@ def import_segments_and_manifest_tables(conn: duckdb.DuckDBPyConnection) -> dict
 
     conn.execute("TRUNCATE tiers")
     conn.execute(f"""
-        INSERT INTO tiers
+        INSERT INTO tiers (id, tier)
         SELECT id, tier
         FROM read_json_auto('{src}')
     """)
