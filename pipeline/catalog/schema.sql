@@ -344,10 +344,12 @@ CREATE TABLE IF NOT EXISTS task_runs (
 -- 2026-07-04): coarse Mandarin-vs-Cantonese screen run BEFORE segment.diarize, so a
 -- raw file that turns out to be Mandarin-dominant never pays for diarization or (once
 -- P5 lands) opus transcoding. Keyed by raw_id, NOT segment id — this is a whole-file
--- decision, not a per-clip one. Deliberately conservative: this is a coarse sampled
--- pre-filter, NOT a replacement for the existing fine-grained per-segment lang-id in
--- labels_lang/label.suite, which remains the final gate for intra-episode
--- code-switching. decision is written once by lang_screen.auto and never overwritten
+-- decision, not a per-clip one. Deliberately permissive: this is a coarse sampled
+-- pre-filter that only rejects on a high mandarin_ratio_raw, NOT a replacement for
+-- the existing fine-grained per-segment lang-id in labels_lang/label.suite, which
+-- runs AFTER segmentation and remains the final gate for intra-episode
+-- code-switching / low-level Mandarin content. decision is written once by
+-- lang_screen.auto and never overwritten
 -- by it again (raw_id is anti-joined out of discover() the moment a row exists);
 -- human_decision is written only by the separate lang_screen.review human-in-loop CLI
 -- and, when present, takes precedence over decision — see docs' COALESCE(human_decision,
@@ -357,13 +359,23 @@ CREATE TABLE IF NOT EXISTS task_runs (
 -- never retroactively block already-segmented or not-yet-screened raw files.
 CREATE TABLE IF NOT EXISTS lang_screen (
     raw_id              TEXT      PRIMARY KEY,
-    decision            TEXT,     -- 'pass' | 'reject' | 'mixed'
-    cantonese_ratio_raw DOUBLE,   -- fraction of sampled windows with top-1 lang = 'yue'
-    mandarin_ratio_raw  DOUBLE,   -- fraction of sampled windows with top-1 lang = 'cmn'
+    decision            TEXT,     -- 'pass' | 'mixed' | 'reject' (revised 2026-07-04, twice same day)
+                                   -- pass:   cantonese_ratio_raw >= 0.70 AND mandarin_ratio_raw <= 0.20
+                                   -- reject: mandarin_ratio_raw  >  0.50 OR  cantonese_ratio_raw <  0.40
+                                   -- mixed:  everything else -- effective decision treats 'mixed' the
+                                   --         SAME as 'pass' (only 'reject' blocks segment.diarize), the
+                                   --         'mixed' value itself is the tag a later stage can join on
+    cantonese_ratio_raw DOUBLE,   -- fraction of sampled windows with top-1 lang = 'yue' (gates decision, see above)
+    mandarin_ratio_raw  DOUBLE,   -- fraction of sampled windows with top-1 lang = 'cmn' (gates decision, see above)
     n_windows           INTEGER,
-    window_starts       JSON,     -- [start_sec, ...] — so lang_screen.review can play back the SAME windows
-    needs_review        BOOLEAN,  -- true for all 'reject'/'mixed' + a random audit sample of 'pass'
-    human_decision       TEXT,    -- 'pass' | 'reject' | 'mixed' | NULL (NULL = not yet reviewed)
+    window_starts       JSON,     -- [start_sec, ...] -- kept for provenance even though no review UI reads it anymore
+    needs_review        BOOLEAN,  -- ALWAYS false going forward -- human review of 'reject' was removed
+                                   -- 2026-07-04 (third revision same day): reject is now trusted
+                                   -- automatically. Column kept for the raw_ids reviewed before this
+                                   -- change and in case manual spot-checks are ever wanted again.
+    human_decision       TEXT,    -- 'pass' | 'reject' | 'mixed' | NULL -- set only by the now-removed
+                                   -- review tool; existing values are preserved and still take
+                                   -- precedence over decision (see COALESCE formula above)
     reviewed_by          TEXT,
     reviewed_at           TIMESTAMP,
     screened_at           TIMESTAMP,

@@ -23,28 +23,50 @@ Design (mirrors the illustrated plan discussed with the owner):
   3. Run facebook/mms-lid-126 (same model already used by label.suite) per
      window; aggregate the top-1-language vote across windows into
      cantonese_ratio_raw / mandarin_ratio_raw.
-  4. Decide pass / reject / mixed with conservative thresholds — biased toward
-     false-pass over false-reject, since reject leads to the raw file being
-     quarantined (and, per the two-gate deletion safety model, only ever
-     physically deleted after a SEPARATE human-confirmed batch step; this node
-     never deletes anything itself).
-  5. Flag needs_review=true for 100% of reject/mixed decisions, plus a random
-     (but reproducible — hashed on raw_id) audit sample of AUDIT_SAMPLE_FRAC of
-     pass decisions, for the separate pipeline.nodes.lang_screen_review human
-     review CLI to pick up.
+  4. Decide pass / mixed / reject with two independent bands (added 2026-07-04,
+     revised same day to add the 'mixed' band back in — see below):
+       - pass:   cantonese_ratio_raw >= PASS_CANTONESE_MIN (0.70)
+                 AND mandarin_ratio_raw <= REJECT_MANDARIN_MAX (0.20)
+       - reject: mandarin_ratio_raw > REJECT_MANDARIN_HIGH (0.50)
+                 OR cantonese_ratio_raw < REJECT_CANTONESE_LOW (0.40)
+       - mixed:  everything in between (pass and reject conditions are
+                 mutually exclusive by construction, so this is well-defined)
+     The two goals in tension here: (a) skip the expensive diarization step
+     entirely for raw files that are clearly Mandarin-dominant (reject), so
+     that GPU time isn't spent segmenting/labeling content that's unusable for
+     a Cantonese corpus anyway; (b) don't throw away a whole raw file (e.g. a
+     60-90 minute news broadcast) just because it has some code-switching
+     (quoted officials, mainland reporters, etc.) — those go to 'mixed' and
+     are let through to segmentation, where the existing per-SEGMENT lang-id
+     in label.suite/labels_lang (which runs AFTER segmentation) does the
+     actual fine-grained filtering per clip.
+  5. No human review step (removed 2026-07-04, third revision same day):
+     'reject' is now trusted automatically. Rationale — reject only quarantines
+     a raw file, never deletes it (the two-gate deletion safety model still
+     requires a SEPARATE human-confirmed batch step before anything is
+     physically removed), and the reject band (mandarin_ratio_raw > 0.50 OR
+     cantonese_ratio_raw < 0.40) is a decisive, not borderline, signal. 'mixed'
+     is treated the same as 'pass' for the purpose of segment.diarize's
+     discovery query (effective decision != 'reject') — the 'mixed' value
+     itself doubles as the "extra tag" for any later pipeline stage that wants
+     to treat these raw files with more caution, by joining back to
+     lang_screen.decision. needs_review / human_decision / reviewed_by /
+     reviewed_at columns remain in the schema (for the raw_ids reviewed before
+     this was removed, and in case a manual spot-check is ever wanted again)
+     but nothing in the pipeline writes or reads them going forward.
 
-segment.diarize's discovery query has been updated (pipeline/nodes/segment.py,
-DIARIZE_DISCOVER_SQL) to skip any raw_id whose EFFECTIVE decision
-(COALESCE(human_decision, decision, 'pass')) is 'reject'. A raw_id with no
-lang_screen row at all (not yet screened, or predates this node) is treated as
-'pass' by that COALESCE — this node is purely additive and never retroactively
-blocks already-segmented or not-yet-screened raw files.
+segment.diarize's discovery query (pipeline/nodes/segment.py,
+DIARIZE_DISCOVER_SQL) skips any raw_id whose EFFECTIVE decision
+(COALESCE(human_decision, decision, 'pass')) is 'reject' — 'mixed' and 'pass'
+both pass through unchanged. A raw_id with no lang_screen row at all (not yet
+screened, or predates this node) is treated as 'pass' by that COALESCE — this
+node is purely additive and never retroactively blocks already-segmented or
+not-yet-screened raw files.
 """
 
 import argparse
 import asyncio
 import datetime
-import hashlib
 import json
 import logging
 import sys
@@ -72,13 +94,15 @@ MIN_USABLE_SEC = WINDOW_SEC * 2  # below this usable span, take fewer/1 window
 # though batch_size itself can be large).
 INFER_CHUNK_WINDOWS = 8
 
-# Decision thresholds — conservative on purpose (see module docstring §4)
-PASS_CANTONESE_MIN = 0.60
-REJECT_MANDARIN_MIN = 0.70
-REJECT_CANTONESE_MAX = 0.20
-
-# Bounded human review triggers
-AUDIT_SAMPLE_FRAC = 0.07   # ~7% random audit of automated 'pass' decisions
+# Decision thresholds (see module docstring §4).
+# pass requires BOTH:
+PASS_CANTONESE_MIN = 0.70    # cantonese_ratio_raw must be >= this
+REJECT_MANDARIN_MAX = 0.20   # AND mandarin_ratio_raw must be <= this
+# reject requires EITHER:
+REJECT_MANDARIN_HIGH = 0.50  # mandarin_ratio_raw > this
+REJECT_CANTONESE_LOW = 0.40  # OR cantonese_ratio_raw < this
+# everything else (fails both the pass AND-condition and the reject
+# OR-condition) is 'mixed' — see module docstring §4-5.
 
 
 # ---------------------------------------------------------------------------
@@ -120,9 +144,14 @@ def compute_window_starts(duration_sec: float) -> list[float]:
 # ---------------------------------------------------------------------------
 
 def aggregate_decision(top_labels: list[str]) -> dict | None:
-    """Aggregate per-window top-1 language labels into ratios + a decision.
+    """Aggregate per-window top-1 language labels into ratios + a pass/mixed/reject decision.
 
     Returns None if top_labels is empty (caller writes a read_failed row instead).
+
+    pass:   cantonese_ratio_raw >= PASS_CANTONESE_MIN AND mandarin_ratio_raw <= REJECT_MANDARIN_MAX
+    reject: mandarin_ratio_raw > REJECT_MANDARIN_HIGH OR cantonese_ratio_raw < REJECT_CANTONESE_LOW
+    mixed:  everything else (the pass and reject conditions can never both be
+            true for the same ratios, so this is unambiguous)
     """
     n = len(top_labels)
     if n == 0:
@@ -131,10 +160,10 @@ def aggregate_decision(top_labels: list[str]) -> dict | None:
     cantonese_ratio = round(sum(1 for l in top_labels if l == "yue") / n, 4)
     mandarin_ratio = round(sum(1 for l in top_labels if l == "cmn") / n, 4)
 
-    if mandarin_ratio >= REJECT_MANDARIN_MIN and cantonese_ratio <= REJECT_CANTONESE_MAX:
-        decision = "reject"
-    elif cantonese_ratio >= PASS_CANTONESE_MIN:
+    if cantonese_ratio >= PASS_CANTONESE_MIN and mandarin_ratio <= REJECT_MANDARIN_MAX:
         decision = "pass"
+    elif mandarin_ratio > REJECT_MANDARIN_HIGH or cantonese_ratio < REJECT_CANTONESE_LOW:
+        decision = "reject"
     else:
         decision = "mixed"
 
@@ -144,16 +173,6 @@ def aggregate_decision(top_labels: list[str]) -> dict | None:
         "mandarin_ratio_raw": mandarin_ratio,
         "n_windows": n,
     }
-
-
-def needs_review(raw_id: str, decision: str) -> bool:
-    """100% of non-pass decisions + a reproducible (hash-based, not random.random())
-    AUDIT_SAMPLE_FRAC sample of pass decisions, so re-running lang_screen.auto on
-    the same raw_id always makes the same audit-sample call (idempotent)."""
-    if decision != "pass":
-        return True
-    h = int(hashlib.md5(raw_id.encode()).hexdigest(), 16)
-    return (h % 10000) < int(AUDIT_SAMPLE_FRAC * 10000)
 
 
 def _now_ts() -> str:
@@ -310,7 +329,7 @@ async def run_lang_screen_auto(
                     "mandarin_ratio_raw": agg["mandarin_ratio_raw"],
                     "n_windows": agg["n_windows"],
                     "window_starts": window_starts_by_id.get(raw_id, []),
-                    "needs_review": needs_review(raw_id, agg["decision"]),
+                    "needs_review": False,  # human review removed 2026-07-04 — reject is trusted automatically
                     "human_decision": None, "reviewed_by": None, "reviewed_at": None,
                     "screened_at": _now_ts(), "provenance": "lang_screen_auto",
                 })

@@ -193,17 +193,6 @@ def cmd_run_lang_screen_auto(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_run_lang_screen_review(args: argparse.Namespace) -> int:
-    import logging
-
-    from pipeline.nodes.lang_screen_review import run_lang_screen_review
-
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    result = run_lang_screen_review(reviewer=args.reviewer, limit=args.limit)
-    print(f"\nDone: {result}")
-    return 0
-
-
 def cmd_run_label_music(args: argparse.Namespace) -> int:
     import asyncio
     import logging
@@ -415,10 +404,6 @@ def main() -> int:
                                      "single-model 0.15 default (measured OOM at 0.15, 2026-07-04)")
     p_run_lscreen.add_argument("--limit", type=int, default=None)
     p_run_lscreen.set_defaults(func=cmd_run_lang_screen_auto)
-    p_run_lreview = run_sub.add_parser("lang_screen.review", help="human-in-loop CLI: reviews lang_screen.auto's reject/mixed/audit-sample queue")
-    p_run_lreview.add_argument("--reviewer", default=None, help="identity recorded in lang_screen.reviewed_by (default: $USER)")
-    p_run_lreview.add_argument("--limit", type=int, default=None)
-    p_run_lreview.set_defaults(func=cmd_run_lang_screen_review)
     p_run_suite = run_sub.add_parser("label.suite", help="P2: decode-once lang+overlap+music fan-out")
     p_run_suite.add_argument("--devices", default="cuda:0,cuda:1",
                               help="comma-separated device list, one worker per device")
