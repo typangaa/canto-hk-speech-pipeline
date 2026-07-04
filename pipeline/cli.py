@@ -174,6 +174,36 @@ def cmd_run_g2p(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_run_lang_screen_auto(args: argparse.Namespace) -> int:
+    import asyncio
+    import logging
+
+    from pipeline.nodes.lang_screen import run_lang_screen_auto
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    devices = [d.strip() for d in args.devices.split(",")]
+    result = asyncio.run(run_lang_screen_auto(
+        devices,
+        gpu_policy=args.gpu_policy,
+        batch_size=args.batch,
+        mem_fraction=args.mem_fraction,
+        limit=args.limit,
+    ))
+    print(f"\nDone: {result}")
+    return 0
+
+
+def cmd_run_lang_screen_review(args: argparse.Namespace) -> int:
+    import logging
+
+    from pipeline.nodes.lang_screen_review import run_lang_screen_review
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    result = run_lang_screen_review(reviewer=args.reviewer, limit=args.limit)
+    print(f"\nDone: {result}")
+    return 0
+
+
 def cmd_run_label_music(args: argparse.Namespace) -> int:
     import asyncio
     import logging
@@ -375,6 +405,20 @@ def main() -> int:
     p_run_prosody.add_argument("--batch", type=int, default=8)
     p_run_prosody.add_argument("--limit", type=int, default=None)
     p_run_prosody.set_defaults(func=cmd_run_label_prosody)
+    p_run_lscreen = run_sub.add_parser("lang_screen.auto", help="raw-level Mandarin-vs-Cantonese pre-filter, runs BEFORE segment.diarize")
+    p_run_lscreen.add_argument("--devices", default="cuda:0,cuda:1",
+                                help="comma-separated device list, one worker per device")
+    p_run_lscreen.add_argument("--gpu-policy", default="cap", choices=["yield", "cap", "exempt"])
+    p_run_lscreen.add_argument("--batch", type=int, default=16)
+    p_run_lscreen.add_argument("--mem-fraction", type=float, default=0.25,
+                                help="mms-lid-126 alone needs more headroom than label.music's "
+                                     "single-model 0.15 default (measured OOM at 0.15, 2026-07-04)")
+    p_run_lscreen.add_argument("--limit", type=int, default=None)
+    p_run_lscreen.set_defaults(func=cmd_run_lang_screen_auto)
+    p_run_lreview = run_sub.add_parser("lang_screen.review", help="human-in-loop CLI: reviews lang_screen.auto's reject/mixed/audit-sample queue")
+    p_run_lreview.add_argument("--reviewer", default=None, help="identity recorded in lang_screen.reviewed_by (default: $USER)")
+    p_run_lreview.add_argument("--limit", type=int, default=None)
+    p_run_lreview.set_defaults(func=cmd_run_lang_screen_review)
     p_run_suite = run_sub.add_parser("label.suite", help="P2: decode-once lang+overlap+music fan-out")
     p_run_suite.add_argument("--devices", default="cuda:0,cuda:1",
                               help="comma-separated device list, one worker per device")

@@ -340,6 +340,36 @@ CREATE TABLE IF NOT EXISTS task_runs (
 );
 
 
+-- lang_screen.auto DAG node (raw-level pre-segmentation language pre-filter, added
+-- 2026-07-04): coarse Mandarin-vs-Cantonese screen run BEFORE segment.diarize, so a
+-- raw file that turns out to be Mandarin-dominant never pays for diarization or (once
+-- P5 lands) opus transcoding. Keyed by raw_id, NOT segment id — this is a whole-file
+-- decision, not a per-clip one. Deliberately conservative: this is a coarse sampled
+-- pre-filter, NOT a replacement for the existing fine-grained per-segment lang-id in
+-- labels_lang/label.suite, which remains the final gate for intra-episode
+-- code-switching. decision is written once by lang_screen.auto and never overwritten
+-- by it again (raw_id is anti-joined out of discover() the moment a row exists);
+-- human_decision is written only by the separate lang_screen.review human-in-loop CLI
+-- and, when present, takes precedence over decision — see docs' COALESCE(human_decision,
+-- decision, 'pass') "effective decision" formula used by segment.diarize's discovery
+-- query. A raw_id with NO lang_screen row at all (not yet screened, or legacy/pre-dates
+-- this node) is treated as 'pass' by that COALESCE — this node is additive and must
+-- never retroactively block already-segmented or not-yet-screened raw files.
+CREATE TABLE IF NOT EXISTS lang_screen (
+    raw_id              TEXT      PRIMARY KEY,
+    decision            TEXT,     -- 'pass' | 'reject' | 'mixed'
+    cantonese_ratio_raw DOUBLE,   -- fraction of sampled windows with top-1 lang = 'yue'
+    mandarin_ratio_raw  DOUBLE,   -- fraction of sampled windows with top-1 lang = 'cmn'
+    n_windows           INTEGER,
+    window_starts       JSON,     -- [start_sec, ...] — so lang_screen.review can play back the SAME windows
+    needs_review        BOOLEAN,  -- true for all 'reject'/'mixed' + a random audit sample of 'pass'
+    human_decision       TEXT,    -- 'pass' | 'reject' | 'mixed' | NULL (NULL = not yet reviewed)
+    reviewed_by          TEXT,
+    reviewed_at           TIMESTAMP,
+    screened_at           TIMESTAMP,
+    provenance            TEXT    -- 'lang_screen_auto' | 'read_failed'
+);
+
 -- Indexes for common query patterns
 
 CREATE INDEX IF NOT EXISTS idx_segments_source     ON segments (source);

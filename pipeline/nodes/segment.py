@@ -324,15 +324,23 @@ DIARIZE_DISCOVER_SQL = """
     FROM raw_files rf
     LEFT JOIN raw_segments rs ON rf.raw_id = rs.raw_id
     LEFT JOIN diarization_turns dt ON rf.raw_id = dt.raw_id
+    LEFT JOIN lang_screen ls ON rf.raw_id = ls.raw_id
     WHERE rs.raw_id IS NULL
       AND dt.raw_id IS NULL
+      AND COALESCE(ls.human_decision, ls.decision, 'pass') != 'reject'
     ORDER BY rf.raw_id
 """
 
 
 def discover_diarize(conn) -> list[tuple]:
     """Return (raw_id, wav_path, source) for raw_files not yet in raw_segments
-    AND not yet in diarization_turns."""
+    AND not yet in diarization_turns.
+
+    Also excludes any raw_id whose EFFECTIVE pipeline.nodes.lang_screen decision
+    (COALESCE(human_decision, decision, 'pass')) is 'reject' — a raw file with no
+    lang_screen row at all (never screened, or predates that node) defaults to
+    'pass' here, so this join is purely additive and never retroactively blocks
+    already-in-flight or legacy raw files."""
     return conn.execute(DIARIZE_DISCOVER_SQL).fetchall()
 
 
