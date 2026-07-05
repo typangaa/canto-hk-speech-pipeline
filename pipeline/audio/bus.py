@@ -21,7 +21,9 @@ Dependencies (CPU-only, no torch):
 
 from __future__ import annotations
 
+import json
 import logging
+import subprocess
 from typing import Optional
 
 import numpy as np
@@ -29,6 +31,12 @@ import soundfile as sf
 import soxr
 
 log = logging.getLogger(__name__)
+
+# ffmpeg fallback timeout — generous because it must cover a full raw
+# recording (up to several hours), not just a short segment clip; audio-only
+# decode runs far faster than realtime so this is a safety ceiling, not an
+# expected duration.
+_FFMPEG_TIMEOUT_SEC = 900
 
 
 # ---------------------------------------------------------------------------
@@ -48,7 +56,9 @@ def decode(
     ----------
     path:
         Absolute or relative path to any format that ``soundfile`` can open
-        (WAV, FLAC, OGG, ...).
+        (WAV, FLAC, OGG, ...), or a native container ffmpeg can open
+        (webm/opus, m4a/AAC, mp3) -- the latter fall back to an ffmpeg pipe
+        decode automatically (see ``_read_via_ffmpeg``).
     target_sr:
         Desired output sample rate in Hz (e.g. 16000, 32000, 48000).
     mono:
@@ -122,16 +132,71 @@ def decode_multi(
 def _read(path: str) -> tuple[Optional[np.ndarray], int]:
     """Attempt ``sf.read`` and return ``(array, native_sr)``.
 
-    On any failure returns ``(None, 0)`` and logs a warning -- never raises.
-    This fail-soft contract mirrors the ``read_audio_*`` helpers in the three
-    reference scripts that ``bus.py`` replaces.
+    Falls back to an ffmpeg pipe decode when libsndfile can't open the
+    container (2026-07-05: raw files ingested by ``ingest.download`` since
+    the 2026-07-04 native-container policy are opus-in-webm/AAC-in-m4a,
+    which libsndfile does not support).  On total failure returns
+    ``(None, 0)`` and logs a warning -- never raises.  This fail-soft
+    contract mirrors the ``read_audio_*`` helpers in the three reference
+    scripts that ``bus.py`` replaces.
     """
     try:
         y, sr = sf.read(path, dtype="float32", always_2d=False)
         return y, sr
     except Exception as e:
-        log.warning(f"read fail {path}: {e}")
+        log.warning(f"soundfile read fail {path}: {e} -- trying ffmpeg fallback")
+        return _read_via_ffmpeg(path)
+
+
+def _probe_native(path: str) -> tuple[Optional[int], int]:
+    """ffprobe the first audio stream's (sample_rate, channels).
+
+    Returns ``(None, 0)`` on any failure -- caller treats that as "give up".
+    """
+    try:
+        out = subprocess.run(
+            [
+                "ffprobe", "-v", "error", "-select_streams", "a:0",
+                "-show_entries", "stream=sample_rate,channels",
+                "-of", "json", path,
+            ],
+            capture_output=True, text=True, timeout=30, check=True,
+        )
+        info = json.loads(out.stdout)["streams"][0]
+        return int(info["sample_rate"]), int(info["channels"])
+    except Exception as e:
+        log.warning(f"ffprobe fail {path}: {e}")
         return None, 0
+
+
+def _read_via_ffmpeg(path: str) -> tuple[Optional[np.ndarray], int]:
+    """Decode *path* via an ffmpeg subprocess pipe (no temp file).
+
+    Used only when ``sf.read`` fails -- covers native containers (webm/
+    opus, m4a/AAC) that libsndfile cannot open.  Decodes at the file's own
+    native sample rate (``-ar`` pinned to that same rate, so ffmpeg performs
+    no implicit resample) -- the existing ``_resample`` step then behaves
+    identically regardless of which path decoded the file.
+    """
+    sr, channels = _probe_native(path)
+    if not sr or not channels:
+        return None, 0
+    try:
+        proc = subprocess.run(
+            [
+                "ffmpeg", "-v", "error", "-i", path,
+                "-f", "f32le", "-acodec", "pcm_f32le",
+                "-ar", str(sr), "-ac", str(channels), "-",
+            ],
+            capture_output=True, timeout=_FFMPEG_TIMEOUT_SEC, check=True,
+        )
+    except Exception as e:
+        log.warning(f"ffmpeg fallback decode fail {path}: {e}")
+        return None, 0
+    y = np.frombuffer(proc.stdout, dtype=np.float32)
+    if channels > 1:
+        y = y.reshape(-1, channels)
+    return y.copy(), sr
 
 
 def _to_mono(y: np.ndarray) -> np.ndarray:

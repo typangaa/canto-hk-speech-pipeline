@@ -171,7 +171,7 @@ def test_vad_cut_one_writes_expected_segment(tmp_path, monkeypatch):
     assert row["source"] == "podcast"
     assert MIN_DUR <= row["duration_sec"] <= MAX_DUR
     assert Path(row["audio_path"]).exists()
-    assert Path(row["audio_path"]).name == "20250101_prog_rawid1_seg00000.wav"
+    assert Path(row["audio_path"]).name == "20250101_prog_rawid1_seg00000.flac"
 
 
 def test_vad_cut_one_skips_windows_outside_duration_bounds(tmp_path, monkeypatch):

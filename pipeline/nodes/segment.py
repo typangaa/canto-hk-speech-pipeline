@@ -624,37 +624,44 @@ class DiarizeWorker(GPUWorkerBase):
     ``audio_to_16k()`` — diarization boundary consistency requires identical
     preprocessing.  See design decision (e).
 
-    VAD-only fallback: when no HF token is set (or a 403 gated-model error is
-    encountered), pyannote is not loaded and each file is treated as one turn
+    VAD-only fallback: only when pyannote genuinely cannot authenticate (no
+    cached HF login AND no HUGGING_FACE_HUB_TOKEN, or a 401/403 gated-model
+    error), pyannote is not loaded and each file is treated as one turn
     spanning the full duration with speaker_tag='SPEAKER_UNKNOWN'.  This
     mirrors the legacy script's VAD-only fallback path exactly.
     """
 
     def load_model(self):
-        """Load pyannote speaker-diarization-3.1, or return None for VAD-only mode."""
+        """Load pyannote speaker-diarization-3.1, or return None for VAD-only mode.
+
+        2026-07-05 fix: don't require HUGGING_FACE_HUB_TOKEN explicitly — the
+        prior version short-circuited to VAD-only whenever that one env var
+        was unset, even when a working `huggingface-cli login` cache token
+        existed (as it does on this machine), silently degrading a real
+        backlog run to no-diarization mode.  huggingface_hub's own
+        from_pretrained() already resolves the cached login token when no
+        explicit token is passed — same default-cache reliance label_suite.py
+        already uses for pyannote/segmentation-3.0.  An explicit
+        HUGGING_FACE_HUB_TOKEN env var, if set, still overrides.
+        """
         token = os.environ.get("HUGGING_FACE_HUB_TOKEN") or None
-        if not token:
-            log.warning(
-                "HUGGING_FACE_HUB_TOKEN not set — using VAD-only mode "
-                "(no speaker diarization; whole file treated as single speaker). "
-                "Set the token and accept pyannote terms for multi-speaker diarization."
-            )
-            return None  # VAD-only mode
 
         from pyannote.audio import Pipeline as PyannotePipeline
         log.info(f"DiarizeWorker: loading pyannote speaker-diarization-3.1 on {self.device} ...")
         try:
             pipeline = PyannotePipeline.from_pretrained(
                 "pyannote/speaker-diarization-3.1",
-                token=token,
+                token=token,  # None -> huggingface_hub falls back to its own cached login
             )
         except Exception as exc:
-            if "403" in str(exc) or "gated" in str(exc).lower():
+            msg = str(exc)
+            if "403" in msg or "401" in msg or "gated" in msg.lower():
                 log.error(
-                    "pyannote/speaker-diarization-3.1 requires accepting model terms.\n"
+                    "pyannote/speaker-diarization-3.1 requires accepting model terms "
+                    "and a valid HF login (cached or HUGGING_FACE_HUB_TOKEN).\n"
                     "  1. Visit: https://huggingface.co/pyannote/speaker-diarization-3.1\n"
                     "  2. Accept user conditions with your HuggingFace account.\n"
-                    "  3. Re-run this script.\n"
+                    "  3. Run `huggingface-cli login` (or set HUGGING_FACE_HUB_TOKEN) and re-run.\n"
                     "Falling back to VAD-only mode (no diarization — multi-speaker risk)."
                 )
                 return None  # VAD-only mode
@@ -846,7 +853,9 @@ def _vad_cut_one(
     Reads the 48 kHz master via bus.decode (zero-cost passthrough for already-48
     kHz files — matches filter.py's documented rationale).  Makes a transient
     16 kHz copy with torchaudio.Resample for Silero VAD.  Cuts valid clips
-    [MIN_DUR, MAX_DUR] and writes WAV files.
+    [MIN_DUR, MAX_DUR] and writes lossless 48 kHz mono FLAC files (2026-07-05
+    P5-A decision — see DECISIONS.md 2026-07-04 storage-format entry; libsndfile
+    writes FLAC natively, no new dependency).
 
     Returns a dict:
       {raw_id, segment_rows: [...], n_segments: int, error: str|None}
@@ -891,10 +900,10 @@ def _vad_cut_one(
                 if len(clip) < MIN_DUR * TARGET_SR:
                     continue
 
-                seg_name = f"{stem}_seg{n_seg:05d}.wav"
+                seg_name = f"{stem}_seg{n_seg:05d}.flac"
                 seg_path = out_dir / seg_name
                 seg_path.parent.mkdir(parents=True, exist_ok=True)
-                sf.write(str(seg_path), clip, TARGET_SR, subtype="PCM_16")
+                sf.write(str(seg_path), clip, TARGET_SR, format="FLAC", subtype="PCM_16")
 
                 seg_id = _segment_id(seg_path)
                 segment_rows.append({
