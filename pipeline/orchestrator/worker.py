@@ -11,6 +11,20 @@ import signal
 
 log = logging.getLogger(__name__)
 
+# asyncio's StreamReader defaults to a 64 KiB line-buffer limit
+# (asyncio.streams._DEFAULT_LIMIT); readline() raises LimitOverrunError
+# ("Separator is not found, and chunk exceed the limit") if a single JSONL
+# message exceeds it without a newline. Found in production 2026-07-05:
+# segment.diarize's per-raw-file result line scales with turn count, not a
+# fixed size — one real raw file produced a 1,106-turn / ~100 KB line,
+# blowing the default limit and corrupting that worker's ENTIRE stdout
+# stream (every subsequent item in the same worker process then fails to
+# parse too, since the stream desyncs). This is a property of the shared
+# JSONL worker protocol, not specific to any one node, so the fix is here
+# rather than in segment.py. 32 MiB gives generous headroom (roughly
+# 300,000+ turns at ~100 bytes/turn) over any plausible single-file output.
+_STDOUT_LIMIT = 32 * 1024 * 1024
+
 
 class WorkerDiedError(Exception):
     pass
@@ -121,6 +135,7 @@ async def spawn_worker(
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env=env,
+        limit=_STDOUT_LIMIT,
     )
     log.debug("Spawned worker pid=%d cmd=%r", process.pid, cmd)
     return WorkerHandle(process)
