@@ -1375,128 +1375,130 @@ sources:
       services. High-quality Cantonese sermon recordings from various pastors.
       Excellent for formal HK Cantonese corpus.
 
-# ──────────────────────────────────────────────
-# Health / Medical Podcasts (agy Search 2026-06-12)
-# ──────────────────────────────────────────────
+  # ──────────────────────────────────────────────
+  # Health / Medical Podcasts (agy Search 2026-06-12)
+  # ──────────────────────────────────────────────
 
-- name: "五分鐘心理學 樹洞香港 Podcast"
-  rss_url: "https://anchor.fm/s/13b71908/podcast/rss"
-  source: "podcast"
-  language: "yue"
-  domain: "educational"
-  style: "casual"
-  priority: "high"
-  estimated_hours: 8
-  status: "active"
-  notes: "FOUND 2026-06-12. ~78 episodes. HK mental health psychology in Cantonese. Clear conversational speech."
+  - name: "五分鐘心理學 樹洞香港 Podcast"
+    rss_url: "https://anchor.fm/s/13b71908/podcast/rss"
+    source: "podcast"
+    language: "yue"
+    domain: "educational"
+    style: "casual"
+    priority: "high"
+    estimated_hours: 8
+    status: "active"
+    notes: "FOUND 2026-06-12. ~78 episodes. HK mental health psychology in Cantonese. Clear conversational speech."
 
-- name: "粵講愈健康 Cantonese Health Talk with Dr. Wu"
-  rss_url: "https://anchor.fm/s/103f34658/podcast/rss"
-  source: "podcast"
-  language: "yue"
-  domain: "educational"
-  style: "formal"
-  priority: "medium"
-  estimated_hours: 3
-  status: "active"
-  notes: "FOUND 2026-06-12. ~13 episodes. Doctor-led health education podcast in formal Cantonese."
+  - name: "粵講愈健康 Cantonese Health Talk with Dr. Wu"
+    rss_url: "https://anchor.fm/s/103f34658/podcast/rss"
+    source: "podcast"
+    language: "yue"
+    domain: "educational"
+    style: "formal"
+    priority: "medium"
+    estimated_hours: 3
+    status: "active"
+    notes: "FOUND 2026-06-12. ~13 episodes. Doctor-led health education podcast in formal Cantonese."
 
-- name: "健康啲囉 Health D-load"
-  rss_url: "https://feeds.acast.com/public/shows/63eedb6d3ccc750011a2b79f"
-  source: "podcast"
-  language: "yue"
-  domain: "educational"
-  style: "casual"
-  priority: "medium"
-  estimated_hours: 4
-  status: "active"
-  notes: "FOUND 2026-06-12. ~15 episodes. HK health and lifestyle podcast in Cantonese."
+  - name: "健康啲囉 Health D-load"
+    rss_url: "https://feeds.acast.com/public/shows/63eedb6d3ccc750011a2b79f"
+    source: "podcast"
+    language: "yue"
+    domain: "educational"
+    style: "casual"
+    priority: "medium"
+    estimated_hours: 4
+    status: "active"
+    notes: "FOUND 2026-06-12. ~15 episodes. HK health and lifestyle podcast in Cantonese."
 
-- name: "爸媽成長營 廣東話讀書會"
-  rss_url: "https://rss.buzzsprout.com/2443030.rss"
-  source: "podcast"
-  language: "yue"
-  domain: "educational"
-  style: "casual"
-  priority: "medium"
-  estimated_hours: 6
-  status: "active"
-  notes: "FOUND 2026-06-12. ~38 episodes. HK parenting education podcast in Cantonese."
+  - name: "爸媽成長營 廣東話讀書會"
+    rss_url: "https://rss.buzzsprout.com/2443030.rss"
+    source: "podcast"
+    language: "yue"
+    domain: "educational"
+    style: "casual"
+    priority: "medium"
+    estimated_hours: 6
+    status: "active"
+    notes: "FOUND 2026-06-12. ~38 episodes. HK parenting education podcast in Cantonese."
 
-- name: "Athena 8分鐘自我對話 廣東話心理學"
-  rss_url: "https://feeds.soundon.fm/podcasts/b65afe37-1e02-4f1f-b3a9-a8942b59a281.xml"
-  source: "podcast"
-  language: "yue"
-  domain: "educational"
-  style: "formal"
-  priority: "medium"
-  estimated_hours: 2
-  status: "active"
-  notes: "FOUND 2026-06-12. ~9 episodes. Short-form psychology self-improvement in Cantonese."
+  - name: "Athena 8分鐘自我對話 廣東話心理學"
+    rss_url: "https://feeds.soundon.fm/podcasts/b65afe37-1e02-4f1f-b3a9-a8942b59a281.xml"
+    source: "podcast"
+    language: "yue"
+    domain: "educational"
+    style: "formal"
+    priority: "medium"
+    estimated_hours: 2
+    status: "active"
+    notes: "FOUND 2026-06-12. ~9 episodes. Short-form psychology self-improvement in Cantonese."
 
-# ──────────────────────────────────────────────
-# Current Affairs / News Analysis Podcasts (agy Search 2026-06-12)
-# NOTE: Some are diaspora-based (overseas HK speakers) — marked evaluate; speech is authentic HK Cantonese
-# ──────────────────────────────────────────────
+  # ──────────────────────────────────────────────
+  # Current Affairs / News Analysis Podcasts (agy Search 2026-06-12)
+  # NOTE: Some are diaspora-based (overseas HK speakers) — marked evaluate; speech is authentic HK Cantonese
+  # ──────────────────────────────────────────────
 
-- name: "綠豆搞Bean科 Green Bean Media"
-  rss_url: "https://anchor.fm/s/e89e5780/podcast/rss"
-  source: "podcast"
-  language: "yue"
-  domain: "other"
-  style: "casual"
-  priority: "high"
-  estimated_hours: 40
-  status: "evaluate"
-  notes: >
-    FOUND 2026-06-12. Active (weekly). ~199h est. HK diaspora news/political commentary.
-    Authentic HK Cantonese speakers — evaluate whether accent/dialect acceptable for corpus.
+  - name: "綠豆搞Bean科 Green Bean Media"
+    rss_url: "https://anchor.fm/s/e89e5780/podcast/rss"
+    source: "podcast"
+    language: "yue"
+    domain: "other"
+    style: "casual"
+    priority: "high"
+    estimated_hours: 40
+    status: "evaluate"
+    notes: >
+      FOUND 2026-06-12. Active (weekly). ~199h est. HK diaspora news/political commentary.
+      Authentic HK Cantonese speakers — evaluate whether accent/dialect acceptable for corpus.
 
-- name: "學識開咪 HK Social Commentary"
-  rss_url: "https://feeds.soundon.fm/podcasts/90e3d85d-a1c8-4acc-b266-093a678fa5f5.xml"
-  source: "podcast"
-  language: "yue"
-  domain: "other"
-  style: "casual"
-  priority: "medium"
-  estimated_hours: 10
-  status: "evaluate"
-  notes: "FOUND 2026-06-12. Active (monthly). HK social commentary and current events in Cantonese."
+  - name: "學識開咪 HK Social Commentary"
+    rss_url: "https://feeds.soundon.fm/podcasts/90e3d85d-a1c8-4acc-b266-093a678fa5f5.xml"
+    source: "podcast"
+    language: "yue"
+    domain: "other"
+    style: "casual"
+    priority: "medium"
+    estimated_hours: 10
+    status: "evaluate"
+    notes: "FOUND 2026-06-12. Active (monthly). HK social commentary and current events in Cantonese."
 
-- name: "本來我想說些什麼健吾"
-  rss_url: "https://anchor.fm/s/6c1b797c/podcast/rss"
-  source: "podcast"
-  language: "yue"
-  domain: "other"
-  style: "casual"
-  priority: "medium"
-  estimated_hours: 8
-  status: "evaluate"
-  notes: "FOUND 2026-06-12. Active. HK writer Kengo (健吾) social commentary. Natural HK Cantonese."
+  - name: "本來我想說些什麼健吾"
+    rss_url: "https://anchor.fm/s/6c1b797c/podcast/rss"
+    source: "podcast"
+    language: "yue"
+    domain: "other"
+    style: "casual"
+    priority: "medium"
+    estimated_hours: 8
+    status: "evaluate"
+    notes: "FOUND 2026-06-12. Active. HK writer Kengo (健吾) social commentary. Natural HK Cantonese."
 
-# ──────────────────────────────────────────────
-# Legal / Professional Podcasts (agy Search 2026-06-12)
-# ──────────────────────────────────────────────
+  # ──────────────────────────────────────────────
+  # Legal / Professional Podcasts (agy Search 2026-06-12)
+  # ──────────────────────────────────────────────
 
-- name: "一周法庭線報 法生咩事"
-  rss_url: "https://anchor.fm/s/e80a95b8/podcast/rss"
-  source: "podcast"
-  language: "yue"
-  domain: "educational"
-  style: "formal"
-  priority: "high"
-  estimated_hours: 10
-  status: "active"
-  notes: "FOUND 2026-06-12. HK court and legal news podcast. Formal legal Cantonese, high clarity."
+  - name: "一周法庭線報 法生咩事"
+    rss_url: "https://anchor.fm/s/e80a95b8/podcast/rss"
+    source: "podcast"
+    language: "yue"
+    domain: "educational"
+    style: "formal"
+    priority: "high"
+    estimated_hours: 10
+    status: "active"
+    notes: "FOUND 2026-06-12. HK court and legal news podcast. Formal legal Cantonese, high clarity."
 
 # ──────────────────────────────────────────────
 # Download Configuration
 # ──────────────────────────────────────────────
 
+# Applied by `pipe run ingest.download` (pipeline/nodes/ingest_download.py).
+# Policy (2026-07-04, DECISIONS.md "Storage format policy FINALIZED"): podcast RSS
+# enclosures (typically MP3) are saved AS-IS, no ffmpeg conversion — re-encoding an
+# already-lossy source is not acceptable archival practice. Legacy scripts/02_download.py
+# (force-converts to WAV) is kept only as historical reference.
 download_config:
-  audio_format: "mp3"         # podcasts are typically distributed as MP3
-  convert_to_wav: true        # convert to WAV mono in 03_segment.py
-  target_sample_rate: 48000   # store 48 kHz master; NEVER upsample, NEVER go below source (KNOWN_ISSUES §11)
   max_age_days: 365           # skip episodes older than 1 year
   sleep_between_episodes: 2   # seconds between downloads
 

@@ -2764,13 +2764,15 @@
 # Download Configuration
 # ──────────────────────────────────────────────
 #
-# Applied to all channels in this file by 02_download.py:
+# Applied to all channels in this file by `pipe run ingest.download` (pipeline/nodes/ingest_download.py).
+# Policy (2026-07-04, DECISIONS.md "Storage format policy FINALIZED"): keep the native
+# bestaudio container (opus/webm or m4a) exactly as delivered — NO --extract-audio,
+# NO postprocessor re-encode, NO forced WAV. Re-encoding an already-lossy YouTube stream
+# is not acceptable archival practice regardless of target codec/bitrate. Legacy
+# scripts/02_download.py (force-converts to WAV) is kept only as historical reference.
 
 download_config:
   format: "bestaudio/best"
-  audio_format: "wav"
-  audio_quality: 0
-  postprocessor_args: "ffmpeg:-ar 48000 -ac 1"  # 48 kHz mono master — NEVER lower (KNOWN_ISSUES §11)
   restrict_filenames: true
   sleep_interval: 3        # seconds between downloads — be polite
   max_sleep_interval: 8

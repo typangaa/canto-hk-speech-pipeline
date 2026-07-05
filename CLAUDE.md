@@ -162,7 +162,7 @@ These are non-negotiable. Never override for any technical reason.
 
 5. **Single-speaker, VAD-based segmentation only.** Never hard-cut audio at a fixed duration. Segment at natural speech pause boundaries (Silero VAD) *within* diarization-detected single-speaker turns, so no clip spans a speaker change. Target 3–20 seconds. See `docs/KNOWN_ISSUES.md §2, §10`.
 
-6. **48 kHz mono master, never lower.** Store every segment at 48 kHz. Downsampling is irreversible — a 16 kHz corpus would be unusable for every modern TTS codec. Create transient 16 kHz copies for VAD/ASR/DNSMOS only. See `docs/KNOWN_ISSUES.md §11`.
+6. **48 kHz mono lossless master, never lower, never lossy (reworded 2026-07-04).** Store every segment at 48 kHz, encoded losslessly — **WAV or FLAC** are both acceptable containers; Opus/MP3/any lossy codec is never acceptable as a segment master. Downsampling is irreversible — a 16 kHz corpus would be unusable for every modern TTS codec. Create transient 16 kHz copies for VAD/ASR/DNSMOS only. New segments are written as **FLAC** (decided 2026-07-04 — see `DECISIONS.md`); existing legacy WAV segments are not re-encoded. See `docs/KNOWN_ISSUES.md §11`.
 
 7. **Never `language="yue"` in Whisper.** It causes decoder collapse on large-v3. Use a Cantonese fine-tuned model and/or `language="zh"` with a written-Cantonese prompt. Run multiple ASR models; a human calibrates the canonical text. See `docs/KNOWN_ISSUES.md §9`.
 
@@ -233,12 +233,13 @@ print(f"\nDone: {processed} processed, {skipped} skipped, {failed} failed")
 print(f"Log: {log_path}")
 ```
 
-**Audio format for stored files**: 48 kHz, mono, 16-bit (or 24-bit) PCM WAV — this is the master that survives into `data/filtered/`. Use `soundfile` or `torchaudio` for I/O. For VAD / diarization / ASR / DNSMOS, generate a transient 16 kHz copy in memory or `/tmp` and discard it — never overwrite the 48 kHz master with a downsampled version.
+**Audio format for stored files**: 48 kHz, mono, lossless — **FLAC** for all new segments (decided 2026-07-04, see `DECISIONS.md`), 16-bit PCM WAV for pre-2026-07-04 legacy segments (not re-encoded). Use `soundfile` for I/O (reads both natively). For VAD / diarization / ASR / DNSMOS, generate a transient 16 kHz copy in memory or `/tmp` and discard it — never overwrite the 48 kHz master with a downsampled or lossy-recompressed version.
 
 **File naming**:
 ```
 raw:      {YYYYMMDD}_{program_slug}_{video_id}.webm
-segments: {YYYYMMDD}_{program_slug}_{video_id}_seg{N:05d}.wav
+segments: {YYYYMMDD}_{program_slug}_{video_id}_seg{N:05d}.flac   (new, since 2026-07-04)
+          {YYYYMMDD}_{program_slug}_{video_id}_seg{N:05d}.wav    (legacy, pre-2026-07-04, unchanged)
 filtered: same as segments (symlink or copy into filtered/)
 ```
 

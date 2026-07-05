@@ -36,6 +36,20 @@ def cmd_golden_build(args: argparse.Namespace) -> int:
     return golden_main()
 
 
+def cmd_run_ingest_download(args: argparse.Namespace) -> int:
+    import asyncio
+    import logging
+
+    from pipeline.nodes.ingest_download import run_ingest_download
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    result = asyncio.run(run_ingest_download(
+        source=args.source, dry_run=args.dry_run, limit=args.limit,
+    ))
+    print(f"\nDone: {result}")
+    return 0
+
+
 def cmd_run_ingest_probe(args: argparse.Namespace) -> int:
     import asyncio
     import logging
@@ -383,6 +397,11 @@ def main() -> int:
 
     p_run = sub.add_parser("run", help="Run a DAG node via the orchestrator")
     run_sub = p_run.add_subparsers(dest="run_command", required=True)
+    p_run_download = run_sub.add_parser("ingest.download", help="download rthk/youtube/podcast audio, native container, zero transcode (2026-07-04 policy)")
+    p_run_download.add_argument("--source", default="all", choices=["rthk", "youtube", "podcast", "all"])
+    p_run_download.add_argument("--dry-run", action="store_true")
+    p_run_download.add_argument("--limit", type=int, default=None)
+    p_run_download.set_defaults(func=cmd_run_ingest_download)
     p_run_probe = run_sub.add_parser("ingest.probe", help="P2: ffprobe metadata + L/R correlation per raw file")
     p_run_probe.add_argument("--workers", type=int, default=8)
     p_run_probe.add_argument("--batch", type=int, default=200)

@@ -409,10 +409,10 @@ halving(`12_language_id.infer()` 嘅 pattern 搬入通用 GPU worker base class)
 | Node | 舊 script | resource | 重寫要點 |
 |---|---|---|---|
 | `ingest.discover` | 01 | net | 照 port;寫 sources/raw_files 表 |
-| `ingest.download` | 02 | net+io | **政策改**:保留 bestaudio 原生 container(opus/m4a),唔再轉 WAV(§7.1);寫 raw_files |
+| `ingest.download` | 02 | net+io | **政策(2026-07-04 最終定案,經 online research 驗證)**:三個 source **全部保留 bestaudio 原生 container 原封不動**(YouTube opus / RTHK AAC / podcast MP3),**零 transcode**——archival best practice 係保存原始 stream(lossy→lossy re-encode 屬不當做法:generation loss + stereo→mono downmix phase cancellation 風險 + DNSMOS 對 lossy 有負偏差會壓低 Stage-6 yield);之前傾過嘅 per-source harmonize(mono opus 48kbps)方案已否決——native 只係多 ~40GB/1000h,而容量瓶頸係 segments tier 唔係 raw tier;唔再轉 WAV(§7.1);寫 raw_files(+ codec/container 欄位) |
 | `ingest.probe` | (新) | io | ffprobe → duration/sr/channels/codec 入 catalog(§11 stereo 研究都靠佢) |
 | `segment.diarize` | 03 | gpu | pyannote 3.1;輸入由 raw_files 表;fallback VAD-only 邏輯保留 |
-| `segment.vad_cut` | 03 | cpu+io | Silero VAD within turns → 48k WAV master 落 shard(§7.2);寫 segments 表;loudnorm slot(暫關,跟 QUALITY 跟進項) |
+| `segment.vad_cut` | 03 | cpu+io | Silero VAD within turns → 48k **FLAC** master 落 shard(§7.2;2026-07-04 定案,見 P5-A / CLAUDE.md constraint #6);寫 segments 表;loudnorm slot(暫關,跟 QUALITY 跟進項) |
 | `pregate.snr` | 03b | cpu | 照 port;寫 filters 部分欄 |
 | `asr.canto_ft` / `asr.whisper_v3` | 04 | gpu | faster-whisper;兩 model = 兩個 node(可分卡並行,而家係串行兩 pass);**`language="yue"` 禁令不變** |
 | `asr.agreement` | 04 | cpu | char_agreement → asr_agreement 表 |
@@ -442,7 +442,11 @@ halving(`12_language_id.infer()` 嘅 pattern 搬入通用 GPU worker base class)
 
 ## 7. Storage:raw 壓縮 + step 9 sharding
 
-### 7.1 Raw → opus(owner 已拍板壓縮路線)
+### 7.1 Raw → opus(2026-07-02 原方案;**存量 backlog 部分已於 2026-07-04 改用 FLAC,見 §8 P5-B / `DECISIONS.md`**)
+
+> 政策第 1 點(新 download 保留原生 bestaudio container,唔轉 WAV/FLAC)依然有效不變。
+> 政策第 2 點(存量 1.6T backlog 轉碼格式)由 opus 改為 FLAC——本節下面嘅內容保留做
+> 原始分析記錄,實際執行以 §8 P5-B 為準。
 
 **現實**:1.6T raw 全部係 WAV,而源頭(YouTube AAC/opus、podcast MP3)本身係 lossy ——
 WAV 化冇增加任何 information,純粹脹大 ~10×。
@@ -782,11 +786,228 @@ speakers/gold=16,585/silver=438,714,train/val split membership 保留),同備份
 不存在。下一個 milestone 係 P5(storage 執行:raw→opus 轉碼 + 三碟 sharding),未開始,一樣要
 owner 明確拍板先做。
 
+## 儲存容量調查(2026-07-04,P5 未開始前嘅前置分析)
+
+Owner 問:全部 dataset 都用壓縮格式儲存,Drive2/3/4 加埋總共可以裝幾多小時訓練用 segment?
+量咗真實檔案密度(48kHz/16-bit mono WAV = 精確 96,000 bytes/秒,同 catalog 完全脗合,無異議)。
+
+**發現一個重要現象,已核實唔係 bug**:`/mnt/Drive4/canto/segments/` 目錄實際有
+**1,186,204** 個 `.wav`(834 GiB),但 catalog `segments` 表淨係 **455,330** 行(1004.5h)——
+比例 2.6×,三個 source(youtube/podcast/rthk)獨立核對都係 2.3-3.0× 咁上下,唔係個別現象。
+抽樣核實(`20251016_tvb_無綫新聞_yi9MD8XPMck`:磁碟 176 個 wav vs catalog 得 73 個)確認
+根本原因對返 Stage 3/Stage 6 嘅設計:**Stage 3(`segment`)將 diarization+VAD 切出嚟嘅全部
+clip 寫入 `data/segments/`(唔理質素);Stage 6(`filter`)先揀返合格嗰批入 manifest/catalog**
+——即係話磁碟上 61%(~511GiB)嘅音頻其實係已經被 filter 淘汰、但從來冇刪過嘅候選 clip,
+Stage 3 output 本身就係 Stage 6 pass 嘅 superset,非 migration 遺留或者 orphan 資料。
+
+**Owner 決定(2026-07-04)**:呢 511GiB **暫時保留**,唔刪。理由:保留呢批已淘汰候選 clip
+可以喺將來 quality threshold 改動(好似 `lang_screen.auto` 果日改咗 3 次咁)時直接重新跑
+`filter.decide` 揀多啲/少啲,唔使由頭再做一次 diarization+VAD-cut(先係真正貴嘅嗰步)。
+**只有喺磁碟空間真係唔夠嘅時候**,先考慮淨係保留 `filters.pass=true` 嗰批(即係重新做返類似
+舊時 `filtered/` 咁嘅去蕪存菁),到時先刪呢批候選 clip。呢個係一個**容量壓力觸發嘅刪除
+選項**,唔係即時行動——決策記喺呢度,連同 [[canto-corpus-rearchitecture]] memory,等下次
+真係捉襟見肘嘅時候唔使重新調查一次。
+
+**容量規劃嘅結論**(基於「保留候選 clip」呢個前提,唔計呢 511GiB 做可回收空間):
+- Raw→opus 轉碼(P5)預計喺 Drive2 釋放 ~1.3-1.5TiB(現時 1.6T raw → 估計壓縮到
+  ~150-300GiB)
+- 3 碟現時 free space 加埋 ~2.9TiB
+- 總可用(唔計候選 clip 回收)≈ 4.3TiB,對比 WAV(345.6MB/h)/FLAC(~190MB/h,~55% WAV)/
+  Opus 128kbps(57.6MB/h)分別可裝 ~13,700h / ~24,900h / ~82,100h 新 segment(呢個係
+  **未套用 reject-clip overhead 嘅理論值**——見下面修正)。
+
+**修正(2026-07-04,同日跟進):上面嘅 13,700h/24,900h/82,100h 冇計「保留候選 clip」政策
+對將來新 segments 嘅持續成本**。因為 owner 已經拍板保留 Stage-6-rejected clip(唔止舊資料,
+新 raw 未來一樣咁做),所以將來每加一個 catalog-hour,實際磁碟寫入都係 ~2.46×(實測
+ratio:834GiB 實際 / 339GiB catalog 對應量)。套用呢個 overhead 落 4.3TiB 可用空間:
+
+| 格式 | 理論新增(冇 overhead) | 套 2.46× overhead 嘅**實際**新增 | + 現有 1,004.5h | vs 10× target(10,000h) |
+|---|---|---|---|---|
+| WAV | ~13,000h | ~5,300h | ~6,300h | ❌ 唔夠(只夠 5×) |
+| FLAC | ~23,700h | ~9,650h | ~10,650h | ✅ 剛好夠(~6.5% margin) |
+| Opus 128k | ~78,300h | ~31,800h | ~32,800h | ✅ 遠超 |
+
+**結論:WAV 實際上守唔住 10× scale target,FLAC 剛好可以** —— 呢個係 §10 Q1 嘅
+「P6 投影數據」,已經足夠 owner 拍板落實 FLAC(見 §10 Q1 同 `DECISIONS.md` 2026-07-04
+條目)。Sensitivity:如果將來因為容量壓力觸發咗「淨保留 pass=true」嘅 fallback,
+overhead 會跌返落 ~1×,WAV 都會夠——但依家嘅政策係暫時保留候選 clip,所以呢個修正
+先反映現行政策下嘅真實數字。
+
 ### P5 — Storage 執行(2 sessions + 轉碼 wall-clock 數日)
-- 存量 raw → opus(分批 + 驗證 gate + 簽收刪 WAV)
-- step 9 rebalance:segments 三碟 sharding + storage_layout.yaml 定案
-- **Gate**:§3 非破壞鐵律逐條;每 batch 核對先刪;catalog path update transactional;
-  結尾 `pipe catalog verify --full`
+
+**未開始,需 owner 明確 go-ahead 先可以動手** —— 下面係 3 個子步驟嘅詳細 implementation
+plan(2026-07-04 補充,配合 FLAC master 決定,見 §10 Q1 / `DECISIONS.md`)。三步有嚴格
+先後次序(見「排序理由」),唔可以打亂。
+
+#### P5-A. Segments 轉 FLAC 輸出(最先做,風險最低,純 additive)
+
+- **改嘅位**:`pipeline/nodes/segment.py` `_vad_cut_one()` 第 894-897 行:
+  ```python
+  seg_name = f"{stem}_seg{n_seg:05d}.wav"          # 改做 .flac
+  sf.write(str(seg_path), clip, TARGET_SR, subtype="PCM_16")  # 改做 format="FLAC"
+  ```
+  `soundfile`(libsndfile 1.2.0,已裝)原生支援 FLAC 寫入,唔使加任何新 dependency。
+- **Catalog 唔使改 schema** —— `segments.audio_path` 本身已經存全路徑(包括副檔名),
+  `pipeline/audio/bus.py` 嘅 `decode()` 已經文檔明寫「any format soundfile can open
+  (WAV, FLAC, OGG, ...)」,filter/g2p/speaker/manifest 全部經呢層讀,對格式透明。
+- **Golden-set 驗證要調整**:`_vad_cut_one` 輸出而家係 FLAC,同舊 WAV snapshot 唔可以
+  逐 byte diff(壓縮格式唔同),要改做「decode 後 PCM 逐 sample allclose(WAV vs FLAC
+  重新解壓)」——寫一個 5-10 個 clip 嘅 smoke test:同一段 clip 分別用
+  `subtype="PCM_16"`(WAV)同 `format="FLAC"` 寫,兩者經 `decode()` 讀返嚟,斷言完全
+  一致(FLAC 係 lossless,理論上 100% bit-exact,唔應該有 |Δ|>0 嘅情況)。
+- **Rollout gate**:先淨係對 51.6h 嘅「246 個從未 segment 過」raw file(今日調查發現,
+  memory `[[canto-corpus-rearchitecture]]`)行 `segment.vad_cut`,人手核對幾個新
+  `.flac` clip 播放正常、catalog row 寫得啱,先擴大到日常新 raw ingest。
+- **完成標準**:新 raw 由呢日起 100% 產出 `.flac` segment;現有 843G legacy `.wav`
+  完全唔郁。
+
+#### P5-B. 存量 raw → FLAC 轉碼(第二步,前提係 P5-A 已經喺跑緊)—— **改用 FLAC,owner 已確認(2026-07-04)**
+
+> **✅ 已確認**:owner 睇完下面嘅 opus vs FLAC 取捨表之後,揀咗 FLAC(接受多用 ~420GB
+> 換零額外 lossy 損耗,同 segments 決定一致)。跟住 owner 問「咁將來新 download 係咪都
+> 應該轉 FLAC 嚟壓縮?」——**答案係唔應該**,已經用 `ffmpeg` 實測:將原生 lossy source
+> (YouTube opus / RTHK AAC)decode 完再 encode 做 FLAC,檔案會**大 2.1-3.5×**(YouTube
+> 樣本 33.4MB opus → 70.7MB FLAC;RTHK 樣本 5.2MB AAC → 18.1MB FLAC)——lossy codec 本身
+> 已經捨棄咗人耳聽唔到嘅資訊嚟換取遠高於任何 lossless 格式嘅壓縮率,將已經 lossy 嘅內容
+> 再包一層 FLAC 淨係加大檔案、冇任何 fidelity 著數。**將來新 download 應該保持而家
+> §7.1 政策第 1 點嘅做法:直接保留原生 bestaudio container(opus/AAC/mp3),唔轉 WAV
+> 都唔轉 FLAC。**
+>
+> 但查落去發現呢個政策由 2026-07-02 拍板到而家**從未真正落實**:`sources/youtube_channels.yaml`
+> 第 2771 行依然寫死 `audio_format: "wav"`,`pipeline/nodes/` 入面亦冇 `ingest.download`
+> node(淨係得 `ingest_probe.py` 睇 metadata,冇實際 download-and-store 邏輯)——即係話
+> 新 download 一直沿用返舊嘅 `scripts/02_download.py`,每日仍然浪費咁轉緊 WAV。
+>
+> **✅ 已落實(2026-07-04,同日跟進)**:
+> - 起咗 `pipeline/nodes/ingest_download.py`(`ingest.download` node,`pipe run
+>   ingest.download --source [rthk|youtube|podcast|all] [--dry-run] [--limit N]`),
+>   RTHK/podcast RSS enclosure 同 YouTube yt-dlp bestaudio 都**唔再做任何 ffmpeg
+>   轉碼**——冇 `--extract-audio`/`--audio-format`/postprocessor,原生 container
+>   (opus/webm、AAC/m4a、mp3)照收。`duration_sec`/`sample_rate` 有意留空,交返俾
+>   已經存在嘅 `ingest.probe`(ffprobe)事後補,唔喺呢個 node 重複一次解碼邏輯。
+> - 呢個 node 跟其他 P3+ node 嘅慣例,**直接寫 `raw_files` catalog**(用現有嘅
+>   `raw_id` 命名法:RSS = md5(audio_url)[:8],YouTube = 11 字 video id),
+>   唔再借 `metadata/downloaded.jsonl` 中轉。
+> - `sources/youtube_channels.yaml`(第 2771 行)、`sources/podcast_sources.yaml` 嘅
+>   `download_config` 已經拆走 `audio_format`/`postprocessor_args`/`convert_to_wav`
+>   呢啲誤導字段(其實舊 script 都從來冇讀過呢啲字段——`load_yaml_entries()` 攞完
+>   config dict 之後即刻掉咗唔用,轉碼行為全部係 Python code 入面寫死,唔係 yaml 決定
+>   嘅),加返清楚註明而家政策嘅 comment。
+> - `pipeline/cli.py` 加咗 `cmd_run_ingest_download` + `ingest.download` subparser。
+> - **順手執到一個獨立 bug**:測試時發現 `sources/podcast_sources.yaml` 第 1382-1481
+>   行(「Health / Medical Podcasts」起之後 9 個 entries)縮排跌返做 0-space,跳出咗
+>   `sources:` 呢個 list 嘅巢狀結構,令成個檔案 YAML parse 直接 raise
+>   `yaml.YAMLError`——而 `load_yaml_entries()`/`_load_entries()` 兩邊都係
+>   `except yaml.YAMLError: return []` 靜默吞錯,結果係**成個 podcast_sources.yaml
+>   102 個 entries,由呢個 bug 引入嗰日起就已經對 downloader 完全隱形**,同呢次
+>   storage format 政策冇關,但阻住咗 `ingest.download` 測試先發現。已經改返 2-space
+>   縮排,`yaml.safe_load` 確認 102 個 entries 全部讀到。
+> - 舊 `scripts/02_download.py` 保留低做歷史參考(同 03/04/06/07/08/09 一樣嘅做法),
+>   唔刪除、亦冇再改佢嘅轉碼行為。
+>
+> 詳見 `DECISIONS.md` 2026-07-04「Raw backlog format: FLAC confirmed by owner;
+> new-download policy clarified」同「Storage format policy FINALIZED」兩條目。
+
+> ~~⚠️ 呢個唔係新決定,係重新質疑一個已經拍咗板嘅決定~~(已由 owner 確認,見上)——
+> §7.1「Raw → opus(owner 已拍板
+> 壓縮路線)」本身已經係 2026-07-02 owner 明確簽收嘅決定,連「第二代 lossy」呢個風險都已經
+> 喺 §7.1 嘅「誠實 caveat」段度講明咗、並且已經有相應緩解(政策第 1 點:**新 download 由
+> 2026-07-02 起已經改做保留原生 bestaudio container,唔再轉 WAV**,即係話呢個 opus-vs-FLAC
+> 嘅取捨其實只影響「現存 1.6T WAV backlog」呢一批歷史資料,對將來新落嘅資料完全冇影響,
+> 兩種方案都一樣)。2026-07-04 因為 owner 提出「點解仲用緊 opus」呢條問題,先重新攞出嚟計
+> 過——**下面係雙方論點,最終選邊由 owner 決定,唔係我單方面判 FLAC 贏**:
+>
+> | | Opus(§7.1 原方案,已拍板) | FLAC(重新提出) |
+> |---|---|---|
+> | 現存 1.6T backlog 轉碼後大小 | ~150G(估計) | ~570G(2026-07-04 實測 5 個真實檔案,ratio≈35%) |
+> | 對「未來重新 segment 現存 raw」嘅影響 | 引入第二代 lossy(§7.1 已承認,128kbps 下判斷「極微」) | 零額外損耗(lossless) |
+> | 對「未來新 download」嘅影響 | 冇影響(新 download 已經唔轉 WAV,直接保留原生格式) | 同左,冇影響 |
+> | 同 segments 嘅 FLAC 決定一唔一致 | 唔一致(raw lossy,segments lossless) | 一致(兩層都 lossless) |
+> | Drive2 free space(5-10× raw capacity model) | 25-50kh raw ≈ 1.4-2.9T,一隻碟就夠 | 需要重新計(FLAC 大隻好多,可能要兩隻碟) |
+>
+> `ffprobe` 核實咗一個 §7.1 已經知道但呢度值得重申嘅事實:YouTube 源頭本身已經係 **Opus**
+> (48kHz 立體聲),RTHK 源頭係 **AAC 32kHz/64kbps**——依家嘅 raw WAV 本來就唔係「第一代
+> lossless master」,呢點 §7.1 原文都已經寫明(「WAV 化冇增加任何 information」)。
+>
+> 下面嘅 schema/node 設計已經係 owner 確認咗嘅 FLAC 路線,§7.1 原本嘅 opus 章節(第
+> 2-4 點、`raw_opus` table)保留做歷史記錄,唔再係實作依據。
+
+- **(FLAC 分支)Schema**:`pipeline/catalog/schema.sql` 第 346 行已經有伏筆註解等呢個 table(註解入面
+  提到嘅「opus transcoding」字眼需要一併更新做「FLAC transcoding」)——新增:
+  ```sql
+  CREATE TABLE IF NOT EXISTS raw_flac (
+      raw_id        TEXT PRIMARY KEY,
+      flac_path     TEXT,
+      duration_sec  DOUBLE,     -- 轉碼後量出嚟,同 raw_files.duration_sec 對比做驗證
+      verified      BOOLEAN,    -- decode 後 PCM bit-exact 核對過先 true(lossless,唔使人耳聽)
+      wav_deleted_at TIMESTAMP, -- NULL = 原 wav 仲喺度;non-null = 已刪
+      transcoded_at TIMESTAMP
+  );
+  ```
+- **新 node**:`pipeline/nodes/raw_flac.py`,跟現有 node 慣例(`discover_*` + per-item
+  worker function):
+  - `discover_flac_transcode(conn)`:SELECT raw_id FROM raw_files WHERE raw_id IN
+    (SELECT raw_id FROM raw_segments) AND raw_id NOT IN (SELECT raw_id FROM raw_flac)
+    —— **關鍵**:`raw_id IN raw_segments` 呢個 join 就係防止今日發現嗰 246 個未
+    segment 過嘅 raw file 被搶先轉碼(先切好晒先轉,避免中途出錯要重新 decode 一次
+    源頭)。呢個 exclusion 直接借用現有 `raw_segments` table,唔使新加 tracking 邏輯。
+  - `_flac_transcode_one(raw_id, wav_path)`:用 `soundfile`(libsndfile 原生支援,
+    同 P5-A 一樣,唔使 shell 出 ffmpeg)`sf.write(flac_path, data, sr, format="FLAC")`;
+    轉碼完**decode 兩邊(原 wav vs 新 flac)做 PCM 逐 sample 核對**(FLAC 係
+    lossless,理論上應該 100% bit-exact,同 P5-A 個 smoke test 同一手法)——呢個比
+    opus 嗰套「duration 核對 + 抽樣人耳」簡單同可靠好多,因為根本冇 perceptual loss
+    需要人耳判斷;寫 `raw_flac` 行。
+  - 分批(~100GB/batch,跟 §7.1 rebalance 慣例),每 batch 完:
+    1. PCM bit-exact 核對 100% pass 先可以將 `verified` 揈做 true(唔需要人耳抽聽,
+       lossless 冇 perceptual artifact 呢回事)
+    2. **owner 簽收呢個 batch**(依然要——刪原 WAV 始終係不可逆操作,即使轉碼本身
+       lossless,都要人手confirm 先執行實際刪除)
+    3. 淨係 `verified=true` 嘅 raw_id 先可以刪原 `.wav`(寫 `wav_deleted_at`)
+- **完成標準**:全部已 segment 嘅 raw 都有 verified FLAC 版本,原 WAV 已刪,Drive2 釋放
+  ~1.03TiB(2026-07-04 用 5 個真實 raw file 實測 FLAC ratio ≈35% 算出嚟,唔係估計值——
+  見 §9「儲存容量調查」段修正)。
+
+#### P5-C. 三碟 sharding rebalance(最後做,前提係 P5-A/B 都已經完成)
+
+- **`config/storage_layout.yaml`** 第 62-67 行 flip:
+  ```yaml
+  sharding:
+    enabled: true          # 而家 false
+    n_shards: 3            # 而家 2(Drive2 raw + Drive4 seg)
+    shard_roots:
+      - /mnt/Drive2/canto/segments   # shard 0 —— raw FLAC 化後讓出嘅空間
+      - /mnt/Drive3/canto/segments   # shard 1 —— 而家完全空,即刻可用
+      - /mnt/Drive4/canto/segments   # shard 2 —— 現有 843G segments 做起點
+  raw_root: /mnt/Drive2/canto-corpus/data/raw   # FLAC 化後(實測 ratio ~35%)~570GiB
+  ```
+  (呢個同 §7.2 原本草擬嘅 shard map 一致,依家先實際落地。)
+- **Rebalance script**(新增,例如 `scripts/rebalance_shards.py`,或者做返一個
+  `pipe rebalance` CLI 子命令):對每個 segment,`hash(raw_id) % 3` 決定目標 shard;
+  同現存路徑所在 shard 唔同就:
+  1. rsync copy 去新 shard
+  2. name+size(或 checksum)全量核對
+  3. `segments.audio_path` catalog 路徑 transactional UPDATE(單一 SQL transaction,
+     唔會有「刪咗源頭但 catalog 仲指去舊路徑」嘅中間態)
+  4. 核對完先刪源頭
+  分批(~100G/batch)、監察 `dmesg`(§3 非破壞鐵律 + 過往 crash 前科,見 §11 風險表)。
+  由於 hash key 係 `raw_id`(唔係檔案路徑或副檔名),FLAC(新)同 WAV(舊)混合都會
+  一致咁分佈,唔會因為格式唔同而傾側落某一碟。
+- **完成標準**:`storage_layout.yaml` 定案,`pipe catalog verify --full` 全部 path
+  exists,§3 step 9 正式關閉。
+
+**排序理由(A → B → C,唔可以打亂)**:
+1. A 要盡快做,因為依家每一日新增嘅 segment 都仲係用緊舊 WAV 格式寫入,拖得就拖唔到
+   「新 segments = FLAC」呢個已經拍板嘅決定盡快生效。
+2. B 要喺 A 之後,理由淨係邏輯上獨立(A 改 segments,B 改 raw),但 B 必須排喺 C
+   之前,因為 B 釋放嘅 Drive2 空間正正係 C 嘅 shard 0 要用嘅位——冚唪唥掉轉次序會
+   令 C 冇位執行。
+3. C 排最尾,因為佢係全部三個當中最大型、最唔可逆嘅資料搬遷(§11 風險表「重 I/O
+   觸發系統不穩」);等 A/B 兩個編碼決定都塵埃落定先做一次搬,好過分兩次搬(FLAC
+   轉碼完再搬一次 vs 一次過搬)。
+
+**Gate(全部三步共通)**:§3 非破壞鐵律逐條(先核對後刪、絕不 blind overwrite);每
+batch 核對先可以進行下一步;catalog path/verified 狀態更新一律 transactional;三步
+完成後結尾跑一次 `pipe catalog verify --full`。
 
 ### P6 — Scale readiness(1 session)
 - 5-10× ingestion dry-run(youtube_channels.yaml 新 11 條 diversity channel 做試點)
@@ -851,9 +1072,14 @@ path resolution、journal replay、discovery SQL。用 pytest;repo 而家冇 tes
 
 ## 10. Open questions —— ✅ 已拍板(owner,2026-07-02)
 
-1. **10× segments 格式 = 傾向 FLAC,P6 出投影數據先落實**。而家唔郁現有 843G WAV;
-   新架構 decode 層一開始就支援 FLAC(soundfile 原生);P6 確認 10× 真係嚟緊先轉,
-   屆時 constraint #6 字面改做「48 kHz mono **lossless** master」由 owner 簽名。
+1. **10× segments 格式 = 傾向 FLAC,P6 出投影數據先落實** —— ✅ **已落實(2026-07-04,owner 簽名)**。
+   §9(下面)嘅容量投影(套 2.46× reject-clip overhead 之後)確認:WAV 大概得
+   ~6,300h(守到 5× 但守唔到 10× target),FLAC ~10,650h(剛好過 10×),Opus 遠超但
+   lossy 唔啱做 master。**新 segments 由今日起寫 FLAC**;而家 843G WAV 唔郁(唔重新
+   transcode 現有 master);decode 層(soundfile)原生支援兩者混讀,downstream(filter/
+   G2P/manifest export/canto-tts)透明。constraint #6 字面已改做「48 kHz mono
+   **lossless** master,never lower, never lossy」——見 CLAUDE.md 同 `DECISIONS.md`
+   2026-07-04 條目。
 2. **filtered 完全去物理化 = 批准**。P4 執行:刪 569G 物理複製,filtered = catalog
    `pass` bit + tier;`data/filtered/` 保留 symlink 樹做兼容;manifest audio_path 指
    segments master。
