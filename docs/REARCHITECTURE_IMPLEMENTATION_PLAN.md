@@ -1041,7 +1041,7 @@ Owner 揀咗今個 phase 淨係做 P5-A + P5-B(C 留待下個 phase,full-rebalan
 - 129/129 tests pass(新增 `tests/test_audio_bus.py` WAV/FLAC bit-exact round-trip +
   ffmpeg fallback 測試)。
 
-**P5-B(raw WAV → FLAC 轉碼)—— node 已建、transcode 已跑咗 2 個 batch,delete 待 owner 簽收**:
+**P5-B(raw WAV → FLAC 轉碼)—— 完全完成、關閉(2026-07-05 續)**:
 - 新 `pipeline/nodes/raw_flac.py` + `raw_flac` schema table + `pipe run raw.flac`
   CLI。Discovery SQL 喺原計劃基礎上加咗兩個修正(執行前查證發現):(1) 明確排除
   native container(`wav_path LIKE '%.wav'`)——ingest.download 落嘅 webm/m4a 永遠
@@ -1056,18 +1056,34 @@ Owner 揀咗今個 phase 淨係做 P5-A + P5-B(C 留待下個 phase,full-rebalan
 - **Batch 1(679 個 raw file,~100GB)+ Batch 2(658 個,~100GB)已完成轉碼+verify**:
   合共 1,757 個 raw_id 全部 `verified=true`,0 failed。Drive2 free space 244G→149G
   (FLAC 同原 WAV 並存,未刪除任何嘢)。
-- **⚠️ `--delete-verified` 未執行**:呢個係刪除原 WAV master 嘅不可逆操作,問咗 owner
-  兩次(AskUserQuestion)都冇回應(離開咗鍵盤)。跟返 owner 本身定嘅政策(「頭 1-2
-  batch 人手簽」),冇喺冇明確確認嘅情況下自把自為刪除——已經停低,catalog/disk
-  都處於安全、一致嘅狀態,等 owner 返嚟決定。
-- 剩餘 9,153 個 raw_id 未轉碼(~1.5TB)。
+- **`--delete-verified` 簽收記錄**:batch 1+2(1,757 個)嘅刪除問咗 owner 兩次
+  (AskUserQuestion)都冇回應(離開咗鍵盤)——跟返 owner 本身定嘅政策(「頭 1-2
+  batch 人手簽」),當時停低未刪。Owner 返嚟後喺同一個 session 內明確確認執行
+  (「1. 係咪確認執行 `--delete-verified`...2. 繼續轉碼餘下...」),於是:
+  1. 即刻執行 batch 1+2 嘅 `--delete-verified`:1,757 個 WAV 全部刪除,0 error。
+  2. Owner 嘅確認同時滿足咗「頭 1-2 batch 人手簽,之後自動」政策嘅門檻,於是寫咗
+     一個 loop script(`run_raw_flac_remaining.sh`):`--batch-gb 100` 轉碼
+     (內建逐 block bit-exact verify)→ `--delete-verified` → check 剩餘 → 重複,
+     直至 discovery 返 0 為止,全程用 `nohup ... & disown` 背景執行。
+  3. **剩餘 9,153 個 raw_id(batch 3–16,14 個 auto batch)全部轉碼+verify+delete
+     完成,0 failed。連同 batch 1+2,合共 10,910/10,910(100%)raw file 已由 WAV
+     轉為 FLAC,原 WAV master 全部安全刪除。**
+- 磁碟成果:Drive2 free space 由 backlog 開始前嘅 149G,逐 batch 遞增釋放,完成後
+  達 **1.3T free**(used 由 1.7T 跌到 589G)——實測壓縮比 ≈33-35%,同 gate test
+  估算一致。
+- 最終 catalog 核實(`raw_flac` 表):10,910 verified=true、10,910 wav_deleted_at
+  非空、0 failed;`raw_files.wav_path` 100% 指向 `.flac`,0 殘留 `.wav` reference。
+  Disk 上發現 10 個 catalog 外殘留 `.wav`(P5 開始前已存在嘅雜物,不受呢次轉碼
+  影響,唔屬於呢個 node 嘅職責範圍)。
 - 執行過程中兩次背景長跑 job 被 harness 意外 kill(非 crash,catalog 冇損壞,
   idempotent 可安全 resume)——改用 `nohup ... & disown` 寫落 log file 嘅方式代替
-  auto-background/`run_in_background`,穩定行完全程,呢個 session 之後嘅長 job 應該
-  沿用呢個做法。
+  auto-background/`run_in_background`,穩定行完全程,之後全部 16 個 batch(含
+  auto loop 嘅 14 個)都用呢個模式,冇再被 kill 過。
 - 129/129 tests pass(新增 `tests/test_raw_flac_node.py`,9 個測試,包括獨立 scratch
   DuckDB 嘅 discovery-SQL eligibility 驗證,冚 native-container 排除、reject-raw 納入、
   已轉碼排除三種情況)。
+- **P5-B 正式關閉**——冇再有 eligible raw WAV 待轉碼。下一步係 P5-C(三碟 sharding),
+  留返俾 owner 決定幾時開始。
 
 **`pipe catalog verify --full`**:呢個 flag 實際上未存在(CLI 淨係得無參數嘅
 `pipe catalog verify`)——plan doc 呢句原本寫嘅係前瞻性描述,唔係已有工具。跑咗現有
@@ -1083,10 +1099,11 @@ Owner 揀咗今個 phase 淨係做 P5-A + P5-B(C 留待下個 phase,full-rebalan
 (catalog 外、早於 native-container 政策落實嘅殘留,對 pipeline 冇影響)——留俾
 owner 決定去留。
 
-**Owner 返嚟後嘅下一步**:(1)確認/執行 batch 1+2 嘅 `pipe run raw.flac
---delete-verified`;(2)決定繼續轉碼餘下 9,153 個 raw_id(每次 `--batch-gb 100`,
-沿用 nohup 模式)嘅節奏;(3)兩者都完成後,先開始 P5-C(三碟 sharding,
-full-rebalance)。
+**Owner 返嚟後續(2026-07-05 同日完成)**:owner 明確確認咗 batch 1+2 嘅
+`--delete-verified` 同繼續轉碼餘下 9,153 個 raw_id 兩個步驟,兩者已喺同一 session
+內全部執行完畢(見上面「完全完成、關閉」段落)。P5-A + P5-B **正式全部關閉**。
+下一步係 P5-C(三碟 sharding,full-rebalance 原設計)——留返俾 owner 決定幾時
+開始下個 phase。
 
 ### P6 — Scale readiness(1 session)
 - 5-10× ingestion dry-run(youtube_channels.yaml 新 11 條 diversity channel 做試點)
