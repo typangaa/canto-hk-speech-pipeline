@@ -1213,6 +1213,15 @@ def _pregate_one(
             t = torch.from_numpy(wav48).float().unsqueeze(0)
             resampler = torchaudio.transforms.Resample(sr, 16000)
             wav16 = resampler(t).squeeze(0).numpy()
+            # torchaudio's sinc-based resampler can overshoot slightly past
+            # [-1, 1] (Gibbs phenomenon) on audio whose peaks already sit at
+            # full scale — found 2026-07-05 running this at production scale
+            # for the first time (409/11266 segments hit it, all from
+            # already-clipped source audio). speechmos.dnsmos.run() validates
+            # its input range strictly and raises on the tiniest overshoot;
+            # clamping here is standard practice and doesn't materially
+            # change the perceptual score.
+            wav16 = np.clip(wav16, -1.0, 1.0)
 
             result = _dnsmos_mod.run(wav16, sr=16000)
             dns_score = round(float(result["ovrl_mos"]), 3)
