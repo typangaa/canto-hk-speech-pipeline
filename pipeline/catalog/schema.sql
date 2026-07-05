@@ -343,7 +343,8 @@ CREATE TABLE IF NOT EXISTS task_runs (
 -- lang_screen.auto DAG node (raw-level pre-segmentation language pre-filter, added
 -- 2026-07-04): coarse Mandarin-vs-Cantonese screen run BEFORE segment.diarize, so a
 -- raw file that turns out to be Mandarin-dominant never pays for diarization or (once
--- P5 lands) opus transcoding. Keyed by raw_id, NOT segment id — this is a whole-file
+-- P5-B lands) FLAC transcoding (raw backlog format decided FLAC, not opus — see
+-- DECISIONS.md 2026-07-04 "Storage format policy FINALIZED"). Keyed by raw_id, NOT segment id — this is a whole-file
 -- decision, not a per-clip one. Deliberately permissive: this is a coarse sampled
 -- pre-filter that only rejects on a high mandarin_ratio_raw, NOT a replacement for
 -- the existing fine-grained per-segment lang-id in labels_lang/label.suite, which
@@ -380,6 +381,29 @@ CREATE TABLE IF NOT EXISTS lang_screen (
     reviewed_at           TIMESTAMP,
     screened_at           TIMESTAMP,
     provenance            TEXT    -- 'lang_screen_auto' | 'read_failed'
+);
+
+-- raw.flac DAG node (P5-B, added 2026-07-05): transcodes the existing ~1.6T WAV raw
+-- backlog to lossless FLAC (raw backlog format decided FLAC — see DECISIONS.md
+-- 2026-07-04 "Storage format policy FINALIZED"; NOT opus, that direction was
+-- reopened and rejected same day). Keyed by raw_id, one row per raw file (whole-file
+-- decision, matching lang_screen's own raw-level granularity). Eligibility (see
+-- pipeline/nodes/raw_flac.py's discovery SQL) requires EITHER a raw_segments row
+-- (already segmented — cut first, so a mid-transcode crash never forces re-decoding
+-- the source for segmentation) OR a lang_screen 'reject' decision (a rejected raw
+-- file will never enter raw_segments via segment.diarize, so it must be transcoded
+-- via this alternate path or its WAV would sit on Drive2 forever). Never targets
+-- raw_files whose wav_path is a native (non-.wav) container — those are already
+-- lossy-compressed at the source and re-encoding to FLAC would only inflate size
+-- with zero fidelity gain (measured 2.1-3.5x bigger, see DECISIONS.md).
+CREATE TABLE IF NOT EXISTS raw_flac (
+    raw_id         TEXT PRIMARY KEY,
+    flac_path      TEXT,
+    duration_sec   DOUBLE,     -- measured post-transcode, compared against raw_files.duration_sec for a sanity check
+    verified       BOOLEAN,    -- true only after a full PCM bit-exact decode comparison against the original WAV
+    wav_deleted_at TIMESTAMP,  -- NULL = original .wav still on disk, non-null = deleted (only after verified=true and a signed-off batch)
+    transcoded_at  TIMESTAMP,
+    provenance     TEXT        -- 'raw_flac' | 'transcode_failed'
 );
 
 -- Indexes for common query patterns

@@ -297,6 +297,27 @@ def cmd_run_pregate_snr(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_run_raw_flac(args: argparse.Namespace) -> int:
+    import asyncio
+    import logging
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+    if args.delete_verified:
+        from pipeline.nodes.raw_flac import run_raw_flac_delete_verified
+        result = run_raw_flac_delete_verified(limit=args.limit)
+    else:
+        from pipeline.nodes.raw_flac import run_raw_flac_transcode
+        result = asyncio.run(run_raw_flac_transcode(
+            workers=args.workers,
+            batch_size=args.batch,
+            batch_gb=args.batch_gb,
+            limit=args.limit,
+        ))
+    print(f"\nDone: {result}")
+    return 0
+
+
 def cmd_run_tier_assign(args: argparse.Namespace) -> int:
     import asyncio
     import logging
@@ -442,7 +463,7 @@ def main() -> int:
     p_run_diarize.add_argument("--limit", type=int, default=None,
                                 help="process only the first N discovered raw files (testing)")
     p_run_diarize.set_defaults(func=cmd_run_segment_diarize)
-    p_run_vadcut = run_sub.add_parser("segment.vad_cut", help="P3: Silero VAD within turns -> 48kHz WAV segments (CPU+IO, in-supervisor)")
+    p_run_vadcut = run_sub.add_parser("segment.vad_cut", help="P3: Silero VAD within turns -> 48kHz FLAC segments (CPU+IO, in-supervisor; FLAC since 2026-07-05 P5-A)")
     p_run_vadcut.add_argument("--threads", type=int, default=None, help="thread-pool size (default: min(16, 2*ncpu))")
     p_run_vadcut.add_argument("--limit", type=int, default=None,
                                help="process only the first N discovered raw files (testing)")
@@ -454,6 +475,15 @@ def main() -> int:
     p_run_pregate.add_argument("--batch", type=int, default=500)
     p_run_pregate.add_argument("--limit", type=int, default=None)
     p_run_pregate.set_defaults(func=cmd_run_pregate_snr)
+    p_run_rawflac = run_sub.add_parser("raw.flac", help="P5-B: transcode raw WAV backlog to lossless FLAC (CPU+IO); --delete-verified reclaims space for already-verified transcodes")
+    p_run_rawflac.add_argument("--workers", type=int, default=8)
+    p_run_rawflac.add_argument("--batch", type=int, default=50, help="items per catalog-commit batch")
+    p_run_rawflac.add_argument("--batch-gb", type=float, default=None,
+                                help="stop after ~this many GiB of source .wav this invocation")
+    p_run_rawflac.add_argument("--limit", type=int, default=None)
+    p_run_rawflac.add_argument("--delete-verified", action="store_true",
+                                help="delete original .wav for already-verified transcodes instead of transcoding")
+    p_run_rawflac.set_defaults(func=cmd_run_raw_flac)
     p_run_asr = run_sub.add_parser("asr.transcribe", help="P3: dual faster-whisper models split across GPUs")
     p_run_asr.add_argument("--models", default="canto_ft,whisper_v3",
                             help="comma-separated model keys, paired positionally with --devices")
