@@ -406,6 +406,43 @@ CREATE TABLE IF NOT EXISTS raw_flac (
     provenance     TEXT        -- 'raw_flac' | 'transcode_failed'
 );
 
+-- P5-C (pipeline/nodes/rebalance.py): one-time cross-disk shard rebalance of the
+-- `segments` table onto the 3-way hash(coalesce(raw_id, id)) % n_shards layout in
+-- config/storage_layout.yaml's `sharding` block. Same two-phase shape as raw_flac:
+-- phase 1 (default) copies + byte-verifies into the target shard and writes this
+-- row with verified=true, WITHOUT touching segments.audio_path or deleting the
+-- original file; phase 2 (--delete-verified) does the transactional catalog
+-- update + physical delete of the old copy, only for rows already verified=true.
+-- pipeline/nodes/recover_orphans.py (2026-07-06) -- physical segment WAVs found on
+-- disk that scripts/03_segment.py (the pre-P0 legacy pipeline) cut as VAD candidates
+-- but that never made it into manifest.jsonl / the `segments` table (rejected by the
+-- legacy filter stage, or simply never finished processing). Each row is EITHER a
+-- recovery (status='recovered' -- backfilled into segments/asr_results/asr_agreement
+-- so the normal filter.text/filter.acoustic/filter.decide/tier.assign nodes decide its
+-- fate like any other segment) OR a queued-not-deleted low-quality candidate
+-- (status='pending_delete' -- flagged for a future, separately-approved cleanup pass;
+-- this table never triggers a physical delete by itself).
+CREATE TABLE IF NOT EXISTS orphan_segments (
+    audio_path    TEXT PRIMARY KEY,
+    source        TEXT,
+    bucket        TEXT,       -- classification bucket, see recover_orphans.py CLASSIFY
+    bytes         BIGINT,
+    status        TEXT,       -- 'recovered' | 'pending_delete'
+    recovered_id  TEXT,       -- segments.id, set only when status='recovered'
+    classified_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS segment_shard_migrations (
+    id           TEXT PRIMARY KEY,  -- segments.id
+    old_path     TEXT,
+    new_path     TEXT,
+    target_shard INTEGER,
+    verified     BOOLEAN,    -- true only after a full byte-for-byte comparison against the original
+    migrated_at  TIMESTAMP,  -- NULL = old copy still on disk, non-null = catalog repointed + old copy deleted
+    copied_at    TIMESTAMP,
+    provenance   TEXT        -- 'rebalance' | 'copy_failed'
+);
+
 -- Indexes for common query patterns
 
 CREATE INDEX IF NOT EXISTS idx_segments_source     ON segments (source);

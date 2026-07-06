@@ -184,6 +184,19 @@ _STORAGE = _yaml.safe_load(
 )["storage"]
 SEGMENTS_ROOT = Path(_STORAGE["segments_root"])
 
+# P5-C (2026-07-06): when sharding is enabled, new segments are written straight
+# onto their final shard (hash(raw_id) % n_shards — raw_id is always present
+# here, this function's own parameter) instead of always landing on Drive4 and
+# needing a later rebalance pass. See config/storage_layout.py shard_root() /
+# pipeline/nodes/rebalance.py (one-time migration of pre-P5-C segments).
+from config.storage_layout import SHARDING as _SHARDING
+from config.storage_layout import shard_root as _shard_root
+
+
+def _segments_out_dir(raw_id: str, source: str) -> Path:
+    root = _shard_root(raw_id) if _SHARDING.get("enabled") else SEGMENTS_ROOT
+    return root / source
+
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
@@ -863,7 +876,7 @@ def _vad_cut_one(
     import soundfile as sf
     from pipeline.audio.bus import decode
 
-    out_dir = SEGMENTS_ROOT / source
+    out_dir = _segments_out_dir(raw_id, source)
     out_dir.mkdir(parents=True, exist_ok=True)
     stem = Path(wav_path).stem
 

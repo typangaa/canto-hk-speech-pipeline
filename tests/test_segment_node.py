@@ -11,6 +11,7 @@ from pipeline.nodes.segment import (
     _check_legacy_sidecar,
     _pregate_one,
     _segment_id,
+    _segments_out_dir,
     _vad_cut_one,
     compute_pregate_snr,
 )
@@ -129,6 +130,27 @@ def test_pregate_one_rejects_low_snr(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# _segments_out_dir() — P5-C sharding-aware output dir selection.
+# ---------------------------------------------------------------------------
+
+def test_segments_out_dir_falls_back_to_segments_root_when_disabled(tmp_path, monkeypatch):
+    monkeypatch.setattr(segment, "SEGMENTS_ROOT", tmp_path)
+    monkeypatch.setattr(segment, "_SHARDING", {"enabled": False})
+
+    out_dir = _segments_out_dir("some_raw_id", "podcast")
+    assert out_dir == tmp_path / "podcast"
+
+
+def test_segments_out_dir_uses_shard_root_when_enabled(tmp_path, monkeypatch):
+    shard0, shard1 = tmp_path / "shard0", tmp_path / "shard1"
+    monkeypatch.setattr(segment, "_SHARDING", {"enabled": True, "n_shards": 2})
+    monkeypatch.setattr(segment, "_shard_root", lambda key: shard0 if key == "a" else shard1)
+
+    assert _segments_out_dir("a", "podcast") == shard0 / "podcast"
+    assert _segments_out_dir("b", "podcast") == shard1 / "podcast"
+
+
+# ---------------------------------------------------------------------------
 # _vad_cut_one() — VAD-and-cut plumbing, with a monkeypatched VAD window so the
 # test exercises the cutting/writing/id-generation logic deterministically
 # rather than depending on Silero VAD's actual speech-detection behaviour on
@@ -137,6 +159,7 @@ def test_pregate_one_rejects_low_snr(tmp_path):
 
 def test_vad_cut_one_writes_expected_segment(tmp_path, monkeypatch):
     monkeypatch.setattr(segment, "SEGMENTS_ROOT", tmp_path)
+    monkeypatch.setattr(segment, "_SHARDING", {"enabled": False})
 
     duration = 6.0
     rng = np.random.default_rng(0)
@@ -176,6 +199,7 @@ def test_vad_cut_one_writes_expected_segment(tmp_path, monkeypatch):
 
 def test_vad_cut_one_skips_windows_outside_duration_bounds(tmp_path, monkeypatch):
     monkeypatch.setattr(segment, "SEGMENTS_ROOT", tmp_path)
+    monkeypatch.setattr(segment, "_SHARDING", {"enabled": False})
 
     duration = 25.0  # deliberately long turn
     rng = np.random.default_rng(0)
@@ -210,6 +234,7 @@ def test_vad_cut_one_skips_windows_outside_duration_bounds(tmp_path, monkeypatch
 
 def test_vad_cut_one_unreadable_audio_reports_error(tmp_path, monkeypatch):
     monkeypatch.setattr(segment, "SEGMENTS_ROOT", tmp_path)
+    monkeypatch.setattr(segment, "_SHARDING", {"enabled": False})
 
     result = _vad_cut_one(
         raw_id="rawid3",

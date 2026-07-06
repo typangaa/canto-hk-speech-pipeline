@@ -7,7 +7,7 @@
 #   sdb1     ext4  /mnt/Drive2   warm: raw corpus (transient — delete after segment)
 #   sdd1     ext4  /mnt/Drive4   warm: filtered + segments (working corpus)
 #   sda1     NTFS  /mnt/Drive1   cold: personal archive (Windows share)
-#   sdc1     ext4  /mnt/Drive3   warm: reformatted 2026-07-02, empty — awaiting §3 step 9 sharding
+#   sdc1     ext4  /mnt/Drive3   warm: segments shard 1 (P5-C, 2026-07-06)
 #
 # Raw policy: TRANSIENT — delete raw source after segment+label pass is complete.
 # Never publish raw audio / source URLs / reconstruction recipe (zero-risk policy).
@@ -52,19 +52,24 @@ storage:
   drive1: /mnt/Drive1
   personal_archive: /mnt/Drive1/Personal
 
-  # ── Warm tier: Drive3 ext4 (sdc1, 1.8T) — reformatted 2026-07-02, empty ───
-  # Awaiting §3 step 9 (final 3-way raw/segments/filtered sharding decision).
-  # Not yet assigned a role — do not write here until step 9 lands.
+  # ── Warm tier: Drive3 ext4 (sdc1, 1.8T) — segments shard 1 (P5-C, 2026-07-06) ──
   drive3: /mnt/Drive3
 
-# Cross-disk sharding for 5-10x scale (5-10k h filtered)
-# Each source gets pinned to a shard by consistent hash(source_id) % n_shards
+# Cross-disk sharding for the `segments` table (P5-C, 2026-07-06 — see
+# docs/REARCHITECTURE_IMPLEMENTATION_PLAN.md §8 P5-C). Shard key is
+# hash(coalesce(raw_id, id)) % n_shards (config/storage_layout.py: shard_index /
+# shard_root) — raw_id when the segment was cut by this pipeline, falling back to
+# the segment's own id for the 455,299 P0 legacy-imported rows that never got a
+# raw_id link. pipeline/nodes/segment.py's segment.vad_cut consults this for
+# every NEW segment write; pipeline/nodes/rebalance.py does the one-time
+# migration of pre-existing segments onto this layout.
 sharding:
-  enabled: false   # flip true once §3 step 9 assigns Drive3's role and repartitions data
-  n_shards: 2      # currently: Drive2 (raw) + Drive4 (filtered/seg). Drive3 ext4 is ready but unassigned.
+  enabled: true
+  n_shards: 3
   shard_roots:
-    - /mnt/Drive2/canto-corpus   # shard 0 — raw (transient)
-    - /mnt/Drive4/canto          # shard 1 — filtered + segments
+    - /mnt/Drive2/canto/segments   # shard 0 — space freed by P5-B raw WAV->FLAC transcode
+    - /mnt/Drive3/canto/segments   # shard 1 — was empty, now in use
+    - /mnt/Drive4/canto/segments   # shard 2 — pre-P5-C home of all 466,710 segments
 
 # Decoder cache config (decode-once fan-out)
 decode_cache:

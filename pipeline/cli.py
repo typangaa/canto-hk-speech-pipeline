@@ -318,6 +318,39 @@ def cmd_run_raw_flac(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_run_recover_orphans(args: argparse.Namespace) -> int:
+    import asyncio
+    import logging
+
+    from pipeline.nodes.recover_orphans import run_recover_orphans
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    result = asyncio.run(run_recover_orphans(limit=args.limit))
+    print(f"\nDone: {result}")
+    return 0
+
+
+def cmd_run_rebalance_segments(args: argparse.Namespace) -> int:
+    import asyncio
+    import logging
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+    if args.delete_verified:
+        from pipeline.nodes.rebalance import run_rebalance_delete_verified
+        result = run_rebalance_delete_verified(limit=args.limit)
+    else:
+        from pipeline.nodes.rebalance import run_rebalance_copy
+        result = asyncio.run(run_rebalance_copy(
+            workers=args.workers,
+            batch_size=args.batch,
+            batch_gb=args.batch_gb,
+            limit=args.limit,
+        ))
+    print(f"\nDone: {result}")
+    return 0
+
+
 def cmd_run_tier_assign(args: argparse.Namespace) -> int:
     import asyncio
     import logging
@@ -484,6 +517,18 @@ def main() -> int:
     p_run_rawflac.add_argument("--delete-verified", action="store_true",
                                 help="delete original .wav for already-verified transcodes instead of transcoding")
     p_run_rawflac.set_defaults(func=cmd_run_raw_flac)
+    p_run_recover = run_sub.add_parser("recover.orphans", help="one-time: classify legacy VAD-cut WAVs missing from the catalog, backfill promising ones, queue the rest as pending_delete")
+    p_run_recover.add_argument("--limit", type=int, default=None)
+    p_run_recover.set_defaults(func=cmd_run_recover_orphans)
+    p_run_rebalance = run_sub.add_parser("rebalance.segments", help="P5-C: spread segments across the 3-way Drive2/3/4 shard (CPU+IO); --delete-verified reclaims space for already-verified migrations")
+    p_run_rebalance.add_argument("--workers", type=int, default=8)
+    p_run_rebalance.add_argument("--batch", type=int, default=200, help="items per catalog-commit batch")
+    p_run_rebalance.add_argument("--batch-gb", type=float, default=None,
+                                  help="stop after ~this many GiB of source file this invocation")
+    p_run_rebalance.add_argument("--limit", type=int, default=None)
+    p_run_rebalance.add_argument("--delete-verified", action="store_true",
+                                  help="delete original file for already-verified migrations instead of copying")
+    p_run_rebalance.set_defaults(func=cmd_run_rebalance_segments)
     p_run_asr = run_sub.add_parser("asr.transcribe", help="P3: dual faster-whisper models split across GPUs")
     p_run_asr.add_argument("--models", default="canto_ft,whisper_v3",
                             help="comma-separated model keys, paired positionally with --devices")
