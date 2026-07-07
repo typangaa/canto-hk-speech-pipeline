@@ -26,21 +26,46 @@ MP4/m4a in particular), and ingest.probe (pipeline/nodes/ingest_probe.py)
 already exists specifically to ffprobe these fields for any raw file
 shortly after download — no need to duplicate that logic here.
 
-Writes directly to raw_files (catalog-first, matching every other P3+ node)
-instead of round-tripping through metadata/downloaded.jsonl. raw_id keeps
-the legacy id scheme so downstream joins against pre-existing rows keep
-working: md5(audio_url)[:8] for RSS episodes, the 11-char YouTube video id
-for YouTube.
+Two-phase, JSON-staged (2026-07-06 revision): every other P3+ node opens a
+single read-write DuckDB connection and holds it for its *entire* runtime
+(pipeline/catalog/catalog.py's documented single-writer constraint — only
+one process may hold that connection at a time). ingest.download's actual
+work is 99% network I/O (yt-dlp / RSS fetch, potentially hours per run)
+and only ever needed the connection for two cheap things: an up-front
+dedup read and a small upsert after each entry. Holding a writer open for
+the whole download run meant it could never overlap with any other
+catalog-writing node (e.g. filter.acoustic backfill runs that also take
+hours) — a purely architectural collision, not a real resource conflict.
+
+So this node now never opens a DuckDB connection at all during the
+download phase:
+  - Dedup reads a point-in-time JSON snapshot (KNOWN_IDS_SNAPSHOT) instead
+    of `SELECT raw_id FROM raw_files` live, plus whatever this run has
+    itself already appended to STAGING_FILE (so re-running before a commit
+    never re-downloads the same episode/video twice).
+  - Each entry's new rows are appended as JSON lines to STAGING_FILE
+    instead of upserted into `raw_files`.
+  - `ingest.commit` (run_ingest_commit(), CLI: `pipe run ingest.commit`) is
+    the only part of this node that touches the catalog: it opens one
+    short-lived connection, upserts everything staged, refreshes
+    KNOWN_IDS_SNAPSHOT from the now-current `raw_files`, and archives the
+    consumed staging file. Run it any time nothing else holds the writer
+    lock — it takes seconds, not hours.
+
+raw_id keeps the legacy id scheme so downstream joins against pre-existing
+rows keep working: md5(audio_url)[:8] for RSS episodes, the 11-char
+YouTube video id for YouTube.
 """
 
 import argparse
 import asyncio
 import hashlib
+import json
 import logging
 import re
 import subprocess
 import time
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import feedparser
@@ -52,6 +77,9 @@ log = logging.getLogger(__name__)
 ROOT = Path(__file__).resolve().parent.parent.parent
 SOURCES_DIR = ROOT / "sources"
 RAW_DIR = ROOT / "data" / "raw"
+METADATA_DIR = ROOT / "metadata"
+STAGING_FILE = METADATA_DIR / "ingest_download_staging.jsonl"
+KNOWN_IDS_SNAPSHOT = METADATA_DIR / "raw_files_known_ids.json"
 
 SOURCE_FILES = {
     "rthk": SOURCES_DIR / "rthk_sources.yaml",
@@ -107,14 +135,80 @@ def discover_active_entries(source: str) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Catalog dedup
+# Catalog dedup — via JSON snapshot + staged-but-uncommitted rows, NEVER a
+# live DB read during the download phase (see module docstring).
 # ---------------------------------------------------------------------------
 
 def existing_raw_ids(conn, source: str) -> set[str]:
+    """Live DB read — used only by run_ingest_commit() to rebuild the
+    snapshot after a commit, never during the download phase itself."""
     rows = conn.execute(
         "SELECT raw_id FROM raw_files WHERE source = ?", [source]
     ).fetchall()
     return {r[0] for r in rows}
+
+
+def load_known_ids_snapshot() -> dict[str, list[str]]:
+    """Point-in-time dedup snapshot written by run_ingest_commit(). Missing
+    file (e.g. before the very first commit) is treated as empty — downloads
+    proceed, worst case a few already-known items get re-staged, which
+    ingest.commit's raw_id-keyed upsert absorbs harmlessly as a no-op
+    duplicate, not data loss."""
+    if not KNOWN_IDS_SNAPSHOT.exists():
+        log.warning(
+            f"{KNOWN_IDS_SNAPSHOT.name} not found — dedup will miss anything "
+            f"downloaded since the last `ingest.commit`. Run `pipe run "
+            f"ingest.commit` once to bootstrap it if this is unexpected."
+        )
+        return {}
+    with open(KNOWN_IDS_SNAPSHOT, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def write_known_ids_snapshot(conn) -> None:
+    """Rebuild KNOWN_IDS_SNAPSHOT from the live `raw_files` table. Called by
+    run_ingest_commit() right after it upserts, so the next `ingest.download`
+    run's dedup reflects everything committed so far."""
+    snapshot = {
+        src: sorted(existing_raw_ids(conn, src)) for src in SOURCE_FILES
+    }
+    METADATA_DIR.mkdir(parents=True, exist_ok=True)
+    with open(KNOWN_IDS_SNAPSHOT, "w", encoding="utf-8") as f:
+        json.dump(snapshot, f, ensure_ascii=False, indent=2)
+
+
+def load_staged_ids(source: str) -> set[str]:
+    """raw_ids already appended to STAGING_FILE (by this or a prior,
+    not-yet-committed run) — prevents re-downloading the same item twice
+    across multiple staged sessions before `ingest.commit` runs."""
+    if not STAGING_FILE.exists():
+        return set()
+    ids: set[str] = set()
+    with open(STAGING_FILE, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if row.get("source") == source:
+                ids.add(row["raw_id"])
+    return ids
+
+
+def append_staged_rows(rows: list[dict]) -> None:
+    """Append newly-downloaded rows as JSON lines — no DB connection opened.
+    Flushed per call so a killed/crashed download run loses at most the
+    in-flight entry, never previously-appended ones."""
+    if not rows:
+        return
+    METADATA_DIR.mkdir(parents=True, exist_ok=True)
+    with open(STAGING_FILE, "a", encoding="utf-8") as f:
+        for row in rows:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+            f.flush()
 
 
 # ---------------------------------------------------------------------------
@@ -177,7 +271,7 @@ def _download_rss_episode(
         "language": entry.get("language", "yue"),
         "duration_sec": None,   # filled in by ingest.probe (ffprobe)
         "sample_rate": None,    # filled in by ingest.probe (ffprobe)
-        "downloaded_at": date.today(),
+        "downloaded_at": date.today().isoformat(),
     }
 
 
@@ -324,7 +418,7 @@ def _download_youtube_source(
             "language": entry.get("language", "yue"),
             "duration_sec": None,   # filled in by ingest.probe (ffprobe)
             "sample_rate": None,    # filled in by ingest.probe (ffprobe)
-            "downloaded_at": date.today(),
+            "downloaded_at": date.today().isoformat(),
         })
         known_ids.add(raw_id)
 
@@ -338,19 +432,20 @@ def _download_youtube_source(
 async def run_ingest_download(
     *, source: str = "all", dry_run: bool = False, limit: int | None = None,
 ) -> dict:
-    from pipeline.catalog.catalog import connect, upsert_rows
-    from pipeline.orchestrator.journal import new_run_id, record_batch
-
-    conn = connect()
+    """Download phase — NEVER opens a DuckDB connection (see module
+    docstring). Dedups against KNOWN_IDS_SNAPSHOT + STAGING_FILE, appends new
+    rows to STAGING_FILE. Safe to run concurrently with any other
+    catalog-writing node; run `ingest.commit` afterward (or anytime the
+    writer lock is free) to land the staged rows in `raw_files`."""
+    snapshot = load_known_ids_snapshot()
     targets = list(SOURCE_FILES) if source == "all" else [source]
-    run_id = new_run_id("ingest.download")
 
     args = argparse.Namespace(dry_run=dry_run, limit=limit)
     total = 0
     for src_name in targets:
         entries = discover_active_entries(src_name)
         log.info(f"=== {src_name}: {len(entries)} active source(s) ===")
-        known_ids = existing_raw_ids(conn, src_name)
+        known_ids = set(snapshot.get(src_name, [])) | load_staged_ids(src_name)
 
         for entry in entries:
             entry_type = entry.get("type", "")
@@ -366,14 +461,75 @@ async def run_ingest_download(
                 rows = []
 
             if rows and not dry_run:
-                upsert_rows(conn, "raw_files", rows, ["raw_id"])
-                record_batch(conn, run_id, "ingest.download",
-                             [r["raw_id"] for r in rows], "ok")
+                append_staged_rows(rows)
             total += len(rows)
             log.info(f"  {entry['name']}: {len(rows)} new download(s)")
 
-    log.info(f"DONE: {total} new raw file(s), run_id={run_id}")
-    return {"downloaded": total, "run_id": run_id}
+    log.info(
+        f"DONE: {total} new raw file(s) staged to {STAGING_FILE.name} "
+        f"(run `pipe run ingest.commit` to land them in the catalog)"
+    )
+    return {"staged": total}
+
+
+# ---------------------------------------------------------------------------
+# Commit phase — the ONLY part of this node that touches DuckDB. Short-lived:
+# opens a connection, upserts everything staged, refreshes the dedup
+# snapshot, archives the consumed staging file. Run whenever the writer lock
+# is free (no need to coordinate with an in-progress download run — they
+# never touch the same file at overlapping times: download only appends,
+# commit only reads-then-archives-by-rename).
+# ---------------------------------------------------------------------------
+
+def _read_staged_rows() -> list[dict]:
+    if not STAGING_FILE.exists():
+        return []
+    rows: list[dict] = []
+    with open(STAGING_FILE, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError as exc:
+                log.warning(f"skipping malformed staged line: {exc}")
+    return rows
+
+
+async def run_ingest_commit() -> dict:
+    from pipeline.catalog.catalog import connect, upsert_rows
+    from pipeline.orchestrator.journal import new_run_id, record_batch
+
+    staged = _read_staged_rows()
+    # last-write-wins by raw_id — harmless if the same item was staged twice
+    # across separate (e.g. resumed) download runs before a commit.
+    by_id = {row["raw_id"]: row for row in staged if "raw_id" in row}
+    rows = list(by_id.values())
+
+    conn = connect()
+    run_id = new_run_id("ingest.download")
+    if rows:
+        upsert_rows(conn, "raw_files", rows, ["raw_id"])
+        record_batch(conn, run_id, "ingest.download", list(by_id.keys()), "ok")
+    write_known_ids_snapshot(conn)
+
+    archived_to = None
+    if STAGING_FILE.exists():
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        archived_to = METADATA_DIR / f"ingest_download_staging.committed-{stamp}.jsonl"
+        STAGING_FILE.rename(archived_to)
+
+    log.info(
+        f"ingest.commit DONE: {len(rows)} row(s) landed in raw_files, "
+        f"snapshot refreshed, run_id={run_id}"
+        + (f", staging archived to {archived_to.name}" if archived_to else "")
+    )
+    return {
+        "committed": len(rows),
+        "run_id": run_id,
+        "archived_to": str(archived_to) if archived_to else None,
+    }
 
 
 def main() -> int:
@@ -387,6 +543,13 @@ def main() -> int:
     result = asyncio.run(run_ingest_download(
         source=parsed.source, dry_run=parsed.dry_run, limit=parsed.limit,
     ))
+    print(f"\nDone: {result}")
+    return 0
+
+
+def main_commit() -> int:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    result = asyncio.run(run_ingest_commit())
     print(f"\nDone: {result}")
     return 0
 
