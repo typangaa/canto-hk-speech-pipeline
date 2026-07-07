@@ -335,6 +335,50 @@ async def _run_many_adapt_asr_agreement(args: argparse.Namespace, conn) -> dict:
     return await run_asr_agreement(conn=conn, batch_size=args.batch, limit=args.limit)
 
 
+async def _run_many_adapt_ingest_commit(args: argparse.Namespace, conn) -> dict:
+    from pipeline.nodes.ingest_download import run_ingest_commit
+    return await run_ingest_commit(conn=conn)
+
+
+async def _run_many_adapt_speaker_embed(args: argparse.Namespace, conn) -> dict:
+    from pipeline.nodes.speaker import run_speaker_embed
+    devices = [d.strip() for d in args.devices.split(",")]
+    return await run_speaker_embed(
+        devices,
+        conn=conn,
+        gpu_policy=args.gpu_policy,
+        batch_size=args.batch,
+        mem_fraction=args.mem_fraction,
+        limit=args.limit,
+    )
+
+
+async def _run_many_adapt_speaker_cluster(args: argparse.Namespace, conn) -> dict:
+    from pipeline.nodes.speaker import run_speaker_cluster
+    sources = [s.strip() for s in args.sources.split(",")] if args.sources else None
+    return await run_speaker_cluster(
+        conn=conn, threshold=args.threshold, sources=sources, limit=args.limit,
+    )
+
+
+async def _run_many_adapt_lang_screen_auto(args: argparse.Namespace, conn) -> dict:
+    from pipeline.nodes.lang_screen import run_lang_screen_auto
+    devices = [d.strip() for d in args.devices.split(",")]
+    return await run_lang_screen_auto(
+        devices,
+        conn=conn,
+        gpu_policy=args.gpu_policy,
+        batch_size=args.batch,
+        mem_fraction=args.mem_fraction,
+        limit=args.limit,
+    )
+
+
+async def _run_many_adapt_tier_assign(args: argparse.Namespace, conn) -> dict:
+    from pipeline.nodes.tier import run_tier_assign
+    return await run_tier_assign(conn=conn, batch_size=args.batch, limit=args.limit)
+
+
 # Nodes wired up for `pipe run-many`. A node must accept a `conn=` kwarg
 # (dependency-injected DuckDB connection/cursor) before it can be added here —
 # see docs/ORCHESTRATOR_PLAN.md for the full call-site inventory and the
@@ -345,6 +389,11 @@ RUN_MANY_ADAPTERS = {
     "label.music": _run_many_adapt_label_music,
     "asr.transcribe": _run_many_adapt_asr_transcribe,
     "asr.agreement": _run_many_adapt_asr_agreement,
+    "ingest.commit": _run_many_adapt_ingest_commit,
+    "speaker.embed": _run_many_adapt_speaker_embed,
+    "speaker.cluster": _run_many_adapt_speaker_cluster,
+    "lang_screen.auto": _run_many_adapt_lang_screen_auto,
+    "tier.assign": _run_many_adapt_tier_assign,
 }
 
 

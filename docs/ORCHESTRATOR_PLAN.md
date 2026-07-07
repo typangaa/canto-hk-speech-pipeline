@@ -1,15 +1,18 @@
 # Single-Process Concurrent Orchestrator — Implementation Plan
 
-Status: **priority-1 pair + bonus node + asr.py IMPLEMENTED AND VALIDATED LIVE,
-running 2026-07-07**. `conn=` injected into `run_filter_acoustic`,
+Status: **10/22 call sites done, `pipe run-many` VALIDATED LIVE, running
+2026-07-07**. `conn=` injected into `run_filter_acoustic`,
 `run_segment_diarize`, `run_label_music`, `run_asr_transcribe`,
-`run_asr_agreement`; `pipe run-many` built; smoke-tested and then run at full
-backlog scale against the live catalog — first `label.music` (GPU) +
-`filter.acoustic` (CPU) 2026-07-06 (both finished), then `asr.transcribe`
-(2 GPUs) + `filter.acoustic` (CPU) launched 2026-07-07 once `label.music`
-completed and GPUs sat idle again. Remaining ~17 call sites NOT yet done —
-extend incrementally as new concurrent-run needs come up (see "What's left"
-below). Written 2026-07-06, updated 2026-07-07.
+`run_asr_agreement`, `run_ingest_commit`, `run_speaker_embed`,
+`run_speaker_cluster`, `run_lang_screen_auto`, `run_tier_assign`; smoke-tested
+and then run at full backlog scale against the live catalog — first
+`label.music` (GPU) + `filter.acoustic` (CPU) 2026-07-06 (both finished),
+then `asr.transcribe` (2 GPUs) + `filter.acoustic` (CPU) launched 2026-07-07
+once `label.music` completed and GPUs sat idle again (still running as of
+this update). Remaining ~12 call sites NOT yet done — extend incrementally
+as new concurrent-run needs come up (see "What's left" below). Written
+2026-07-06, updated 2026-07-07 (twice: asr.py, then ingest.commit +
+speaker.py + lang_screen.py + tier.py).
 
 ## Problem
 
@@ -344,14 +347,68 @@ before touching anything.
   vs. the standalone measurement, anticipating the same real CPU contention
   from concurrent GPU-side decode seen with `label.music` on 2026-07-06).
 
+## What was implemented (2026-07-07, ingest + speaker/lang_screen/tier follow-up)
+
+Extended `conn=None` injection to the next 5 call sites per the plan's
+priority order, closing out both the "round out GPU/CPU nodes" step and the
+previously-deferred `ingest.commit` site (originally marked "lowest
+priority, may not need touching at all" — touched anyway since the user
+asked to integrate ingest into the orchestrator explicitly):
+
+- `pipeline/nodes/ingest_download.py::run_ingest_commit` — `conn=None` added.
+  Confirmed both call sites (`main_commit()`, `cli.py`'s
+  `cmd_run_ingest_commit`) call it with no args, so the default self-connect
+  path is unchanged.
+- `pipeline/nodes/speaker.py::run_speaker_embed` and `run_speaker_cluster` —
+  same pattern, both confirmed no `conn.close()`.
+- `pipeline/nodes/lang_screen.py::run_lang_screen_auto` — same pattern. Note
+  the actual function/CLI-node name is `lang_screen.auto`, not `lang.screen`
+  as an earlier draft of this doc's call-site table implied — verify the
+  registered `run_sub.add_parser(...)` name before wiring a `RUN_MANY_ADAPTERS`
+  entry, don't assume from the file name.
+- `pipeline/nodes/tier.py::run_tier_assign` — same pattern.
+- `pipeline/cli.py`: added 5 new adapters
+  (`_run_many_adapt_ingest_commit`, `_run_many_adapt_speaker_embed`,
+  `_run_many_adapt_speaker_cluster`, `_run_many_adapt_lang_screen_auto`,
+  `_run_many_adapt_tier_assign`), each re-deriving its args from the node's
+  already-registered subparser (e.g. `speaker.cluster`'s `--sources` CSV
+  split mirrors `cmd_run_speaker_cluster` exactly). `RUN_MANY_ADAPTERS` is
+  now 10 entries: `filter.acoustic`, `segment.diarize`, `label.music`,
+  `asr.transcribe`, `asr.agreement`, `ingest.commit`, `speaker.embed`,
+  `speaker.cluster`, `lang_screen.auto`, `tier.assign`.
+- `tests/test_run_many.py`: 5 new conn-injection regression tests
+  (`test_run_speaker_embed_uses_injected_conn`,
+  `test_run_speaker_cluster_uses_injected_conn`,
+  `test_run_lang_screen_auto_uses_injected_conn`,
+  `test_run_tier_assign_uses_injected_conn`,
+  `test_run_ingest_commit_uses_injected_conn` — the last one monkeypatches
+  `ingest_download.METADATA_DIR`/`STAGING_FILE`/`KNOWN_IDS_SNAPSHOT` to a
+  `tmp_path`, same pattern as `tests/test_ingest_download_node.py`, since
+  those are real module-level absolute paths and calling
+  `run_ingest_commit()` unpatched would overwrite the live repo's actual
+  staging file / dedup snapshot — dangerous while `ingest.download` is
+  running in the background). 16/16 pass in `test_run_many.py`. Full suite:
+  166 passed, 3 failed + 13 errors — all traced to the same pre-existing
+  `connect_ro()` vs. live-RW-lock collision from the still-running
+  `asr.transcribe`+`filter.acoustic` job (PID 4005423), not a regression.
+
+This now means the full chain `ingest.commit` → `filter.decide`/`tier.assign`
+→ `speaker.embed`/`speaker.cluster` can, in principle, run alongside a
+GPU-heavy backlog node under one `run-many` invocation once there's an
+actual concurrent-work reason to (e.g. `pipe run-many tier.assign --
+asr.transcribe --models ... --devices ...` once both have real backlogs at
+the same time).
+
 ## What's left (not started, lower priority / incremental)
 
-- ~17 remaining `conn = connect()` call sites (see full inventory above,
-  minus the 5 now done) — next up per the plan's priority order:
-  `speaker.py` (`run_speaker_embed`/`run_speaker_cluster`), `lang_screen.py`,
-  `tier.py`, then the rest mechanically. Each is the same 3-line change: add
-  `conn=None` param, `conn = conn or connect()`, remove nothing else (no
-  site so far has had a matching `conn.close()` to worry about).
+- ~12 remaining `conn = connect()` call sites (see full inventory above,
+  minus the 10 now done): `label_suite.py`, `label_prosody.py`,
+  `ingest_probe.py`, `g2p.py`, `recover_orphans.py`, `filter.py`'s
+  remaining two functions (`run_filter_text`/`run_filter_decide` — confirm
+  exact names), `rebalance.py` (2 sites), `raw_flac.py` (2 sites),
+  `segment.py`'s remaining two functions (`run_segment_vad_cut`/
+  `run_pregate_snr`). All mechanical — same 3-line change, do when a real
+  concurrent-run need comes up.
 - GPU device-sharing policy across >2 concurrent GPU nodes (still not
   needed — `asr.transcribe`'s two models already use one GPU each; no
   3rd GPU node has been paired in yet).

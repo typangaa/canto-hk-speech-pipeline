@@ -5,10 +5,15 @@ import pytest
 
 from pipeline.catalog.catalog import init_schema, upsert_rows
 from pipeline.cli import split_run_many_groups
+from pipeline.nodes import ingest_download
 from pipeline.nodes.asr import run_asr_agreement, run_asr_transcribe
 from pipeline.nodes.filter import run_filter_acoustic
+from pipeline.nodes.ingest_download import run_ingest_commit
 from pipeline.nodes.label_music import run_label_music
+from pipeline.nodes.lang_screen import run_lang_screen_auto
 from pipeline.nodes.segment import run_segment_diarize
+from pipeline.nodes.speaker import run_speaker_cluster, run_speaker_embed
+from pipeline.nodes.tier import run_tier_assign
 
 
 @pytest.fixture
@@ -108,6 +113,65 @@ def test_run_asr_agreement_uses_injected_conn(scratch_conn, monkeypatch):
     result = asyncio.run(run_asr_agreement(conn=scratch_conn))
 
     assert result == {"processed": 0, "errors": 0}
+
+
+def test_run_speaker_embed_uses_injected_conn(scratch_conn, monkeypatch):
+    def _boom(*a, **kw):
+        raise AssertionError("run_speaker_embed must not call connect() when conn is given")
+
+    monkeypatch.setattr("pipeline.catalog.catalog.connect", _boom)
+
+    result = asyncio.run(run_speaker_embed(["cuda:0"], conn=scratch_conn))
+
+    assert result == {"reused": 0, "gpu_computed": 0, "errors": 0}
+
+
+def test_run_speaker_cluster_uses_injected_conn(scratch_conn, monkeypatch):
+    def _boom(*a, **kw):
+        raise AssertionError("run_speaker_cluster must not call connect() when conn is given")
+
+    monkeypatch.setattr("pipeline.catalog.catalog.connect", _boom)
+
+    result = asyncio.run(run_speaker_cluster(conn=scratch_conn))
+
+    assert result == {"sources_processed": 0, "total_segments": 0, "total_speakers": 0}
+
+
+def test_run_lang_screen_auto_uses_injected_conn(scratch_conn, monkeypatch):
+    def _boom(*a, **kw):
+        raise AssertionError("run_lang_screen_auto must not call connect() when conn is given")
+
+    monkeypatch.setattr("pipeline.catalog.catalog.connect", _boom)
+
+    result = asyncio.run(run_lang_screen_auto(["cuda:0"], conn=scratch_conn))
+
+    assert result == {"processed": 0, "pass": 0, "reject": 0, "mixed": 0, "errors": 0}
+
+
+def test_run_tier_assign_uses_injected_conn(scratch_conn, monkeypatch):
+    def _boom(*a, **kw):
+        raise AssertionError("run_tier_assign must not call connect() when conn is given")
+
+    monkeypatch.setattr("pipeline.catalog.catalog.connect", _boom)
+
+    result = asyncio.run(run_tier_assign(conn=scratch_conn))
+
+    assert result == {"processed": 0, "gold": 0, "silver": 0, "excluded": 0, "errors": 0}
+
+
+def test_run_ingest_commit_uses_injected_conn(scratch_conn, monkeypatch, tmp_path):
+    def _boom(*a, **kw):
+        raise AssertionError("run_ingest_commit must not call connect() when conn is given")
+
+    monkeypatch.setattr("pipeline.catalog.catalog.connect", _boom)
+    monkeypatch.setattr(ingest_download, "METADATA_DIR", tmp_path)
+    monkeypatch.setattr(ingest_download, "STAGING_FILE", tmp_path / "ingest_download_staging.jsonl")
+    monkeypatch.setattr(ingest_download, "KNOWN_IDS_SNAPSHOT", tmp_path / "raw_files_known_ids.json")
+
+    result = asyncio.run(run_ingest_commit(conn=scratch_conn))
+
+    assert result["committed"] == 0
+    assert result["archived_to"] is None
 
 
 def test_run_filter_acoustic_defaults_to_self_connect(monkeypatch, scratch_conn):

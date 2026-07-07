@@ -142,6 +142,7 @@ def _check_sidecar(row: tuple) -> tuple[str, str, str | None]:
 async def run_speaker_embed(
     devices: list[str],
     *,
+    conn=None,
     gpu_policy: str = "cap",
     batch_size: int = 5000,
     mem_fraction: float | None = 0.15,
@@ -156,6 +157,11 @@ async def run_speaker_embed(
     Phase 3 — GPU fallback: only for the remainder without a cached sidecar,
                spawn one ECAPA-TDNN worker subprocess per device.  Skipped
                entirely when the remainder is empty.
+
+    conn: optional pre-opened DuckDB connection (or cursor) — pass one when
+    running alongside other nodes under `pipe run-many` (see filter.py's
+    run_filter_acoustic docstring for the rationale). Defaults to a fresh
+    self-managed connect() for standalone `pipe run speaker.embed` usage.
     """
     from pipeline.catalog.catalog import connect, upsert_rows
     from pipeline.orchestrator.journal import new_run_id, record_batch
@@ -163,7 +169,7 @@ async def run_speaker_embed(
     from pipeline.orchestrator.resources import GpuPolicy, Sampler
     from pipeline.orchestrator.worker import spawn_worker
 
-    conn = connect()
+    conn = conn or connect()
     rows = discover_embed(conn)
     if limit:
         rows = rows[:limit]
@@ -596,6 +602,7 @@ def _load_npy(args: tuple[str, str]) -> tuple[str, str, np.ndarray | None]:
 
 async def run_speaker_cluster(
     *,
+    conn=None,
     threshold: float = 0.25,
     sources: list[str] | None = None,
     limit: int | None = None,
@@ -613,6 +620,11 @@ async def run_speaker_cluster(
 
     Parameters
     ----------
+    conn:
+        Optional pre-opened DuckDB connection (or cursor) — pass one when
+        running alongside other nodes under `pipe run-many` (see filter.py's
+        run_filter_acoustic docstring for the rationale). Defaults to a fresh
+        self-managed connect() for standalone `pipe run speaker.cluster` usage.
     threshold:
         Agglomerative clustering cosine-distance threshold (default 0.25,
         matches the legacy script default).
@@ -624,7 +636,7 @@ async def run_speaker_cluster(
     from pipeline.catalog.catalog import connect, upsert_rows
     from pipeline.orchestrator.journal import new_run_id, record_batch
 
-    conn = connect()
+    conn = conn or connect()
     all_sources = discover_cluster(conn)
     if sources:
         all_sources = [s for s in all_sources if s in sources]

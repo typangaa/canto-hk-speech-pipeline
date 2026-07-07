@@ -66,11 +66,15 @@ def discover(conn) -> list[tuple]:
     return conn.execute(TIER_DISCOVER_SQL).fetchall()
 
 
-async def run_tier_assign(*, batch_size: int = 5000, limit: int | None = None) -> dict:
+async def run_tier_assign(*, conn=None, batch_size: int = 5000, limit: int | None = None) -> dict:
+    """conn: optional pre-opened DuckDB connection (or cursor) — pass one when
+    running alongside other nodes under `pipe run-many` (see filter.py's
+    run_filter_acoustic docstring for the rationale). Defaults to a fresh
+    self-managed connect() for standalone `pipe run tier.assign` usage."""
     from pipeline.catalog.catalog import connect, upsert_rows
     from pipeline.orchestrator.journal import new_run_id, record_batch
 
-    conn = connect()
+    conn = conn or connect()
     rows = discover(conn)
     if limit:
         rows = rows[:limit]

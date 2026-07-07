@@ -497,7 +497,11 @@ def _read_staged_rows() -> list[dict]:
     return rows
 
 
-async def run_ingest_commit() -> dict:
+async def run_ingest_commit(*, conn=None) -> dict:
+    """conn: optional pre-opened DuckDB connection (or cursor) — pass one when
+    running alongside other nodes under `pipe run-many` (see filter.py's
+    run_filter_acoustic docstring for the rationale). Defaults to a fresh
+    self-managed connect() for standalone `pipe run ingest.commit` usage."""
     from pipeline.catalog.catalog import connect, upsert_rows
     from pipeline.orchestrator.journal import new_run_id, record_batch
 
@@ -507,7 +511,7 @@ async def run_ingest_commit() -> dict:
     by_id = {row["raw_id"]: row for row in staged if "raw_id" in row}
     rows = list(by_id.values())
 
-    conn = connect()
+    conn = conn or connect()
     run_id = new_run_id("ingest.download")
     if rows:
         upsert_rows(conn, "raw_files", rows, ["raw_id"])
