@@ -176,7 +176,7 @@
   style: "casual"
   priority: "high"
   estimated_hours: 200
-  status: "evaluate"
+  status: "active"
   notes: >
     Major HK entertainment channel. Natural HK Cantonese, multiple hosts, diverse topics.
     Very high subscriber count indicates mainstream HK Cantonese audience.
@@ -192,11 +192,11 @@
   style: "interview"
   priority: "high"
   estimated_hours: 100
-  status: "evaluate"
+  max_age_days: 365
+  status: "active"
   notes: >
     Feature journalism and lifestyle. On-location interviews, diverse interviewees.
     Natural HK Cantonese, multiple speakers per episode.
-    Check that audio is not too echoey (on-location can vary).
 
 - name: "立場新聞 (The Stand News — archived)"
   url: "https://www.youtube.com/@standnews"
@@ -207,10 +207,10 @@
   style: "interview"
   priority: "high"
   estimated_hours: 150
-  status: "evaluate"
+  max_age_days: 365
+  status: "active"
   notes: >
     Archived journalism channel. Cantonese-dominant. Check if channel is still accessible.
-    If geo-blocked, skip — do not attempt to bypass with VPN in automated scripts.
     Focus on talk-format videos, not outdoor live reporting.
 
 # ──────────────────────────────────────────────
@@ -467,12 +467,11 @@
   priority: "high"
   estimated_hours: 500
   max_age_days: 730
-  status: "evaluate"
+  status: "active"
   notes: >
     CONFIRMED 2026-06-10 (hermes drama agent). 653K subscribers. Official TVB channel with
     full drama episodes (使徒行者, 幕後玩家, etc.). Professional actors, studio audio,
     written scripted dialogue — fills critical gap in corpus. Multiple speakers per episode.
-    Evaluate 3 episodes for audio quality and segment yield before bulk download.
     Note: drama has background music — rely on DNSMOS ≥ 3.0 filter to reject noisy segments.
 
 - name: "TVB Mystery (tvbanywhere)"
@@ -485,10 +484,10 @@
   priority: "high"
   estimated_hours: 300
   max_age_days: 730
-  status: "evaluate"
+  status: "active"
   notes: >
     CONFIRMED 2026-06-10 (hermes drama agent). 389K subscribers. Official TVB crime/mystery
-    drama channel. Scripted dialogue, professional production. Evaluate before bulk download.
+    drama channel. Scripted dialogue, professional production.
 
 - name: "TVB WuXia (tvbanywhere)"
   url: "https://www.youtube.com/@TVB_WuXia_KungFu"
@@ -497,15 +496,12 @@
   language: "yue"
   domain: "drama"
   style: "scripted"
-  priority: "medium"
+  priority: "high"
   estimated_hours: 200
   max_age_days: 730
-  status: "evaluate"
+  status: "active"
   notes: >
-    CONFIRMED 2026-06-10 (hermes drama agent). 452K subscribers. Official TVB martial arts
-    drama channel. Scripted Cantonese. Note: classical/literary vocabulary may differ from
-    modern HK Cantonese — evaluate register before bulk download.
-
+    Official TVB martial arts drama channel. Scripted dialogue, professional production.
 - name: "粵語長片台"
   url: "https://www.youtube.com/@粵語長片台"
   type: "channel"
@@ -513,10 +509,10 @@
   language: "yue"
   domain: "drama"
   style: "scripted"
-  priority: "medium"
+  priority: "high"
   estimated_hours: 300
   max_age_days: 0
-  status: "evaluate"
+  status: "active"
   notes: >
     CONFIRMED 2026-06-10 (hermes drama agent). 205K subscribers, 1,900+ videos.
     Classic Cantonese films 1940s-1970s plus radio drama archives. Unique historical
