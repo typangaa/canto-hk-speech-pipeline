@@ -1,5 +1,16 @@
 # Journal-First Catalog Write Path — Implementation Plan
 
+> ⚠ **2026-07-06 update**:呢份文件 §「觸發原因」嘅前提(「任何兩個 node 都冇得真正並行,
+> 淨係得順序 chain」)已經證實錯——DuckDB 嘅 single-writer 限制係 per-**process**,唔係
+> per-transaction。已經起咗一個更輕量嘅方案(`pipe run-many`,見
+> `docs/ORCHESTRATOR_PLAN.md`):幾個 node coroutine 喺**同一個** process 入面共用一條
+> connection(每個 node 攞自己嘅 `conn.cursor()`),asyncio 協作式排程令寫入零衝突,已經
+> 喺 live catalog 實測 `label.music`(GPU)+ `filter.acoustic`(CPU)成功並行。呢份
+> journal-first 設計(獨立 journal 檔 + 定期 replay 落 catalog)仍然係一個更重型、更適合
+> 「跨機器/跨 process 都要並行」場景嘅方案,但今日嘅並行需求已經用 run-many 解決咗,
+> 唔再係迫切——留低呢份文件供將來需要更強隔離性(例如真係要跨獨立 process,而唔止喺
+> 一個 supervisor 入面)先再評估。
+>
 > **狀態**:草擬,等 owner 拍板先執行(2026-07-03)
 > **上游文件**:`REARCHITECTURE_IMPLEMENTATION_PLAN.md` §3.2(「Journal + catalog」已經畫咗個
 > 願景,呢份文件將佢寫成可執行嘅具體設計 + milestone + gate)

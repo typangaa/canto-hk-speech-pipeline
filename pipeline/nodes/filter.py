@@ -74,6 +74,7 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import re
 import sys
 import time
@@ -392,6 +393,7 @@ def _batches(rows: list[tuple], size: int):
 
 async def run_filter_acoustic(
     *,
+    conn=None,
     n_workers: int = 4,
     threads_per_worker: int = 4,
     batch_size: int = 8,
@@ -400,13 +402,19 @@ async def run_filter_acoustic(
     """Supervisor entrypoint for filter.acoustic. Spawns n_workers CPU worker
     subprocesses (each with its own capped-thread ONNX sessions), dispatches
     length-sorted batches round-robin, commits through journal + upsert_rows —
-    same idiom as label_prosody.run_label_prosody."""
+    same idiom as label_prosody.run_label_prosody.
+
+    conn: optional pre-opened DuckDB connection (or cursor) — pass one when
+    running alongside other nodes under `pipe run-many` (DuckDB's write lock
+    is per-process, not per-transaction; a cursor on a shared connection is a
+    transparent drop-in for upsert_rows/record_batch). Defaults to a fresh
+    self-managed connect() for standalone `pipe run filter.acoustic` usage."""
     from pipeline.catalog.catalog import connect, upsert_rows
     from pipeline.orchestrator.journal import new_run_id, record_batch
     from pipeline.orchestrator.pools import PoolRegistry
     from pipeline.orchestrator.worker import spawn_worker
 
-    conn = connect()
+    conn = conn or connect()
     rows = discover_acoustic(conn)
     if limit:
         rows = rows[:limit]
@@ -419,13 +427,29 @@ async def run_filter_acoustic(
     for name in pool_names:
         registry.register(name, target=1)
 
+    # numpy/torch/torchaudio link against OpenBLAS/MKL, which size their own
+    # native thread pools from these env vars at library-load time — read
+    # *before* any Python-level torch.set_num_threads() call can take effect,
+    # and independent of onnxruntime's own (already-capped) intra_op setting.
+    # Left unset they default to os.cpu_count(), so n_workers subprocesses each
+    # start their own ~nproc-sized pool: observed 129 OS threads/process and a
+    # 48-core box driven to a load average of 131 with just 8 workers, combined
+    # throughput no better than one process. Cap them per worker subprocess.
+    worker_env = {
+        **os.environ,
+        "OMP_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "MKL_NUM_THREADS": "1",
+        "NUMEXPR_NUM_THREADS": "1",
+    }
+
     handles = {}
     for pool_name in pool_names:
         cmd = [
             sys.executable, "-m", "pipeline.nodes.filter",
             "--threads", str(threads_per_worker),
         ]
-        handle = await spawn_worker(cmd)
+        handle = await spawn_worker(cmd, env=worker_env)
         await handle.wait_ready(timeout=120.0)
         handles[pool_name] = handle
         log.info(f"worker ready: {pool_name} (pid={handle.pid})")
@@ -581,6 +605,15 @@ def worker_main() -> None:
 
     logging.basicConfig(level=logging.INFO, stream=sys.stderr,
                          format="%(asctime)s %(levelname)s %(message)s")
+
+    # torch defaults to a large intra-op thread pool (e.g. 24 on a 48-core box)
+    # for the torchaudio.transforms.Resample call in compute_dnsmos(), on top of
+    # the onnxruntime sessions already capped above. Uncapped, N worker processes
+    # each spin up ~dozens of torch threads regardless of --threads, so running
+    # several workers oversubscribes the machine (observed: 8 workers -> ~130
+    # OS threads/process, load average > 2x core count, combined throughput no
+    # better than a single process). Cap it the same way onnxruntime is capped.
+    torch.set_num_threads(1)
 
     worker = AcousticWorker(threads=args.threads)
 

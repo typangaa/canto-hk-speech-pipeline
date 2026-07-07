@@ -109,6 +109,7 @@ def _batches(rows: list[tuple], size: int):
 async def run_label_music(
     devices: list[str],
     *,
+    conn=None,
     gpu_policy: str = "cap",
     batch_size: int = 16,
     mem_fraction: float | None = 0.15,
@@ -121,6 +122,11 @@ async def run_label_music(
     target when it detects foreign (non-orchestrator) compute processes on
     that GPU — this is what makes label.music coexist with a co-running
     training job instead of OOM-racing it.
+
+    conn: optional pre-opened DuckDB connection (or cursor) — pass one when
+    running alongside other nodes under `pipe run-many` (see filter.py's
+    run_filter_acoustic docstring for the rationale). Defaults to a fresh
+    self-managed connect() for standalone `pipe run label.music` usage.
     """
     from pipeline.catalog.catalog import connect, upsert_rows
     from pipeline.orchestrator.journal import new_run_id, record_batch
@@ -128,7 +134,7 @@ async def run_label_music(
     from pipeline.orchestrator.resources import GpuPolicy, Sampler
     from pipeline.orchestrator.worker import spawn_worker
 
-    conn = connect()
+    conn = conn or connect()
     rows = discover(conn)
     if limit:
         rows = rows[:limit]

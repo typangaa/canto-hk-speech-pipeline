@@ -382,6 +382,7 @@ def _check_legacy_sidecar(row: tuple) -> tuple[str, str, str, int]:
 async def run_segment_diarize(
     devices: list[str],
     *,
+    conn=None,
     gpu_policy: str = "cap",
     batch_size: int = 32,
     mem_fraction: float | None = 0.5,
@@ -398,6 +399,11 @@ async def run_segment_diarize(
     Phase 3 — GPU fallback: only for the genuine cache-miss remainder, spawn
                one DiarizeWorker subprocess per device.  Skipped entirely when
                the missing list is empty after Phase 2.
+
+    conn: optional pre-opened DuckDB connection (or cursor) — pass one when
+    running alongside other nodes under `pipe run-many` (see filter.py's
+    run_filter_acoustic docstring for the same rationale). Defaults to a
+    fresh self-managed connect() for standalone `pipe run segment.diarize`.
     """
     from pipeline.catalog.catalog import connect, upsert_rows
     from pipeline.orchestrator.journal import new_run_id, record_batch
@@ -405,7 +411,7 @@ async def run_segment_diarize(
     from pipeline.orchestrator.resources import GpuPolicy, Sampler
     from pipeline.orchestrator.worker import spawn_worker
 
-    conn = connect()
+    conn = conn or connect()
     rows = discover_diarize(conn)
     if limit:
         rows = rows[:limit]

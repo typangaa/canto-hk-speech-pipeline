@@ -190,6 +190,7 @@ def _batches(rows: list[tuple], size: int):
 async def run_asr_transcribe(
     assignments: list[tuple[str, str]],
     *,
+    conn=None,
     gpu_policy: str = "cap",
     batch_size: int = 8,
     mem_fraction: float | None = None,
@@ -204,6 +205,11 @@ async def run_asr_transcribe(
     run under ONE asyncio.gather() sharing a single DuckDB connection, so this
     is the "two models split across GPUs, running in parallel" node the plan
     calls for, without ever opening two competing RW connections to the catalog.
+
+    conn: optional pre-opened DuckDB connection (or cursor) — pass one when
+    running alongside other nodes under `pipe run-many` (see filter.py's
+    run_filter_acoustic docstring for the rationale). Defaults to a fresh
+    self-managed connect() for standalone `pipe run asr.transcribe` usage.
     """
     from pipeline.catalog.catalog import connect, upsert_rows
     from pipeline.orchestrator.journal import new_run_id, record_batch
@@ -211,7 +217,7 @@ async def run_asr_transcribe(
     from pipeline.orchestrator.resources import GpuPolicy, Sampler
     from pipeline.orchestrator.worker import spawn_worker
 
-    conn = connect()
+    conn = conn or connect()
 
     per_assignment_rows: dict[tuple[str, str], list[tuple]] = {}
     total = 0
@@ -345,11 +351,15 @@ async def run_asr_transcribe(
 # workers needed. Runs directly in the supervisor process.
 # ---------------------------------------------------------------------------
 
-async def run_asr_agreement(*, batch_size: int = 2000, limit: int | None = None) -> dict:
+async def run_asr_agreement(*, conn=None, batch_size: int = 2000, limit: int | None = None) -> dict:
+    """conn: optional pre-opened DuckDB connection (or cursor) — pass one when
+    running alongside other nodes under `pipe run-many` (see filter.py's
+    run_filter_acoustic docstring for the rationale). Defaults to a fresh
+    self-managed connect() for standalone `pipe run asr.agreement` usage."""
     from pipeline.catalog.catalog import connect, upsert_rows
     from pipeline.orchestrator.journal import new_run_id, record_batch
 
-    conn = connect()
+    conn = conn or connect()
     rows = discover_agreement(conn)
     if limit:
         rows = rows[:limit]

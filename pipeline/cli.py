@@ -50,6 +50,18 @@ def cmd_run_ingest_download(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_run_ingest_commit(args: argparse.Namespace) -> int:
+    import asyncio
+    import logging
+
+    from pipeline.nodes.ingest_download import run_ingest_commit
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    result = asyncio.run(run_ingest_commit())
+    print(f"\nDone: {result}")
+    return 0
+
+
 def cmd_run_ingest_probe(args: argparse.Namespace) -> int:
     import asyncio
     import logging
@@ -264,6 +276,98 @@ def cmd_run_segment_diarize(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _run_many_adapt_filter_acoustic(args: argparse.Namespace, conn) -> dict:
+    from pipeline.nodes.filter import run_filter_acoustic
+    return await run_filter_acoustic(
+        conn=conn,
+        n_workers=args.workers,
+        threads_per_worker=args.threads,
+        batch_size=args.batch,
+        limit=args.limit,
+    )
+
+
+async def _run_many_adapt_segment_diarize(args: argparse.Namespace, conn) -> dict:
+    from pipeline.nodes.segment import run_segment_diarize
+    devices = [d.strip() for d in args.devices.split(",")]
+    return await run_segment_diarize(
+        devices,
+        conn=conn,
+        gpu_policy=args.gpu_policy,
+        batch_size=args.batch,
+        mem_fraction=args.mem_fraction,
+        limit=args.limit,
+    )
+
+
+async def _run_many_adapt_label_music(args: argparse.Namespace, conn) -> dict:
+    from pipeline.nodes.label_music import run_label_music
+    devices = [d.strip() for d in args.devices.split(",")]
+    return await run_label_music(
+        devices,
+        conn=conn,
+        gpu_policy=args.gpu_policy,
+        batch_size=args.batch,
+        mem_fraction=args.mem_fraction,
+        limit=args.limit,
+    )
+
+
+async def _run_many_adapt_asr_transcribe(args: argparse.Namespace, conn) -> dict:
+    from pipeline.nodes.asr import run_asr_transcribe
+    model_keys = [m.strip() for m in args.models.split(",")]
+    devices = [d.strip() for d in args.devices.split(",")]
+    if len(model_keys) != len(devices):
+        raise SystemExit(f"--models ({len(model_keys)}) and --devices ({len(devices)}) must have the same count")
+    assignments = list(zip(model_keys, devices))
+    return await run_asr_transcribe(
+        assignments,
+        conn=conn,
+        gpu_policy=args.gpu_policy,
+        batch_size=args.batch,
+        mem_fraction=args.mem_fraction,
+        limit=args.limit,
+    )
+
+
+async def _run_many_adapt_asr_agreement(args: argparse.Namespace, conn) -> dict:
+    from pipeline.nodes.asr import run_asr_agreement
+    return await run_asr_agreement(conn=conn, batch_size=args.batch, limit=args.limit)
+
+
+# Nodes wired up for `pipe run-many`. A node must accept a `conn=` kwarg
+# (dependency-injected DuckDB connection/cursor) before it can be added here —
+# see docs/ORCHESTRATOR_PLAN.md for the full call-site inventory and the
+# priority order for extending this incrementally.
+RUN_MANY_ADAPTERS = {
+    "filter.acoustic": _run_many_adapt_filter_acoustic,
+    "segment.diarize": _run_many_adapt_segment_diarize,
+    "label.music": _run_many_adapt_label_music,
+    "asr.transcribe": _run_many_adapt_asr_transcribe,
+    "asr.agreement": _run_many_adapt_asr_agreement,
+}
+
+
+def split_run_many_groups(tokens: list[str]) -> list[list[str]]:
+    """Split `pipe run-many` remainder tokens into per-node argv groups on
+    literal '--' separators, e.g.
+    ["segment.diarize", "--devices", "cuda:0", "--", "filter.acoustic", "--workers", "8"]
+    -> [["segment.diarize", "--devices", "cuda:0"], ["filter.acoustic", "--workers", "8"]]
+    """
+    groups: list[list[str]] = []
+    current: list[str] = []
+    for tok in tokens:
+        if tok == "--":
+            if current:
+                groups.append(current)
+            current = []
+        else:
+            current.append(tok)
+    if current:
+        groups.append(current)
+    return groups
+
+
 def cmd_run_segment_vad_cut(args: argparse.Namespace) -> int:
     import asyncio
     import logging
@@ -456,6 +560,8 @@ def main() -> int:
     p_run_download.add_argument("--dry-run", action="store_true")
     p_run_download.add_argument("--limit", type=int, default=None)
     p_run_download.set_defaults(func=cmd_run_ingest_download)
+    p_run_commit = run_sub.add_parser("ingest.commit", help="land ingest.download's JSON-staged rows into raw_files (only ingest.* step that opens DuckDB); run whenever the writer lock is free")
+    p_run_commit.set_defaults(func=cmd_run_ingest_commit)
     p_run_probe = run_sub.add_parser("ingest.probe", help="P2: ffprobe metadata + L/R correlation per raw file")
     p_run_probe.add_argument("--workers", type=int, default=8)
     p_run_probe.add_argument("--batch", type=int, default=200)
@@ -601,6 +707,64 @@ def main() -> int:
     p_run_lcalib.set_defaults(func=cmd_run_label_calibrate)
     p_run_lstore = run_sub.add_parser("label.store", help="P4: join+bucket label tables -> metadata/labels.jsonl (requires label.calibrate first)")
     p_run_lstore.set_defaults(func=cmd_run_label_store)
+
+    p_run_many = sub.add_parser(
+        "run-many",
+        help="Run multiple DAG nodes concurrently in one process, sharing one "
+             "DuckDB connection (cursor per node) — bypasses the per-process "
+             "single-writer lock. Nodes: " + ", ".join(sorted(RUN_MANY_ADAPTERS)) +
+             ". Usage: pipe run-many <node> [args...] -- <node> [args...] -- ...",
+    )
+    p_run_many.add_argument("groups", nargs=argparse.REMAINDER)
+
+    def cmd_run_many(args: argparse.Namespace) -> int:
+        import asyncio
+        import logging
+
+        from pipeline.catalog.catalog import connect
+
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+        groups = split_run_many_groups(args.groups)
+        if len(groups) < 2:
+            print(
+                "run-many needs at least 2 node groups separated by '--', e.g.:\n"
+                "  pipe run-many segment.diarize --devices cuda:0 -- "
+                "filter.acoustic --workers 8 --threads 4"
+            )
+            return 1
+
+        node_specs: list[tuple[str, argparse.Namespace]] = []
+        for group in groups:
+            node_name, *node_argv = group
+            if node_name not in RUN_MANY_ADAPTERS:
+                print(f"run-many: node '{node_name}' not yet supported for concurrent "
+                      f"execution (supported: {sorted(RUN_MANY_ADAPTERS)}); "
+                      f"see docs/ORCHESTRATOR_PLAN.md to extend it")
+                return 1
+            if node_name not in run_sub.choices:
+                print(f"run-many: unknown node '{node_name}'")
+                return 1
+            node_args = run_sub.choices[node_name].parse_args(node_argv)
+            node_specs.append((node_name, node_args))
+
+        async def _run_all():
+            conn = connect()
+            try:
+                coros = [
+                    RUN_MANY_ADAPTERS[name](node_args, conn.cursor())
+                    for name, node_args in node_specs
+                ]
+                return await asyncio.gather(*coros)
+            finally:
+                conn.close()
+
+        results = asyncio.run(_run_all())
+        for (name, _), result in zip(node_specs, results):
+            print(f"\n{name}: {result}")
+        return 0
+
+    p_run_many.set_defaults(func=cmd_run_many)
 
     args = parser.parse_args()
     return args.func(args)
