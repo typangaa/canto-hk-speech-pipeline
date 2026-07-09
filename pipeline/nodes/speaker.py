@@ -128,6 +128,32 @@ def discover_embed(conn) -> list[tuple]:
     return conn.execute(EMBED_DISCOVER_SQL).fetchall()
 
 
+EXISTING_EMBED_SQL = """
+    SELECT se.id, se.source, s.audio_path, se.embedding_ref
+    FROM speaker_embeddings se
+    JOIN segments s ON s.id = se.id
+    WHERE se.embedding_ref IS NOT NULL
+    ORDER BY se.source, se.id
+"""
+
+
+def discover_stale_embed(conn) -> list[tuple]:
+    """Return (id, source, audio_path, embedding_ref) for every existing
+    speaker_embeddings row with a non-null ref — candidates for the on-disk
+    existence check in run_speaker_embed(verify_existing=True).
+
+    Why this exists: unlike asr_agreement.model_count or filters/tiers'
+    provenance-tagged anti-join, there is no cheap catalog-only signal for
+    "this row's sidecar file got deleted out from under it" — the 2026-07
+    `filtered/` tree retirement (§7.3) silently orphaned 455k+ embedding_ref
+    values that still point inside that now-deleted tree. Checking file
+    existence needs a disk stat per row, so it is opt-in (verify_existing
+    flag) rather than run on every invocation — normal runs only need the
+    cheap discover_embed() anti-join.
+    """
+    return conn.execute(EXISTING_EMBED_SQL).fetchall()
+
+
 def _check_sidecar(row: tuple) -> tuple[str, str, str | None]:
     """I/O task: check whether <audio_path>.embed.npy exists.
 
@@ -147,9 +173,16 @@ async def run_speaker_embed(
     batch_size: int = 5000,
     mem_fraction: float | None = 0.15,
     limit: int | None = None,
+    verify_existing: bool = False,
 ) -> dict:
     """Supervisor coroutine for the speaker.embed DAG node.
 
+    Phase 0 (opt-in, verify_existing=True) — stale-ref repair: stat every
+               existing speaker_embeddings.embedding_ref on disk; any row
+               whose file is missing (e.g. orphaned by the 2026-07
+               filtered/ tree retirement) is re-queued using the segment's
+               CURRENT audio_path, so it flows through the normal Phase 2/3
+               pass below exactly like a brand-new segment.
     Phase 1 — discovery (SQL anti-join).
     Phase 2 — cheap reuse pass: parallel disk-existence checks for legacy
                sidecar .embed.npy files; on hit, upsert with
@@ -171,6 +204,27 @@ async def run_speaker_embed(
 
     conn = conn or connect()
     rows = discover_embed(conn)
+
+    if verify_existing:
+        existing = discover_stale_embed(conn)
+        io_workers = min(32, (os.cpu_count() or 4) * 4)
+        log.info(
+            f"speaker.embed: verify_existing - stat'ing {len(existing)} "
+            f"existing embedding_ref files with {io_workers} I/O threads ..."
+        )
+        with ThreadPoolExecutor(max_workers=io_workers) as pool:
+            exists_flags = list(pool.map(lambda r: Path(r[3]).exists(), existing))
+        stale = [
+            (seg_id, source, audio_path)
+            for (seg_id, source, audio_path, _ref), ok in zip(existing, exists_flags)
+            if not ok
+        ]
+        log.info(
+            f"speaker.embed: verify_existing found {len(stale)}/{len(existing)} "
+            f"rows with a missing embedding_ref file, re-queuing for recompute"
+        )
+        rows = rows + stale
+
     if limit:
         rows = rows[:limit]
     log.info(f"speaker.embed: {len(rows)} segments need speaker_embeddings rows")
@@ -380,14 +434,46 @@ async def run_speaker_embed(
 # speaker.embed GPU worker (subprocess, JSONL stdio protocol)
 # ---------------------------------------------------------------------------
 
+def _load_and_resample_for_embed(item: dict) -> tuple[str, "torch.Tensor", str] | None:
+    """I/O + CPU resample only (no GPU/model work) — designed to run inside a
+    ThreadPoolExecutor (torchaudio.load releases the GIL during disk I/O), so
+    many segments load/resample concurrently while the GPU worker's single
+    Python thread would otherwise sit idle waiting on disk one item at a time.
+    This is exactly the preprocessing forward_batch used to do inline; moving
+    it out doesn't change any per-item numerical result, only when/where it
+    runs, so embedding-space parity with the legacy script is unaffected.
+
+    Returns (id, wav, sidecar_path) or None on read failure.
+    """
+    import torchaudio
+
+    seg_id = item["id"]
+    audio_path = item["path"]
+    sidecar = str(Path(audio_path).with_suffix(".embed.npy"))
+    try:
+        wav, sr = torchaudio.load(str(audio_path))
+        if sr != 16000:
+            resampler = torchaudio.transforms.Resample(sr, 16000)
+            wav = resampler(wav)
+        if wav.shape[0] > 1:
+            wav = wav.mean(0, keepdim=True)
+        return (seg_id, wav, sidecar)
+    except Exception as e:
+        log.warning(f"EmbedWorker: read/resample fail {audio_path}: {e}")
+        return None
+
+
 class EmbedWorker(GPUWorkerBase):
     """ECAPA-TDNN embedding worker.
 
-    Loaded once per subprocess invocation. ``forward_batch`` resamples each
-    wav to 16 kHz with ``torchaudio.transforms.Resample`` (intentionally NOT
-    soxr) to match the resampler used by the legacy
-    ``scripts/08_speaker_id.py:extract_embedding()`` — embedding-space
-    consistency requires identical preprocessing.
+    Loaded once per subprocess invocation. Audio I/O + 16 kHz resample
+    (``torchaudio.transforms.Resample`` — intentionally NOT soxr, to match the
+    resampler used by the legacy ``scripts/08_speaker_id.py:extract_embedding()``
+    for embedding-space consistency) happens in worker_main()'s parallel
+    ThreadPoolExecutor pass, BEFORE forward_batch() — see
+    _load_and_resample_for_embed(). forward_batch() itself only does the
+    GPU-bound encode_batch() call plus the .npy sidecar write, so the GPU is
+    never left waiting on serialized disk I/O between items.
     """
 
     def load_model(self):
@@ -405,35 +491,24 @@ class EmbedWorker(GPUWorkerBase):
         log.info(f"EmbedWorker: encoder loaded on {self.device}")
         return encoder
 
-    def forward_batch(self, items: list[dict]) -> list[dict]:
-        """Compute embeddings for *items* (list of {id, path}).
+    def forward_batch(self, items: list[tuple]) -> list[dict]:
+        """Compute embeddings for *items* (list of (id, wav, sidecar_path)
+        pre-loaded by _load_and_resample_for_embed via worker_main's I/O pool).
 
-        Each wav is resampled to 16 kHz mono using torchaudio.Resample.
-        The resulting embedding is saved to <path>.embed.npy as a side-effect
-        (same sidecar convention as the legacy script).
+        The embedding is saved to <path>.embed.npy as a side-effect (same
+        sidecar convention as the legacy script).
         Returns list of {id, embedding_ref} dicts (or {id, _failed: True}).
         """
-        import torchaudio
-
         results = []
-        for item in items:
-            seg_id = item["id"]
-            audio_path = item["path"]
-            sidecar = Path(audio_path).with_suffix(".embed.npy")
+        for seg_id, wav, sidecar in items:
             try:
-                wav, sr = torchaudio.load(str(audio_path))
-                if sr != 16000:
-                    resampler = torchaudio.transforms.Resample(sr, 16000)
-                    wav = resampler(wav)
-                if wav.shape[0] > 1:
-                    wav = wav.mean(0, keepdim=True)
                 with torch.no_grad():
                     emb = self.model.encode_batch(wav)  # (1, 1, D)
                 emb_np = emb.squeeze().cpu().numpy()
-                np.save(str(sidecar), emb_np)
-                results.append({"id": seg_id, "embedding_ref": str(sidecar)})
+                np.save(sidecar, emb_np)
+                results.append({"id": seg_id, "embedding_ref": sidecar})
             except Exception as e:
-                log.error(f"EmbedWorker: failed {audio_path}: {e}")
+                log.error(f"EmbedWorker: encode failed for {seg_id}: {e}")
                 # Signal skip — supervisor will write a read_failed row.
                 results.append({"id": seg_id, "_failed": True})
         return results
@@ -448,6 +523,9 @@ def worker_main() -> None:
     ap = argparse.ArgumentParser(description="speaker.embed GPU worker")
     ap.add_argument("--device", default="cuda:0")
     ap.add_argument("--mem-fraction", type=float, default=None)
+    ap.add_argument("--io-workers", type=int, default=min(32, (os.cpu_count() or 4) * 4),
+                     help="I/O threads for parallel torchaudio.load+resample "
+                          "ahead of the (serialized) GPU encode step")
     args = ap.parse_args()
 
     logging.basicConfig(
@@ -456,9 +534,22 @@ def worker_main() -> None:
         format="%(asctime)s %(levelname)s %(message)s",
     )
 
+    # Cap torch's own intra-op thread pool to 1. torch.set_num_threads() is a
+    # process-global setting (not per-Python-thread) — without this, every
+    # torchaudio.transforms.Resample call inside the io_pool below spins up
+    # its own OpenMP/MKL thread pool sized to all visible cores, and with
+    # --io-workers concurrent Python threads each doing that, the process
+    # oversubscribes to ~armies of native threads (observed: 890 OS threads
+    # for a 32-worker pool) fighting each other for the same physical cores
+    # instead of genuinely parallelizing. One torch thread per Python thread
+    # + --io-workers Python threads = real, bounded parallelism.
+    torch.set_num_threads(1)
+
     # fp16=False: SpeechBrain's encode_batch is float32 internally; forcing
     # fp16 here would corrupt the embeddings.
     worker = EmbedWorker(args.device, mem_fraction=args.mem_fraction, fp16=False)
+    io_pool = ThreadPoolExecutor(max_workers=args.io_workers)
+    log.info(f"speaker.embed worker: {args.io_workers} I/O threads for audio load+resample")
 
     def emit(msg: dict) -> None:
         sys.stdout.write(json.dumps(msg, ensure_ascii=False) + "\n")
@@ -485,9 +576,17 @@ def worker_main() -> None:
         items = msg["items"]
         t0 = time.time()
         try:
-            raw_results = worker.infer_with_oom_halving(items)
+            # Parallel I/O pass (disk read + CPU resample) across all items in
+            # this batch, BEFORE the GPU-bound encode step — this is the fix
+            # for the GPU sitting idle while torchaudio.load() ran serially
+            # one item at a time (see _load_and_resample_for_embed docstring).
+            loaded = list(io_pool.map(_load_and_resample_for_embed, items))
+            read_failed_ids = [items[i]["id"] for i, r in enumerate(loaded) if r is None]
+            kept = [r for r in loaded if r is not None]
+
+            raw_results = worker.infer_with_oom_halving(kept) if kept else []
             rows = [r for r in raw_results if not r.get("_failed")]
-            skipped_ids = [r["id"] for r in raw_results if r.get("_failed")]
+            skipped_ids = read_failed_ids + [r["id"] for r in raw_results if r.get("_failed")]
             elapsed = time.time() - t0
             emit({
                 "type": "result",
@@ -500,6 +599,8 @@ def worker_main() -> None:
             })
         except Exception as e:
             emit({"type": "error", "task_id": task_id, "error": str(e), "retryable": True})
+
+    io_pool.shutdown(wait=False)
 
 
 # ===========================================================================

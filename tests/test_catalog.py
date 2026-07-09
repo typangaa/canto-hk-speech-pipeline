@@ -1,11 +1,17 @@
-"""P0 gate tests — verify the DuckDB catalog matches the legacy jsonl source-of-truth exactly. Run: pytest tests/test_catalog.py -v
+"""Catalog gate tests — verify the DuckDB catalog's growing tables only ever grow
+(never shrink/duplicate) and that their cross-table invariants hold. Run: pytest tests/test_catalog.py -v
 
-labels_music / labels_lang / labels_overlap (and task_runs) are excluded from the
-frozen EXPECTED counts below: since P1's label.music and P2's label.suite
-orchestrator nodes went live, they are live-growing tables that new pilot/
-production runs append to — see test_labels_music_monotonic_growth,
-test_labels_music_provenance_breakdown, and test_labels_lang_overlap_monotonic_growth
-for their invariants instead.
+Originally (P0) these compared several tables against a frozen exact-count
+EXPECTED dict, on the assumption they were written once by the legacy jsonl
+import and never touched again. That assumption broke as the corpus grew
+past the original 455,299-row P0 import via orphan recovery (recover.orphans),
+backlog processing, and — as of 2026-07-09 — the Phase A repair chain
+(speaker.embed --verify-existing repair of 454,775 embedding_ref rows orphaned
+by the §7.3 filtered/ tree retirement, followed by a full speaker.cluster
+recompute, a tier.assign resume, and a fresh manifest.export). asr_agreement /
+filters / g2p / tiers are now live-growing tables just like segments /
+raw_files / labels_music / labels_lang / labels_overlap — see the
+*_monotonic_growth tests below for all of them.
 """
 
 import os
@@ -14,29 +20,6 @@ import pytest
 
 from pipeline.catalog.catalog import connect_ro
 from pipeline.config import CATALOG_PATH
-
-# P0 legacy-import baseline, frozen — these tables are never written to again
-# after the one-time P0 import (their source jsonl files are static).
-#
-# `segments` is NOT in this dict (moved out 2026-07-03): P3 session 4's
-# segment.vad_cut node writes genuinely new segments for newly-ingested raw
-# files (raw_id IS NOT NULL) — see test_segments_monotonic_growth below for
-# its floor-based invariant instead, the same pattern already used for
-# labels_music/labels_lang/labels_overlap.
-#
-# `raw_files` is NOT in this dict either (moved out 2026-07-04): discovered
-# metadata/downloaded.jsonl was missing ~4,648 raw files that already existed
-# on disk (mostly youtube — a pre-existing logging gap, cause not identified,
-# unrelated to any code in this repo). Backfilled via
-# scripts/backfill_downloaded_jsonl.py (6,272 -> 10,910 unique ids) — see
-# test_raw_files_monotonic_growth below for its floor-based invariant instead.
-EXPECTED = {
-    "asr_results": 910598,
-    "asr_agreement": 455299,
-    "filters": 455299,
-    "g2p": 455299,
-    "tiers": 455299,
-}
 
 # P0 import baseline for segments, before P3 S4's segment.vad_cut node started
 # appending newly pipeline-cut segments (raw_id IS NOT NULL) — a floor, not an
@@ -58,6 +41,23 @@ LABELS_MUSIC_P0_BASELINE = 105668
 # exact count. Full corpus size (455299) is the ceiling both approach.
 LABELS_LANG_OVERLAP_P0_BASELINE = 455275
 
+# 2026-07-09 baseline: current row counts for the tables that are 1:1 with
+# segments (asr_agreement/filters/tiers all become eligible once >= 2 ASR
+# models have landed for a segment — see asr.agreement's docstring). Floors,
+# not exact counts — new raw ingestion grows `segments` first, and these
+# tables catch up a batch behind it, so `<= segments` is the ceiling to check
+# instead of an exact match.
+ONE_TO_ONE_TABLE_BASELINES = {
+    "asr_agreement": 618695,
+    "filters": 618695,
+    "tiers": 618695,
+}
+
+# 2026-07-09 baseline for g2p: runs only on human-verified/agreement-passing
+# text (a subset of asr_agreement, not all of segments) — a floor, not an
+# exact count.
+G2P_BASELINE = 484832
+
 
 @pytest.fixture(scope="module")
 def catalog_conn():
@@ -68,15 +68,37 @@ def catalog_conn():
     conn.close()
 
 
-def test_row_counts(catalog_conn):
-    failures = []
-    for table, expected in EXPECTED.items():
-        actual = catalog_conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-        if actual != expected:
-            failures.append(
-                f"  table={table!r}: expected {expected}, got {actual}"
-            )
-    assert not failures, "Row count mismatches:\n" + "\n".join(failures)
+def test_one_to_one_tables_monotonic_growth(catalog_conn):
+    total_segments = catalog_conn.execute("SELECT COUNT(*) FROM segments").fetchone()[0]
+    for table, baseline in ONE_TO_ONE_TABLE_BASELINES.items():
+        total = catalog_conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        assert total >= baseline, (
+            f"{table} has {total} rows, below the 2026-07-09 baseline of "
+            f"{baseline} — rows should only ever be added, never lost"
+        )
+        assert total <= total_segments, (
+            f"{table} has {total} rows, more than segments ({total_segments})"
+        )
+        dupes = catalog_conn.execute(
+            f"SELECT id, COUNT(*) FROM {table} GROUP BY id HAVING COUNT(*) != 1"
+        ).fetchall()
+        assert not dupes, f"duplicate ids in {table}: {dupes[:5]}"
+
+
+def test_g2p_monotonic_growth(catalog_conn):
+    total = catalog_conn.execute("SELECT COUNT(*) FROM g2p").fetchone()[0]
+    assert total >= G2P_BASELINE, (
+        f"g2p has {total} rows, below the 2026-07-09 baseline of "
+        f"{G2P_BASELINE} — rows should only ever be added, never lost"
+    )
+    orphans = catalog_conn.execute(
+        "SELECT COUNT(*) FROM g2p g LEFT JOIN asr_agreement a ON a.id = g.id WHERE a.id IS NULL"
+    ).fetchone()[0]
+    assert orphans == 0, f"{orphans} g2p row(s) have no matching asr_agreement row"
+    dupes = catalog_conn.execute(
+        "SELECT id, COUNT(*) FROM g2p GROUP BY id HAVING COUNT(*) != 1"
+    ).fetchall()
+    assert not dupes, f"duplicate ids in g2p: {dupes[:5]}"
 
 
 def test_segments_monotonic_growth(catalog_conn):
@@ -204,34 +226,44 @@ def test_labels_lang_overlap_monotonic_growth(catalog_conn):
         assert not dupes, f"duplicate ids in {table}: {dupes[:5]}"
 
 
-def test_asr_results_two_models_per_segment(catalog_conn):
+def test_asr_results_at_least_two_architectures_per_segment(catalog_conn):
+    """Originally exactly 2 rows/id (canto_ft + whisper_v3 at P0 import time).
+    Since then two more independent ASR backends (qwen3_asr, sense_voice) went
+    live, and canto_ft's `model` string has changed across sessions/machines
+    (an absolute ct2_models path baked into the string) — so raw row count per
+    id is no longer a fixed number (currently 4 or 5 in the live catalog). What
+    must still hold is asr.agreement's own eligibility rule ("an id becomes
+    eligible once >= 2 models have landed") — check the path-normalized
+    distinct-architecture count per id, not the raw row count.
+    """
     offenders = catalog_conn.execute(
-        "SELECT id, COUNT(*) FROM asr_results GROUP BY id HAVING COUNT(*) != 2"
+        """
+        SELECT id, COUNT(DISTINCT
+            CASE WHEN model LIKE '%whisper-large-v2-cantonese%' THEN 'canto_ft' ELSE model END
+        ) AS n_arch
+        FROM asr_results GROUP BY id HAVING n_arch < 2
+        """
     ).fetchall()
     if offenders:
         preview = offenders[:5]
         preview_str = "\n".join(
-            f"  id={row[0]!r}, count={row[1]}" for row in preview
+            f"  id={row[0]!r}, n_arch={row[1]}" for row in preview
         )
         pytest.fail(
-            f"{len(offenders)} segment id(s) in asr_results do not have exactly 2 rows. "
-            f"First up to 5 offenders:\n{preview_str}"
+            f"{len(offenders)} segment id(s) in asr_results have fewer than 2 "
+            f"distinct ASR architectures. First up to 5 offenders:\n{preview_str}"
         )
 
 
-def test_tiers_provenance_row_count_unchanged(catalog_conn):
-    """P4 tier.assign re-tags legacy rows' provenance (NULL -> 'tier_assign') but must
-    never add/remove/duplicate a row -- tiers stays exactly EXPECTED['tiers'] regardless
-    of how many rows have been re-tagged so far (a mix of both provenances is normal
-    and expected -- see docs/REARCHITECTURE_IMPLEMENTATION_PLAN.md P4 session write-up)."""
-    total = catalog_conn.execute("SELECT COUNT(*) FROM tiers").fetchone()[0]
-    assert total == EXPECTED["tiers"], (
-        f"tiers has {total} rows, expected exactly {EXPECTED['tiers']} regardless of provenance mix"
-    )
-    dupes = catalog_conn.execute(
-        "SELECT id, COUNT(*) FROM tiers GROUP BY id HAVING COUNT(*) != 1"
-    ).fetchall()
-    assert not dupes, f"duplicate ids in tiers: {dupes[:5]}"
+def test_tiers_valid_values(catalog_conn):
+    """tiers row count is covered by test_one_to_one_tables_monotonic_growth
+    above (it grows with the corpus, no longer a fixed count as of the
+    2026-07-09 tier.assign resume that took it from 245,500 to all 618,695
+    segments) -- this test just checks every row's tier value is one of the
+    three valid verification-confidence tiers (gold/silver/excluded; note
+    'gold' currently has zero rows in the live catalog since no human-
+    calibration node is wired into the DAG yet — see CLAUDE.md's ASR
+    strategy note — this is expected, not a bug)."""
     bad_tiers = catalog_conn.execute(
         "SELECT DISTINCT tier FROM tiers WHERE tier NOT IN ('gold', 'silver', 'excluded')"
     ).fetchall()
@@ -240,15 +272,21 @@ def test_tiers_provenance_row_count_unchanged(catalog_conn):
 
 def test_manifest_build_matches_expected_corpus_totals(catalog_conn):
     """P4 gate: manifest.build()'s catalog join must reproduce the exact totals the
-    current on-disk metadata/manifest.jsonl was built with (455,299 entries / 9,169
-    speakers / gold=16,585 / silver=438,714 -- see persisted memory
-    canto-corpus-pipeline.md). A mismatch here means the eligibility join (filters.pass
-    OR legacy-no-provenance, g2p.valid_fraction OR legacy-no-provenance, tier IN
-    (gold,silver)) regressed."""
+    current on-disk metadata/manifest.jsonl was built with. Baseline updated
+    2026-07-09 after the Phase A repair chain (speaker.embed --verify-existing
+    repair of 454,775 orphaned embeddings -> speaker.cluster full recompute ->
+    tier.assign resume -> manifest.export): 369,700 entries / 8,160 speakers /
+    gold=0 / silver=369,700 -- fewer entries than the pre-repair chain's
+    455,299 because manifest.build additionally gates on filters.pass and
+    g2p.valid_fraction (independent eligibility signals), and gold=0 because
+    no human-calibration node is wired into the DAG (see test_tiers_valid_values
+    above). A mismatch here means the eligibility join (filters.pass,
+    g2p.valid_fraction, tier IN (gold,silver)) regressed -- update this baseline
+    only after an intentional, verified manifest.export re-run."""
     from pipeline.nodes.manifest import run_manifest_build
 
     result = run_manifest_build()
-    assert result["count"] == 455299
-    assert result["n_speakers"] == 9169
-    assert result["tier_counts"].get("gold") == 16585
-    assert result["tier_counts"].get("silver") == 438714
+    assert result["count"] == 369700
+    assert result["n_speakers"] == 8160
+    assert result["tier_counts"].get("gold", 0) == 0
+    assert result["tier_counts"].get("silver") == 369700
