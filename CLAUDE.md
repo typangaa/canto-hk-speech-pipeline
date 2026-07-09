@@ -121,7 +121,7 @@ duplicating output.
 | `segment.diarize` | `raw_files` | `diarization_turns`, `raw_segments` | pyannote 3.1, sidecar-reuse-first, GPU fallback for genuine misses |
 | `segment.vad_cut` | `diarization_turns` | `segments` | Silero VAD *within* each turn → single-speaker 3–20s clips, written as **48kHz FLAC** (since 2026-07-05, P5-A) |
 | `pregate.snr` | `segments` | `pregate` | fast SNR/DNSMOS pre-gate before spending ASR GPU time |
-| `asr.transcribe` | `segments` | `asr_results` | **dual** faster-whisper models, one per GPU — never `language="yue"` |
+| `asr.transcribe` | `segments` | `asr_results` | 4 models across 3 backends (faster-whisper canto_ft + whisper_v3, Qwen3-ASR-1.7B added 2026-07-07, SenseVoice-Small added 2026-07-08) — never `language="yue"` for the Whisper models |
 | `asr.agreement` | `asr_results` | `asr_agreement` | cross-model char-overlap agreement score |
 | `filter.text` | `asr_agreement` | `filters_text` | length/English-ratio/Mandarin-ratio gates — no audio decode |
 | `filter.acoustic` | `filters_text` (pass=true only) | `filters_acoustic` | SNR + DNSMOS — CPU worker-subprocess pool |
@@ -172,7 +172,7 @@ CPU. The pre-2026-07-04 raw WAV backlog (decompressed from lossy AAC/opus/MP3 so
 being losslessly transcoded to FLAC by the `raw.flac` node (bit-exact-verified before the
 original WAV is ever deleted).
 
-**ASR strategy**: run **several** ASR models per segment (e.g. a Cantonese fine-tuned Whisper + base `large-v3` with `language="zh"` + prompt). Store every candidate transcript in `asr_results`; `asr.agreement` computes cross-model agreement, and `filter.decide`/`tier.assign` decide what's trustworthy — there is no separate human-calibration UI stage currently wired into the DAG (the old stage-5 `05_calibrate.py` concept). Never auto-trust a single ASR output, and **never use `language="yue"`** — it triggers decoder collapse on large-v3 (see `docs/KNOWN_ISSUES.md §9`).
+**ASR strategy**: run **several** ASR models per segment across three independent backends — `canto_ft` + `whisper_v3` (Cantonese fine-tuned Whisper + base `large-v3`, both faster-whisper/ctranslate2, `language="zh"` + prompt), `qwen3_asr` (Qwen3-ASR-1.7B, transformers backend, native `language="Cantonese"` support — a distinct architecture, not Whisper-derived, added 2026-07-07), and `sense_voice` (SenseVoice-Small, funasr backend, CTC non-autoregressive, native `language="yue"` support, ~105× RTF, added 2026-07-08 — emits Simplified Chinese converted to Traditional HK via OpenCC s2hk, plus emotion/audio-event tags stored in `asr_results.metadata`, stripped from `text`). Store every candidate transcript in `asr_results`; `asr.agreement` computes N-way cross-model agreement (an id becomes eligible once ≥2 models have landed; a later straggler model re-triggers recompute rather than being ignored), and `filter.decide`/`tier.assign` decide what's trustworthy — there is no separate human-calibration UI stage currently wired into the DAG (the old stage-5 `05_calibrate.py` concept). Never auto-trust a single ASR output, and **never use `language="yue"`** for the Whisper models — it triggers decoder collapse on large-v3 (see `docs/KNOWN_ISSUES.md §9`); Qwen3-ASR and SenseVoice are architecturally distinct from Whisper and unaffected by this bug, using `language="Cantonese"`/`"yue"` directly. Known limitation: `filter.text`/`filter.decide`/`tier.assign` discovery is a bare row-existence anti-join (not provenance-tagged like `asr_agreement.model_count`), so segments already filtered/tiered before a later model (e.g. sense_voice) improved their `asr_agreement.best_text` are **not** automatically re-evaluated — only newly-discovered segments benefit from the improved agreement.
 
 ---
 
@@ -431,7 +431,10 @@ node against the catalog is open work, not yet scheduled into a milestone.
 |------|--------|---------|
 | DuckDB | PyPI | The catalog (`metadata/corpus.duckdb`) — single source of truth for all node state |
 | canto-hk-g2p | [github.com/typangaa/canto-hk-g2p](https://github.com/typangaa/canto-hk-g2p) | `g2p` node (Rust+PyO3) |
-| faster-whisper | PyPI | `asr.transcribe` |
+| faster-whisper | PyPI | `asr.transcribe` (canto_ft / whisper_v3) |
+| qwen-asr | PyPI | `asr.transcribe` (qwen3_asr, transformers backend) |
+| funasr + modelscope | PyPI (ModelScope model license, non-OSI, commercial use permitted) | `asr.transcribe` (sense_voice, SenseVoice-Small) |
+| opencc-python-reimplemented | PyPI | `asr.transcribe` (sense_voice's Simplified→Traditional HK s2hk conversion) |
 | pyannote.audio | PyPI + HF model terms | `segment.diarize` |
 | speechbrain | PyPI | `speaker.embed` (ECAPA-TDNN) |
 | speechmos | PyPI | `pregate.snr` / `filter.acoustic` DNSMOS quality gate |

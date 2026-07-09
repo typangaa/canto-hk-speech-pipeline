@@ -252,6 +252,7 @@ def cmd_run_speaker_embed(args: argparse.Namespace) -> int:
         batch_size=args.batch,
         mem_fraction=args.mem_fraction,
         limit=args.limit,
+        verify_existing=args.verify_existing,
     ))
     print(f"\nDone: {result}")
     return 0
@@ -350,6 +351,7 @@ async def _run_many_adapt_speaker_embed(args: argparse.Namespace, conn) -> dict:
         batch_size=args.batch,
         mem_fraction=args.mem_fraction,
         limit=args.limit,
+        verify_existing=args.verify_existing,
     )
 
 
@@ -379,6 +381,89 @@ async def _run_many_adapt_tier_assign(args: argparse.Namespace, conn) -> dict:
     return await run_tier_assign(conn=conn, batch_size=args.batch, limit=args.limit)
 
 
+async def _run_many_adapt_filter_text(args: argparse.Namespace, conn) -> dict:
+    from pipeline.nodes.filter import run_filter_text
+    return await run_filter_text(conn=conn, batch_size=args.batch, limit=args.limit)
+
+
+async def _run_many_adapt_filter_decide(args: argparse.Namespace, conn) -> dict:
+    from pipeline.nodes.filter import run_filter_decide
+    return await run_filter_decide(conn=conn, batch_size=args.batch, limit=args.limit)
+
+
+async def _run_many_adapt_segment_vad_cut(args: argparse.Namespace, conn) -> dict:
+    from pipeline.nodes.segment import run_segment_vad_cut
+    return await run_segment_vad_cut(conn=conn, n_threads=args.threads, limit=args.limit)
+
+
+async def _run_many_adapt_pregate_snr(args: argparse.Namespace, conn) -> dict:
+    from pipeline.nodes.segment import run_pregate_snr
+    return await run_pregate_snr(
+        conn=conn, min_snr=args.min_snr, min_dnsmos=args.min_dnsmos,
+        n_threads=args.threads, batch_size=args.batch, limit=args.limit,
+    )
+
+
+async def _run_many_adapt_g2p(args: argparse.Namespace, conn) -> dict:
+    from pipeline.nodes.g2p import run_g2p
+    return await run_g2p(conn=conn, batch_size=args.batch, limit=args.limit)
+
+
+async def _run_many_adapt_ingest_probe(args: argparse.Namespace, conn) -> dict:
+    from pipeline.nodes.ingest_probe import run_ingest_probe
+    return await run_ingest_probe(
+        conn=conn, workers=args.workers, batch_size=args.batch, limit=args.limit,
+    )
+
+
+async def _run_many_adapt_label_suite(args: argparse.Namespace, conn) -> dict:
+    from pipeline.nodes.label_suite import run_label_suite
+    devices = [d.strip() for d in args.devices.split(",")]
+    return await run_label_suite(
+        devices,
+        conn=conn,
+        gpu_policy=args.gpu_policy,
+        batch_size=args.batch,
+        mem_fraction=args.mem_fraction,
+        limit=args.limit,
+    )
+
+
+async def _run_many_adapt_label_prosody(args: argparse.Namespace, conn) -> dict:
+    from pipeline.nodes.label_prosody import run_label_prosody
+    return await run_label_prosody(
+        conn=conn, n_workers=args.workers, threads_per_worker=args.threads,
+        batch_size=args.batch, limit=args.limit,
+    )
+
+
+async def _run_many_adapt_recover_orphans(args: argparse.Namespace, conn) -> dict:
+    from pipeline.nodes.recover_orphans import run_recover_orphans
+    return await run_recover_orphans(conn=conn, limit=args.limit)
+
+
+async def _run_many_adapt_rebalance_segments(args: argparse.Namespace, conn) -> dict:
+    if args.delete_verified:
+        from pipeline.nodes.rebalance import run_rebalance_delete_verified
+        return await run_rebalance_delete_verified(conn=conn, limit=args.limit)
+    from pipeline.nodes.rebalance import run_rebalance_copy
+    return await run_rebalance_copy(
+        conn=conn, workers=args.workers, batch_size=args.batch,
+        batch_gb=args.batch_gb, limit=args.limit,
+    )
+
+
+async def _run_many_adapt_raw_flac(args: argparse.Namespace, conn) -> dict:
+    if args.delete_verified:
+        from pipeline.nodes.raw_flac import run_raw_flac_delete_verified
+        return await run_raw_flac_delete_verified(conn=conn, limit=args.limit)
+    from pipeline.nodes.raw_flac import run_raw_flac_transcode
+    return await run_raw_flac_transcode(
+        conn=conn, workers=args.workers, batch_size=args.batch,
+        batch_gb=args.batch_gb, limit=args.limit,
+    )
+
+
 # Nodes wired up for `pipe run-many`. A node must accept a `conn=` kwarg
 # (dependency-injected DuckDB connection/cursor) before it can be added here —
 # see docs/ORCHESTRATOR_PLAN.md for the full call-site inventory and the
@@ -394,6 +479,17 @@ RUN_MANY_ADAPTERS = {
     "speaker.cluster": _run_many_adapt_speaker_cluster,
     "lang_screen.auto": _run_many_adapt_lang_screen_auto,
     "tier.assign": _run_many_adapt_tier_assign,
+    "filter.text": _run_many_adapt_filter_text,
+    "filter.decide": _run_many_adapt_filter_decide,
+    "segment.vad_cut": _run_many_adapt_segment_vad_cut,
+    "pregate.snr": _run_many_adapt_pregate_snr,
+    "g2p": _run_many_adapt_g2p,
+    "ingest.probe": _run_many_adapt_ingest_probe,
+    "label.suite": _run_many_adapt_label_suite,
+    "label.prosody": _run_many_adapt_label_prosody,
+    "recover.orphans": _run_many_adapt_recover_orphans,
+    "rebalance.segments": _run_many_adapt_rebalance_segments,
+    "raw.flac": _run_many_adapt_raw_flac,
 }
 
 
@@ -458,7 +554,7 @@ def cmd_run_raw_flac(args: argparse.Namespace) -> int:
 
     if args.delete_verified:
         from pipeline.nodes.raw_flac import run_raw_flac_delete_verified
-        result = run_raw_flac_delete_verified(limit=args.limit)
+        result = asyncio.run(run_raw_flac_delete_verified(limit=args.limit))
     else:
         from pipeline.nodes.raw_flac import run_raw_flac_transcode
         result = asyncio.run(run_raw_flac_transcode(
@@ -491,7 +587,7 @@ def cmd_run_rebalance_segments(args: argparse.Namespace) -> int:
 
     if args.delete_verified:
         from pipeline.nodes.rebalance import run_rebalance_delete_verified
-        result = run_rebalance_delete_verified(limit=args.limit)
+        result = asyncio.run(run_rebalance_delete_verified(limit=args.limit))
     else:
         from pipeline.nodes.rebalance import run_rebalance_copy
         result = asyncio.run(run_rebalance_copy(
@@ -684,9 +780,19 @@ def main() -> int:
     p_run_rebalance.add_argument("--delete-verified", action="store_true",
                                   help="delete original file for already-verified migrations instead of copying")
     p_run_rebalance.set_defaults(func=cmd_run_rebalance_segments)
-    p_run_asr = run_sub.add_parser("asr.transcribe", help="P3: dual faster-whisper models split across GPUs")
-    p_run_asr.add_argument("--models", default="canto_ft,whisper_v3",
-                            help="comma-separated model keys, paired positionally with --devices")
+    p_run_asr = run_sub.add_parser(
+        "asr.transcribe",
+        help="P3: multi-model ASR across GPUs (canto_ft, whisper_v3, qwen3_asr, sense_voice)",
+    )
+    p_run_asr.add_argument(
+        "--models", default="canto_ft,whisper_v3",
+        help=(
+            "comma-separated model keys, paired positionally with --devices. "
+            "Valid keys: canto_ft, whisper_v3, qwen3_asr, sense_voice. "
+            "Example: --models sense_voice,sense_voice --devices cuda:0,cuda:1 "
+            "(splits sense_voice across both GPUs round-robin)."
+        ),
+    )
     p_run_asr.add_argument("--devices", default="cuda:0,cuda:1",
                             help="comma-separated device list, one worker per (model,device) pair")
     p_run_asr.add_argument("--gpu-policy", default="cap", choices=["yield", "cap", "exempt"])
@@ -733,6 +839,10 @@ def main() -> int:
     p_run_spk_embed.add_argument("--mem-fraction", type=float, default=0.15)
     p_run_spk_embed.add_argument("--limit", type=int, default=None,
                                   help="process only the first N discovered segments (testing)")
+    p_run_spk_embed.add_argument("--verify-existing", action="store_true",
+                                  help="also stat every existing embedding_ref file on disk and "
+                                       "re-queue rows whose sidecar is missing (e.g. orphaned by "
+                                       "the filtered/ tree retirement) -- slower, opt-in repair pass")
     p_run_spk_embed.set_defaults(func=cmd_run_speaker_embed)
     p_run_spk_cluster = run_sub.add_parser("speaker.cluster", help="P3: cross-file speaker clustering (CPU, whole-source recompute)")
     p_run_spk_cluster.add_argument("--threshold", type=float, default=0.25)

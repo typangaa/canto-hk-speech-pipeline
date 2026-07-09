@@ -7,11 +7,23 @@ from pipeline.catalog.catalog import init_schema, upsert_rows
 from pipeline.cli import split_run_many_groups
 from pipeline.nodes import ingest_download
 from pipeline.nodes.asr import run_asr_agreement, run_asr_transcribe
-from pipeline.nodes.filter import run_filter_acoustic
+from pipeline.nodes.filter import (
+    run_filter_acoustic,
+    run_filter_decide,
+    run_filter_text,
+)
+from pipeline.nodes.g2p import run_g2p
 from pipeline.nodes.ingest_download import run_ingest_commit
+from pipeline.nodes.ingest_probe import run_ingest_probe
 from pipeline.nodes.label_music import run_label_music
+from pipeline.nodes.label_prosody import run_label_prosody
+from pipeline.nodes.label_suite import run_label_suite
 from pipeline.nodes.lang_screen import run_lang_screen_auto
-from pipeline.nodes.segment import run_segment_diarize
+from pipeline.nodes.raw_flac import run_raw_flac_delete_verified, run_raw_flac_transcode
+from pipeline.nodes.rebalance import run_rebalance_copy, run_rebalance_delete_verified
+from pipeline.nodes import recover_orphans
+from pipeline.nodes.recover_orphans import run_recover_orphans
+from pipeline.nodes.segment import run_pregate_snr, run_segment_diarize, run_segment_vad_cut
 from pipeline.nodes.speaker import run_speaker_cluster, run_speaker_embed
 from pipeline.nodes.tier import run_tier_assign
 
@@ -172,6 +184,153 @@ def test_run_ingest_commit_uses_injected_conn(scratch_conn, monkeypatch, tmp_pat
 
     assert result["committed"] == 0
     assert result["archived_to"] is None
+
+
+def test_run_filter_text_uses_injected_conn(scratch_conn, monkeypatch):
+    def _boom(*a, **kw):
+        raise AssertionError("run_filter_text must not call connect() when conn is given")
+
+    monkeypatch.setattr("pipeline.catalog.catalog.connect", _boom)
+
+    result = asyncio.run(run_filter_text(conn=scratch_conn))
+
+    assert result == {"processed": 0, "errors": 0}
+
+
+def test_run_filter_decide_uses_injected_conn(scratch_conn, monkeypatch):
+    def _boom(*a, **kw):
+        raise AssertionError("run_filter_decide must not call connect() when conn is given")
+
+    monkeypatch.setattr("pipeline.catalog.catalog.connect", _boom)
+
+    result = asyncio.run(run_filter_decide(conn=scratch_conn))
+
+    assert result == {"processed": 0, "errors": 0}
+
+
+def test_run_segment_vad_cut_uses_injected_conn(scratch_conn, monkeypatch):
+    def _boom(*a, **kw):
+        raise AssertionError("run_segment_vad_cut must not call connect() when conn is given")
+
+    monkeypatch.setattr("pipeline.catalog.catalog.connect", _boom)
+
+    result = asyncio.run(run_segment_vad_cut(conn=scratch_conn))
+
+    assert result == {"processed": 0, "total_segments": 0, "errors": 0}
+
+
+def test_run_pregate_snr_uses_injected_conn(scratch_conn, monkeypatch):
+    def _boom(*a, **kw):
+        raise AssertionError("run_pregate_snr must not call connect() when conn is given")
+
+    monkeypatch.setattr("pipeline.catalog.catalog.connect", _boom)
+
+    result = asyncio.run(run_pregate_snr(conn=scratch_conn))
+
+    assert result == {"processed": 0, "passed": 0, "failed_snr": 0, "failed_dnsmos": 0, "errors": 0}
+
+
+def test_run_g2p_uses_injected_conn(scratch_conn, monkeypatch):
+    def _boom(*a, **kw):
+        raise AssertionError("run_g2p must not call connect() when conn is given")
+
+    monkeypatch.setattr("pipeline.catalog.catalog.connect", _boom)
+
+    result = asyncio.run(run_g2p(conn=scratch_conn))
+
+    assert result == {"processed": 0, "errors": 0}
+
+
+def test_run_ingest_probe_uses_injected_conn(scratch_conn, monkeypatch):
+    def _boom(*a, **kw):
+        raise AssertionError("run_ingest_probe must not call connect() when conn is given")
+
+    monkeypatch.setattr("pipeline.catalog.catalog.connect", _boom)
+
+    result = asyncio.run(run_ingest_probe(conn=scratch_conn))
+
+    assert result == {"processed": 0, "errors": 0}
+
+
+def test_run_label_suite_uses_injected_conn(scratch_conn, monkeypatch):
+    def _boom(*a, **kw):
+        raise AssertionError("run_label_suite must not call connect() when conn is given")
+
+    monkeypatch.setattr("pipeline.catalog.catalog.connect", _boom)
+
+    result = asyncio.run(run_label_suite(["cuda:0"], conn=scratch_conn))
+
+    assert result == {"processed": 0, "errors": 0}
+
+
+def test_run_label_prosody_uses_injected_conn(scratch_conn, monkeypatch):
+    def _boom(*a, **kw):
+        raise AssertionError("run_label_prosody must not call connect() when conn is given")
+
+    monkeypatch.setattr("pipeline.catalog.catalog.connect", _boom)
+
+    result = asyncio.run(run_label_prosody(conn=scratch_conn))
+
+    assert result == {"processed": 0, "errors": 0}
+
+
+def test_run_recover_orphans_uses_injected_conn(scratch_conn, monkeypatch, tmp_path):
+    def _boom(*a, **kw):
+        raise AssertionError("run_recover_orphans must not call connect() when conn is given")
+
+    monkeypatch.setattr("pipeline.catalog.catalog.connect", _boom)
+    # discover() walks the real SEGMENTS_ROOT on disk (not the catalog) --
+    # point it at an empty tmp dir so this test never touches the live,
+    # multi-hundred-thousand-file production segments tree.
+    monkeypatch.setattr(recover_orphans, "_segments_root", lambda: tmp_path)
+
+    result = asyncio.run(run_recover_orphans(conn=scratch_conn))
+
+    assert result == {"scanned": 0, "recovered": 0, "pending_delete": 0, "errors": 0}
+
+
+def test_run_rebalance_copy_uses_injected_conn(scratch_conn, monkeypatch):
+    def _boom(*a, **kw):
+        raise AssertionError("run_rebalance_copy must not call connect() when conn is given")
+
+    monkeypatch.setattr("pipeline.catalog.catalog.connect", _boom)
+
+    result = asyncio.run(run_rebalance_copy(conn=scratch_conn))
+
+    assert result == {"processed": 0, "verified": 0, "failed": 0, "already_in_place": 0}
+
+
+def test_run_rebalance_delete_verified_uses_injected_conn(scratch_conn, monkeypatch):
+    def _boom(*a, **kw):
+        raise AssertionError("run_rebalance_delete_verified must not call connect() when conn is given")
+
+    monkeypatch.setattr("pipeline.catalog.catalog.connect", _boom)
+
+    result = asyncio.run(run_rebalance_delete_verified(conn=scratch_conn))
+
+    assert result == {"deleted": 0, "errors": 0}
+
+
+def test_run_raw_flac_transcode_uses_injected_conn(scratch_conn, monkeypatch):
+    def _boom(*a, **kw):
+        raise AssertionError("run_raw_flac_transcode must not call connect() when conn is given")
+
+    monkeypatch.setattr("pipeline.catalog.catalog.connect", _boom)
+
+    result = asyncio.run(run_raw_flac_transcode(conn=scratch_conn))
+
+    assert result == {"processed": 0, "verified": 0, "failed": 0}
+
+
+def test_run_raw_flac_delete_verified_uses_injected_conn(scratch_conn, monkeypatch):
+    def _boom(*a, **kw):
+        raise AssertionError("run_raw_flac_delete_verified must not call connect() when conn is given")
+
+    monkeypatch.setattr("pipeline.catalog.catalog.connect", _boom)
+
+    result = asyncio.run(run_raw_flac_delete_verified(conn=scratch_conn))
+
+    assert result == {"deleted": 0, "errors": 0}
 
 
 def test_run_filter_acoustic_defaults_to_self_connect(monkeypatch, scratch_conn):

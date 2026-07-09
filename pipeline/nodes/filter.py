@@ -334,11 +334,15 @@ def evaluate_text(duration_sec: float | None, sample_rate: int | None, text: str
     }
 
 
-async def run_filter_text(*, batch_size: int = 5000, limit: int | None = None) -> dict:
+async def run_filter_text(*, conn=None, batch_size: int = 5000, limit: int | None = None) -> dict:
+    """conn: optional pre-opened DuckDB connection (or cursor) — pass one when
+    running alongside other nodes under `pipe run-many` (see filter.py's
+    run_filter_acoustic docstring for the rationale). Defaults to a fresh
+    self-managed connect() for standalone `pipe run filter.text` usage."""
     from pipeline.catalog.catalog import connect, upsert_rows
     from pipeline.orchestrator.journal import new_run_id, record_batch
 
-    conn = connect()
+    conn = conn or connect()
     rows = discover_text(conn)
     if limit:
         rows = rows[:limit]
@@ -717,11 +721,15 @@ def decide_row(
     }
 
 
-async def run_filter_decide(*, batch_size: int = 5000, limit: int | None = None) -> dict:
+async def run_filter_decide(*, conn=None, batch_size: int = 5000, limit: int | None = None) -> dict:
+    """conn: optional pre-opened DuckDB connection (or cursor) — pass one when
+    running alongside other nodes under `pipe run-many` (see filter.py's
+    run_filter_acoustic docstring for the rationale). Defaults to a fresh
+    self-managed connect() for standalone `pipe run filter.decide` usage."""
     from pipeline.catalog.catalog import connect, upsert_rows
     from pipeline.orchestrator.journal import new_run_id, record_batch
 
-    conn = connect()
+    conn = conn or connect()
     rows = discover_decide(conn)
     if limit:
         rows = rows[:limit]
@@ -734,15 +742,25 @@ async def run_filter_decide(*, batch_size: int = 5000, limit: int | None = None)
     passed = 0
     t0 = time.time()
 
-    for i in range(0, len(rows), batch_size):
-        batch = rows[i:i + batch_size]
-        out_rows = [decide_row(*r) for r in batch]
-        upsert_rows(conn, "filters", out_rows, ["id"])
-        record_batch(conn, run_id, "filter.decide", [r["id"] for r in out_rows], "ok")
-        processed += len(out_rows)
-        passed += sum(1 for r in out_rows if r["pass"])
-        rate = processed / (time.time() - t0) if time.time() > t0 else 0.0
-        log.info(f"{processed}/{len(rows)} decided ({rate:.1f}/s), pass_rate={passed / processed:.3f}")
+    # Wrap all batches in a single transaction so DuckDB only performs one WAL
+    # checkpoint flush at the end rather than one per batch.  For a pure
+    # in-memory aggregation step like filter.decide (no audio, no workers),
+    # this cuts wall-clock time from O(n²) to O(n) on large catalogs.
+    conn.begin()
+    try:
+        for i in range(0, len(rows), batch_size):
+            batch = rows[i:i + batch_size]
+            out_rows = [decide_row(*r) for r in batch]
+            upsert_rows(conn, "filters", out_rows, ["id"])
+            record_batch(conn, run_id, "filter.decide", [r["id"] for r in out_rows], "ok")
+            processed += len(out_rows)
+            passed += sum(1 for r in out_rows if r["pass"])
+            rate = processed / (time.time() - t0) if time.time() > t0 else 0.0
+            log.info(f"{processed}/{len(rows)} decided ({rate:.1f}/s), pass_rate={passed / processed:.3f}")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
     elapsed = time.time() - t0
     log.info(f"DONE: {processed} decided ({passed} passed, {passed / max(processed, 1):.1%}) "

@@ -165,15 +165,20 @@ def _copy_one(seg_id: str, old_path: str, new_path: str, target_shard: int) -> d
 
 async def run_rebalance_copy(
     *,
+    conn=None,
     workers: int = 8,
     batch_size: int = 200,
     batch_gb: float | None = None,
     limit: int | None = None,
 ) -> dict:
+    """conn: optional pre-opened DuckDB connection (or cursor) — pass one when
+    running alongside other nodes under `pipe run-many` (see filter.py's
+    run_filter_acoustic docstring for the rationale). Defaults to a fresh
+    self-managed connect() for standalone `pipe run rebalance.segments` usage."""
     from pipeline.catalog.catalog import connect, upsert_rows
     from pipeline.orchestrator.journal import new_run_id, record_batch
 
-    conn = connect()
+    conn = conn or connect()
     rows = discover_copy(conn)
 
     already_in_place = [r for r in rows if r[1] == r[2]]
@@ -299,11 +304,18 @@ def _delete_one_verified(conn, seg_id: str, new_path: str) -> tuple[str, bool, s
     return seg_id, True, None
 
 
-def run_rebalance_delete_verified(*, limit: int | None = None) -> dict:
+async def run_rebalance_delete_verified(*, conn=None, limit: int | None = None) -> dict:
+    """conn: optional pre-opened DuckDB connection (or cursor) — pass one when
+    running alongside other nodes under `pipe run-many` (see filter.py's
+    run_filter_acoustic docstring for the rationale). Defaults to a fresh
+    self-managed connect() for standalone `pipe run rebalance.segments
+    --delete-verified` usage. Converted from a plain `def` to `async def`
+    2026-07-07 so it can join a run-many group like every other node — the
+    body itself stays synchronous/blocking, same as before."""
     from pipeline.catalog.catalog import connect
     from pipeline.orchestrator.journal import new_run_id, record_batch
 
-    conn = connect()
+    conn = conn or connect()
     rows = discover_delete_verified(conn)
     if limit:
         rows = rows[:limit]

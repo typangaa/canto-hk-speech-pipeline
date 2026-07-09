@@ -962,6 +962,7 @@ def _vad_cut_one(
 
 async def run_segment_vad_cut(
     *,
+    conn=None,
     n_threads: int | None = None,
     limit: int | None = None,
 ) -> dict:
@@ -979,11 +980,16 @@ async def run_segment_vad_cut(
     Even if a raw_id produces 0 valid clips (e.g. all VAD windows out of range),
     we still write a raw_segments row with n_segments=0 so the discovery query
     never retries it.
+
+    conn: optional pre-opened DuckDB connection (or cursor) — pass one when
+    running alongside other nodes under `pipe run-many` (see filter.py's
+    run_filter_acoustic docstring for the rationale). Defaults to a fresh
+    self-managed connect() for standalone `pipe run segment.vad_cut` usage.
     """
     from pipeline.catalog.catalog import connect, upsert_rows
     from pipeline.orchestrator.journal import new_run_id, record_batch
 
-    conn = connect()
+    conn = conn or connect()
     raw_ids = discover_vad_cut(conn)
     if limit:
         raw_ids = raw_ids[:limit]
@@ -1272,6 +1278,7 @@ def _pregate_one(
 
 async def run_pregate_snr(
     *,
+    conn=None,
     min_snr: float = DEFAULT_MIN_SNR,
     min_dnsmos: float = DEFAULT_MIN_DNSMOS,
     n_threads: int | None = None,
@@ -1289,11 +1296,16 @@ async def run_pregate_snr(
     For each discovered segment, calls _pregate_one() in a thread and writes
     one ``pregate`` row.  On any read/compute error, writes a fail-open row
     (pass=True) matching 03b's own behaviour.
+
+    conn: optional pre-opened DuckDB connection (or cursor) — pass one when
+    running alongside other nodes under `pipe run-many` (see filter.py's
+    run_filter_acoustic docstring for the rationale). Defaults to a fresh
+    self-managed connect() for standalone `pipe run pregate.snr` usage.
     """
     from pipeline.catalog.catalog import connect, upsert_rows
     from pipeline.orchestrator.journal import new_run_id, record_batch
 
-    conn = connect()
+    conn = conn or connect()
     rows = discover_pregate(conn)
     if limit:
         rows = rows[:limit]

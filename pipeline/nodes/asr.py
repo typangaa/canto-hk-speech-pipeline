@@ -1,38 +1,58 @@
 """
 pipeline/nodes/asr.py
-asr.transcribe DAG node — dual faster-whisper models (Cantonese fine-tune + large-v3
-zh+prompt), ported from scripts/04_transcribe.py onto the orchestrator's GPUWorkerBase
-+ JSONL worker protocol. asr.agreement is a separate CPU-only node that computes
-cross-model char-overlap agreement once both models' asr_results rows exist for a
-segment (item-level dependency — an id becomes eligible the moment its second model
-result lands, no stage barrier).
+asr.transcribe DAG node — four ASR models across three backends (faster-whisper +
+qwen-asr + sense_voice), ported from scripts/04_transcribe.py onto the
+orchestrator's GPUWorkerBase + JSONL worker protocol.  asr.agreement is a
+separate CPU-only node that computes N-way cross-model char-overlap agreement
+once ≥2 models' asr_results rows exist for a segment (item-level dependency —
+an id becomes eligible the moment its second model result lands, no stage
+barrier; a third/fourth-model straggler re-triggers and improves the row, never
+blocks it).
 
-Both models run split across GPUs from ONE supervisor process (run_asr_transcribe),
-never as two separate `pipe run` invocations — DuckDB is single-writer (P2 backlog
-finding, 2026-07-03): a second concurrent process's RW connect() would just block on
-the first, so both devices are dispatched from inside the same asyncio run sharing one
-catalog connection.
+Both/all models run under ONE supervisor process (run_asr_transcribe), never as
+separate `pipe run` invocations — DuckDB is single-writer (P2 backlog finding,
+2026-07-03): a second concurrent process's RW connect() would just block on the
+first, so all devices are dispatched from inside the same asyncio run sharing
+one catalog connection.
 
-Hard constraint #7 (CLAUDE.md / KNOWN_ISSUES.md §9): NEVER language="yue" — both
-models pass language="zh" with a Cantonese written-form prompt. large-v3 decoder
-collapses into repetition loops under language="yue".
+Hard constraint #7 (CLAUDE.md / KNOWN_ISSUES.md §9): NEVER language="yue" for
+Whisper models.  Both faster-whisper models pass language="zh" with a Cantonese
+written-form prompt.  Qwen3-ASR is a distinct transformer architecture with
+native Cantonese dialect support; it uses language="Cantonese" (full English
+name, per the qwen-asr package API).
 
-Golden-set parity note (REARCHITECTURE_IMPLEMENTATION_PLAN.md §9.1, updated 2026-07-03):
-the 16 kHz downsample uses scipy.signal.resample_poly(wav, 1, 3) — identical to
-scripts/04_transcribe.py's _load_and_resample — instead of audio/bus.py's soxr
-resampler. 48000/16000 is an exact 3:1 ratio (lossless polyphase, no approximation),
-and this node is the only reader of its audio (no decode-once fan-out benefit to
-sharing bus.py here), so there is no reason to introduce a different resampler that
-would risk perturbing greedy-decoded (beam_size=1) ASR text at the token boundary.
+# Backend key in ASR_MODELS["backend"]:
+#   "faster_whisper" — uses faster_whisper.WhisperModel (ctranslate2 backend),
+#                      TranscribeWorker subclass.
+#   "qwen_asr"       — uses qwen_asr.Qwen3ASRModel (transformers backend),
+#                      Qwen3ASRWorker subclass.
+#   "sense_voice"    — uses funasr.AutoModel (SenseVoiceSmall, CTC encoder-only,
+#                      non-autoregressive), SenseVoiceWorker subclass.
+#                      Outputs Traditional HK Chinese via OpenCC s2hk conversion.
+#                      Also emits emotion + audio-event tags (stored in metadata
+#                      field but not in asr_results.text).
+# worker_main() dispatches to the correct class at subprocess start-up via
+# WORKER_CLASSES dict; the JSONL stdin/stdout protocol (ready/task/result/error/
+# shutdown) is byte-identical regardless of backend.
+
+Golden-set parity note (REARCHITECTURE_IMPLEMENTATION_PLAN.md §9.1, updated
+2026-07-03): the 16 kHz downsample uses scipy.signal.resample_poly(wav, 1, 3)
+— identical to scripts/04_transcribe.py's _load_and_resample — instead of
+audio/bus.py's soxr resampler.  48000/16000 is an exact 3:1 ratio (lossless
+polyphase, no approximation), and this node is the only reader of its audio (no
+decode-once fan-out benefit to sharing bus.py here), so there is no reason to
+introduce a different resampler that would risk perturbing greedy-decoded
+(beam_size=1) ASR text at the token boundary.
 
 ASR text is NOT expected to match the legacy snapshot byte-for-byte, even with
-identical uv.lock-pinned ctranslate2/faster-whisper versions and identical audio —
-confirmed both are unchanged since before the corpus was originally transcribed, yet
-output still differs, stably (not randomly: repeat calls, same or fresh CUDA context,
-are 100% reproducible). The likely remaining variable is GPU-driver-level numerical
-drift, outside this package's control. Golden parity for this node is therefore
-similarity-tolerance (char_agreement), not exact-match — see
-tests/golden/check_asr_parity.py and REARCHITECTURE_IMPLEMENTATION_PLAN.md §9.1.
+identical uv.lock-pinned ctranslate2/faster-whisper versions and identical audio
+— confirmed both are unchanged since before the corpus was originally
+transcribed, yet output still differs, stably (not randomly: repeat calls, same
+or fresh CUDA context, are 100% reproducible).  The likely remaining variable is
+GPU-driver-level numerical drift, outside this package's control.  Golden parity
+for this node is therefore similarity-tolerance (char_agreement), not exact-match
+— see tests/golden/check_asr_parity.py and REARCHITECTURE_IMPLEMENTATION_PLAN.md
+§9.1.
 """
 
 import argparse
@@ -66,29 +86,72 @@ CANTO_PROMPT = (
 
 _LOCAL_CANTO = str(REPO_ROOT / "data" / "ct2_models" / "whisper-large-v2-cantonese")
 
-# model_key (CLI/internal selector) -> cfg. cfg["id"] must stay byte-identical to
-# scripts/04_transcribe.py's ASR_MODELS so the stored `asr_results.model` field
-# (id + "+" + lang) matches the 910,598 rows already imported from the legacy
-# manifest — new rows land in the same (id, model) primary-key space.
+# model_key (CLI/internal selector) → cfg.
+#
+# cfg["id"] must stay byte-identical to scripts/04_transcribe.py's ASR_MODELS so
+# the stored `asr_results.model` field (id + "+" + lang) matches the 910,598 rows
+# already imported from the legacy manifest — new rows land in the same (id, model)
+# primary-key space.
+#
+# cfg["backend"] selects the worker class:
+#   "faster_whisper" — WhisperModel via ctranslate2; used by canto_ft and whisper_v3.
+#   "qwen_asr"       — Qwen3ASRModel via transformers; used by qwen3_asr.
+#
+# The key "qwen3_asr" with id="Qwen/Qwen3-ASR-1.7B" and lang="Cantonese" produces
+# model_field() = "Qwen/Qwen3-ASR-1.7B+Cantonese", a distinct string that never
+# collides with the two faster-whisper model fields already in asr_results.
 ASR_MODELS = {
     "canto_ft": {
         "id": _LOCAL_CANTO,
         "lang": "zh",
         "prompt": CANTO_PROMPT,
+        "backend": "faster_whisper",
         "description": "Cantonese fine-tuned Whisper large-v2 (local ct2)",
     },
     "whisper_v3": {
         "id": "Systran/faster-whisper-large-v3",
         "lang": "zh",
         "prompt": CANTO_PROMPT,
+        "backend": "faster_whisper",
         "description": "Whisper large-v3 with zh + Cantonese prompt",
+    },
+    # Apache-2.0.  1.7B transformer model with native 52-language support including
+    # Cantonese (yue) as a distinct dialect from Mandarin (zh), with HK/Guangdong
+    # accent coverage.  Uses qwen-asr transformers backend (NOT faster-whisper /
+    # ctranslate2 — a completely separate inference stack).
+    # Install:  uv pip install qwen-asr   (NOT uv sync — that would prune CUDA torch)
+    "qwen3_asr": {
+        "id": "Qwen/Qwen3-ASR-1.7B",
+        "lang": "Cantonese",    # full English name required by qwen-asr API; NOT "yue"
+        "prompt": None,         # qwen-asr has no separate initial_prompt concept
+        "backend": "qwen_asr",
+        "description": "Qwen3-ASR-1.7B (native Cantonese/Yue support, Apache-2.0)",
+    },
+    # ModelScope model license (commercial use permitted, non-OSI).
+    # SenseVoice-Small is a CTC encoder-only (non-autoregressive) model with native
+    # Cantonese (yue) support trained on 400k+ hours of multilingual data.  It is
+    # ~15× faster than Whisper-Large (measured ~105× RTF on this machine 2026-07-08).
+    # Extra outputs (emotion, audio-event) are extracted from inline tags and stored
+    # in the metadata field of each result row but stripped from the stored text.
+    # Output is Simplified Chinese by default — SenseVoiceWorker applies OpenCC
+    # s2hk conversion so stored text matches the Traditional HK convention of the
+    # other three models.
+    # Install:  uv pip install opencc-python-reimplemented funasr modelscope
+    #           (NOT uv sync — same CUDA-torch-prune risk as qwen-asr)
+    "sense_voice": {
+        "id": "iic/SenseVoiceSmall",
+        "lang": "yue",          # explicit Cantonese language code (ISO 639-3)
+        "prompt": None,
+        "backend": "sense_voice",
+        "description": "SenseVoice-Small (CTC non-autoregressive, native yue, ~105× RTF)",
     },
 }
 
 
 def model_field(model_key: str) -> str:
     """The exact string stored in asr_results.model — id + '+' + lang, matching
-    scripts/04_transcribe.py's transcribe_one()."""
+    scripts/04_transcribe.py's transcribe_one().  When lang is falsy (None/''),
+    returns just id (no '+' suffix)."""
     cfg = ASR_MODELS[model_key]
     return cfg["id"] + (f"+{cfg['lang']}" if cfg["lang"] else "")
 
@@ -108,7 +171,7 @@ def _load_and_resample(wav_path: str) -> np.ndarray | None:
         return None
     if wav48.ndim > 1:
         wav48 = wav48.mean(axis=1)
-    # 48000 -> 16000 is exactly x(1/3); resample_poly is lossless for integer ratios.
+    # 48000 → 16000 is exactly x(1/3); resample_poly is lossless for integer ratios.
     return resample_poly(wav48, 1, 3).astype(np.float32)
 
 
@@ -129,16 +192,54 @@ def discover_transcribe(conn, model_key: str) -> list[tuple]:
     return conn.execute(TRANSCRIBE_DISCOVER_SQL, [model_field(model_key)]).fetchall()
 
 
-# Assumes exactly 2 ASR models feed asr_results (ASR_MODELS today). The self-join
-# on a1.model < a2.model pairs each id with its one counterpart; if a 3rd model is
-# ever added, each id would yield 3 pairs here (non-deterministic last-write-wins
-# on the asr_agreement upsert) — revisit with a GROUP BY id + list_agg() instead.
+def shard_rows_round_robin(rows: list[tuple], devices: list[str]) -> dict[str, list[tuple]]:
+    """Split rows across devices round-robin (row i -> devices[i % len(devices)]).
+
+    Used when the same model_key is assigned to more than one device (e.g. a
+    single model split across both GPUs) — discover_transcribe()'s result is
+    ordered by duration_sec ascending, so a contiguous split would put all the
+    short/fast segments on one device and all the long/slow ones on another;
+    round-robin gives every device the same short/long mix so they finish at
+    roughly the same time. With a single device, returns {device: rows} unchanged.
+    """
+    shards: dict[str, list[tuple]] = {device: [] for device in devices}
+    for i, row in enumerate(rows):
+        shards[devices[i % len(devices)]].append(row)
+    return shards
+
+
+# N-way agreement discovery (replaces the old 2-model self-join).
+#
+# Design: one row per id in asr_results, grouped to collect all (model, text,
+# confidence) tuples.  An id surfaces when:
+#   (a) it has ≥2 asr_results rows AND no asr_agreement row yet (first compute), OR
+#   (b) it has an asr_agreement row written by this node (model_count IS NOT NULL)
+#       AND the current count of asr_results rows exceeds the stored model_count
+#       (3rd model straggler arrived — re-compute to include it).
+#
+# Legacy asr_agreement rows imported by P0 have model_count = NULL (the column
+# was added by ALTER TABLE after P0 import), so condition (b) never triggers for
+# them.  This preserves the ~910k existing rows untouched, as required.
+#
+# Each result row has shape:
+#   (id, list_of_texts, list_of_confidences, result_count)
+# where list_of_texts[i] and list_of_confidences[i] correspond to the same model.
 AGREEMENT_DISCOVER_SQL = """
-    SELECT a1.id, a1.text, a1.confidence, a2.text, a2.confidence
-    FROM asr_results a1
-    JOIN asr_results a2 ON a1.id = a2.id AND a1.model < a2.model
-    LEFT JOIN asr_agreement ag ON a1.id = ag.id
+    WITH ranked AS (
+        SELECT
+            r.id,
+            list(r.text ORDER BY r.model) AS texts,
+            list(r.confidence ORDER BY r.model) AS confidences,
+            count(*) AS result_count
+        FROM asr_results r
+        GROUP BY r.id
+        HAVING count(*) >= 2
+    )
+    SELECT ranked.id, ranked.texts, ranked.confidences, ranked.result_count
+    FROM ranked
+    LEFT JOIN asr_agreement ag ON ranked.id = ag.id
     WHERE ag.id IS NULL
+       OR (ag.model_count IS NOT NULL AND ranked.result_count > ag.model_count)
 """
 
 
@@ -147,8 +248,8 @@ def discover_agreement(conn) -> list[tuple]:
 
 
 # ---------------------------------------------------------------------------
-# Agreement computation (pure logic — verbatim port of scripts/04_transcribe.py's
-# char_agreement() + write_transcripts()'s best-candidate / agreement-gating rules)
+# Agreement computation (pure logic — N-way generalisation of the 2-model
+# port from scripts/04_transcribe.py's char_agreement() + write_transcripts())
 # ---------------------------------------------------------------------------
 
 def char_agreement(texts: list[str]) -> float:
@@ -161,19 +262,42 @@ def char_agreement(texts: list[str]) -> float:
     return round(sum(ratios) / len(ratios), 3)
 
 
-def compute_agreement_row(seg_id: str, t1: str, c1: float, t2: str, c2: float) -> dict:
-    """Mirrors write_transcripts(): agreement is 0.0 unless >=2 non-empty candidate
-    texts exist; best_text is the non-empty candidate with the higher confidence."""
-    candidates = [{"text": t1 or "", "confidence": c1 or 0.0},
-                  {"text": t2 or "", "confidence": c2 or 0.0}]
-    texts = [c["text"] for c in candidates if c["text"]]
-    agreement = char_agreement(texts) if len(texts) >= 2 else 0.0
+def compute_agreement_row(
+    seg_id: str,
+    texts: list[str],
+    confidences: list[float],
+    result_count: int,
+) -> dict:
+    """N-way generalisation of the 2-model write_transcripts() logic.
+
+    texts and confidences are parallel lists from asr_results, one entry per
+    model (any order).  result_count is the number of model results that exist
+    for this id, stored as model_count so future re-discover can detect when a
+    later model's result arrives.
+
+    Agreement is 0.0 unless ≥2 non-empty candidate texts exist.
+    best_text is the non-empty candidate with the highest confidence; an empty-
+    text candidate always loses regardless of its raw confidence value (matching
+    the original 2-model behaviour).
+
+    This function is backward-compatible with 2-model input: passing two texts
+    and confidences produces identical results to the old positional-argument
+    version, since char_agreement() uses itertools.combinations (already N-way)
+    and the max-confidence selection is unchanged.
+    """
+    candidates = [
+        {"text": t or "", "confidence": c or 0.0}
+        for t, c in zip(texts, confidences)
+    ]
+    non_empty_texts = [c["text"] for c in candidates if c["text"]]
+    agreement = char_agreement(non_empty_texts) if len(non_empty_texts) >= 2 else 0.0
     best = max(candidates, key=lambda c: c["confidence"] if c["text"] else -1)
     return {
         "id": seg_id,
         "agreement": agreement,
         "best_text": best["text"],
         "text_verified": False,
+        "model_count": result_count,
     }
 
 
@@ -199,11 +323,11 @@ async def run_asr_transcribe(
     """Supervisor entrypoint for the asr.transcribe node.
 
     assignments: list of (model_key, device), e.g.
-        [("canto_ft", "cuda:0"), ("whisper_v3", "cuda:1")]
+        [("canto_ft", "cuda:0"), ("whisper_v3", "cuda:1"), ("qwen3_asr", "cuda:0")]
     Each assignment gets its own discover() query (different model = different
     anti-join target), own dispatch queue, and own worker subprocess — but all
     run under ONE asyncio.gather() sharing a single DuckDB connection, so this
-    is the "two models split across GPUs, running in parallel" node the plan
+    is the "N models split across GPUs, running in parallel" node the plan
     calls for, without ever opening two competing RW connections to the catalog.
 
     conn: optional pre-opened DuckDB connection (or cursor) — pass one when
@@ -219,15 +343,26 @@ async def run_asr_transcribe(
 
     conn = conn or connect()
 
+    # Group devices by model_key so the SAME model can be split across multiple
+    # GPUs (e.g. [("qwen3_asr", "cuda:0"), ("qwen3_asr", "cuda:1")]) — discovery
+    # is per model_key, not per (model_key, device), so without this grouping
+    # every device assigned to the same model would each re-fetch and process
+    # the ENTIRE backlog independently (pure duplicated work, not a real split).
+    devices_by_model: dict[str, list[str]] = {}
+    for model_key, device in assignments:
+        devices_by_model.setdefault(model_key, []).append(device)
+
     per_assignment_rows: dict[tuple[str, str], list[tuple]] = {}
     total = 0
-    for model_key, device in assignments:
+    for model_key, devices in devices_by_model.items():
         rows = discover_transcribe(conn, model_key)
         if limit:
             rows = rows[:limit]
-        per_assignment_rows[(model_key, device)] = rows
-        total += len(rows)
-        log.info(f"asr.transcribe[{model_key}]: {len(rows)} segments to transcribe on {device}")
+        shards = shard_rows_round_robin(rows, devices)
+        for device in devices:
+            per_assignment_rows[(model_key, device)] = shards[device]
+            total += len(shards[device])
+            log.info(f"asr.transcribe[{model_key}]: {len(shards[device])} segments to transcribe on {device}")
 
     if total == 0:
         return {"processed": 0, "errors": 0}
@@ -302,15 +437,20 @@ async def run_asr_transcribe(
                 queue.task_done()
                 continue
 
+            # metadata is only populated by backends that produce backend-specific
+            # extras (currently sense_voice's {emotion, audio_event}); r.get(...)
+            # defaults to None for every other backend so every row in this batch
+            # carries the same key set (upsert_rows derives columns from rows[0]).
             out_rows = [
-                {"id": r["id"], "model": mf, "text": r["text"], "confidence": r["confidence"]}
+                {"id": r["id"], "model": mf, "text": r["text"], "confidence": r["confidence"],
+                 "metadata": r.get("metadata")}
                 for r in result["rows"]
             ]
             # Unreadable audio still gets a placeholder row (empty text, confidence
             # 0.0) so discover()'s anti-join stops resurfacing the same dead id —
             # mirrors label_music.py's skipped_ids handling.
             skipped_rows = [
-                {"id": sid, "model": mf, "text": "", "confidence": 0.0}
+                {"id": sid, "model": mf, "text": "", "confidence": 0.0, "metadata": None}
                 for sid in result.get("skipped_ids", [])
             ]
             if skipped_rows:
@@ -360,6 +500,13 @@ async def run_asr_agreement(*, conn=None, batch_size: int = 2000, limit: int | N
     from pipeline.orchestrator.journal import new_run_id, record_batch
 
     conn = conn or connect()
+
+    # Ensure the model_count column exists (added post-P0; safe no-op if already present).
+    # Legacy rows imported by P0 will have model_count = NULL, preventing re-trigger.
+    conn.execute(
+        "ALTER TABLE asr_agreement ADD COLUMN IF NOT EXISTS model_count INTEGER"
+    )
+
     rows = discover_agreement(conn)
     if limit:
         rows = rows[:limit]
@@ -373,7 +520,10 @@ async def run_asr_agreement(*, conn=None, batch_size: int = 2000, limit: int | N
 
     for i in range(0, len(rows), batch_size):
         batch = rows[i : i + batch_size]
-        out_rows = [compute_agreement_row(*r) for r in batch]
+        out_rows = [
+            compute_agreement_row(seg_id, texts, confidences, result_count)
+            for seg_id, texts, confidences, result_count in batch
+        ]
         upsert_rows(conn, "asr_agreement", out_rows, ["id"])
         record_batch(conn, run_id, "asr.agreement", [r["id"] for r in out_rows], "ok")
         processed += len(out_rows)
@@ -387,7 +537,7 @@ async def run_asr_agreement(*, conn=None, batch_size: int = 2000, limit: int | N
 
 
 # ---------------------------------------------------------------------------
-# GPU worker (subprocess side) — asr.transcribe only; asr.agreement has no worker.
+# GPU workers (subprocess side) — asr.transcribe only; asr.agreement has no worker.
 # ---------------------------------------------------------------------------
 
 class TranscribeWorker(GPUWorkerBase):
@@ -447,6 +597,200 @@ class TranscribeWorker(GPUWorkerBase):
         return {"text": text, "confidence": conf}
 
 
+class Qwen3ASRWorker(GPUWorkerBase):
+    """Worker for the qwen-asr transformers backend (Qwen3-ASR-1.7B).
+
+    Qwen3ASRModel does not expose a logprob-derived confidence score in its
+    result objects (result.text and result.language are available; no numeric
+    quality signal is documented or exposed in the transformers backend).
+    We therefore default confidence to 1.0 for all non-empty results, which
+    means agreement.best_text will prefer the Qwen3-ASR output over a Whisper
+    output only when both have the same placeholder confidence — users relying
+    on the raw confidence field for downstream filtering should treat Qwen3-ASR
+    confidence as nominal, not calibrated.
+    """
+
+    def __init__(self, device: str, model_key: str, *, mem_fraction: float | None = None,
+                 fp16: bool = True) -> None:
+        self.model_key = model_key
+        self.cfg = ASR_MODELS[model_key]
+        super().__init__(device, mem_fraction=mem_fraction, fp16=fp16)
+
+    def load_model(self):
+        import torch
+        from qwen_asr import Qwen3ASRModel
+        log.info(f"Loading ASR model: {self.cfg['description']} on {self.device} [bfloat16]")
+        return Qwen3ASRModel.from_pretrained(
+            self.cfg["id"],
+            dtype=torch.bfloat16,
+            device_map=self.device,
+            # Batched inference — matches the supervisor's --batch size so a full
+            # queued batch actually runs through the model together instead of
+            # being silently serialized internally; OOM halving in GPUWorkerBase
+            # still protects against transient spikes if this is too large.
+            # Empirically tuned 2026-07-07 on this machine (RTX 4090, 24GB): 1=2.1/s,
+            # 16=14.4/s, 32=22.1/s, 64=30.1/s, 128=34.6/s (diminishing returns past 64,
+            # measured on the shortest segments in the duration-ascending discovery
+            # queue — longer segments later in a full run will use more memory per
+            # item and run slower than this early-window number).
+            max_inference_batch_size=64,
+        )
+
+    def forward_batch(self, items: list[np.ndarray]) -> list[dict]:
+        # qwen-asr's transcribe() accepts a list of (np.ndarray, sr) tuples for
+        # batch inference, but with max_inference_batch_size=1 the model processes
+        # them sequentially anyway.  We pass them as a list so the API handles
+        # ordering; one result per input item, same order.
+        audio_inputs = [(y16, ASR_SR) for y16 in items]
+        lang = self.cfg["lang"] or None  # None → auto-detect; "Cantonese" → forced
+        results = self.model.transcribe(audio=audio_inputs, language=lang)
+        # Qwen3-ASR result object has .text (str) and .language (str).
+        # No logprob/confidence field — default to 1.0 for non-empty text.
+        # (See class docstring for the implication on best_text selection.)
+        return [
+            {
+                "text": (r.text or "").strip(),
+                "confidence": 1.0 if (r.text or "").strip() else 0.0,
+            }
+            for r in results
+        ]
+
+
+class SenseVoiceWorker(GPUWorkerBase):
+    """Worker for the funasr SenseVoice-Small backend.
+
+    SenseVoice-Small is a CTC encoder-only (non-autoregressive) model with
+    native Cantonese (yue) support.  It is architecturally independent from all
+    three autoregressive models (canto_ft, whisper_v3, qwen3_asr), so its
+    agreement/disagreement signal is structurally different — genuinely useful
+    as a 4th voter in N-way consensus scoring.
+
+    Key properties:
+    - Speed: ~105× RTF on RTX 4090 (measured 2026-07-08); entire 618k corpus
+      in ~10 minutes on 2 GPUs.
+    - Language: native 'yue' (Cantonese) — NOT a zh+prompt workaround.
+    - Output script: SenseVoice emits Simplified Chinese; OpenCC s2hk converts
+      to Traditional HK to match the other three models' convention.
+    - Extra outputs: inline emotion (<|HAPPY|> etc.) and audio-event tags are
+      extracted and stored in the result 'metadata' field (not in 'text'), so
+      downstream nodes can optionally consume them.
+    - Confidence: no calibrated logprob — defaults to 1.0 for non-empty text
+      (same nominal treatment as Qwen3-ASR).
+
+    Dependency note: funasr + modelscope + opencc-python-reimplemented must be
+    installed in the same venv BEFORE running this worker:
+        uv pip install opencc-python-reimplemented funasr modelscope
+    (NOT uv sync — that would prune CUDA torch.)
+    """
+
+    # Regex patterns compiled once at class level.
+    import re as _re
+    _TAG_RE   = _re.compile(r"<\|[^|]+\|>")
+    _EMOTION_RE = _re.compile(
+        r"<\|(HAPPY|SAD|ANGRY|NEUTRAL|DISGUSTED|FEARFUL|SURPRISED|EMO_UNKNOWN)\|>",
+        _re.IGNORECASE,
+    )
+    _EVENT_RE = _re.compile(
+        r"<\|(Speech|BGM|Applause|Laughter|Cry|Cough|Sneeze|Breath|Music|UNKNOWN)\|>",
+        _re.IGNORECASE,
+    )
+    _LANG_RE  = _re.compile(r"<\|(zh|en|yue|ja|ko|nospeech)\|>", _re.IGNORECASE)
+
+    def __init__(self, device: str, model_key: str, *, mem_fraction: float | None = None,
+                 fp16: bool = True) -> None:
+        self.model_key = model_key
+        self.cfg = ASR_MODELS[model_key]
+        super().__init__(device, mem_fraction=mem_fraction, fp16=fp16)
+        # OpenCC converter: Simplified → Traditional HK (initialised in subprocess).
+        self._cc = None
+
+    def load_model(self):
+        import sys
+        import torch
+        # Redirect stdout to stderr to prevent funasr/modelscope initialization logs
+        # from corrupting the supervisor-worker JSONL stdout protocol.
+        old_stdout = sys.stdout
+        sys.stdout = sys.stderr
+        try:
+            try:
+                from funasr import AutoModel
+            except ImportError as e:
+                raise ImportError(
+                    "funasr is not installed. Run: "
+                    "uv pip install opencc-python-reimplemented funasr modelscope"
+                ) from e
+            try:
+                from opencc import OpenCC
+                self._cc = OpenCC("s2hk")   # Simplified → Traditional HK
+            except ImportError:
+                log.warning(
+                    "opencc-python-reimplemented not installed — SenseVoice output will "
+                    "remain in Simplified Chinese. Install: uv pip install opencc-python-reimplemented"
+                )
+                self._cc = None
+
+            log.info(f"Loading ASR model: {self.cfg['description']} on {self.device}")
+            return AutoModel(
+                model=self.cfg["id"],
+                trust_remote_code=True,
+                device=str(self.device),
+                disable_update=True,    # skip ModelScope version-check network call
+            )
+        finally:
+            sys.stdout = old_stdout
+
+    def _parse_raw(self, raw_text: str) -> tuple[str, str, str]:
+        """Strip inline tags; return (clean_text, emotion, audio_event)."""
+        emotion_m = self._EMOTION_RE.search(raw_text)
+        event_m   = self._EVENT_RE.search(raw_text)
+        clean     = self._TAG_RE.sub("", raw_text).strip()
+        if self._cc and clean:
+            clean = self._cc.convert(clean)   # Simplified → Traditional HK
+        emotion   = emotion_m.group(1).upper() if emotion_m else "UNKNOWN"
+        event     = event_m.group(1)           if event_m   else "UNKNOWN"
+        return clean, emotion, event
+
+    def forward_batch(self, items: list[np.ndarray]) -> list[dict]:
+        """Run SenseVoice inference on a batch of 16 kHz float32 arrays.
+
+        funasr's AutoModel.generate() accepts a list of numpy arrays with
+        batch_size_s controlling the internal batching budget.  We pass the
+        full items list and let funasr handle sub-batching.
+        """
+        lang = self.cfg["lang"] or "auto"
+        audio_inputs = [(y16, ASR_SR) for y16 in items]
+        try:
+            results = self.model.generate(
+                input=[a for a, _ in audio_inputs],
+                language=lang,
+                use_itn=True,           # inverse text normalisation
+                batch_size_s=300,       # up to 300s audio per internal sub-batch
+            )
+        except Exception as e:
+            # Return empty placeholder for every item so caller can handle gracefully.
+            log.error(f"SenseVoice batch error: {e}")
+            return [{"text": "", "confidence": 0.0, "metadata": {}} for _ in items]
+
+        out = []
+        for res in results:
+            raw = res.get("text", "") if isinstance(res, dict) else getattr(res, "text", "")
+            clean, emotion, event = self._parse_raw(raw)
+            out.append({
+                "text":       clean,
+                "confidence": 1.0 if clean else 0.0,
+                "metadata":   {"emotion": emotion, "audio_event": event},
+            })
+        return out
+
+
+# Map backend key → worker class; used by worker_main() for dispatch.
+WORKER_CLASSES: dict[str, type] = {
+    "faster_whisper": TranscribeWorker,
+    "qwen_asr":       Qwen3ASRWorker,
+    "sense_voice":    SenseVoiceWorker,
+}
+
+
 def worker_main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--device", default="cuda:0")
@@ -458,7 +802,9 @@ def worker_main() -> None:
     logging.basicConfig(level=logging.INFO, stream=sys.stderr,
                          format="%(asctime)s %(levelname)s %(message)s")
 
-    worker = TranscribeWorker(args.device, args.model_key, mem_fraction=args.mem_fraction)
+    backend = ASR_MODELS[args.model_key]["backend"]
+    worker_cls = WORKER_CLASSES[backend]
+    worker = worker_cls(args.device, args.model_key, mem_fraction=args.mem_fraction)
 
     def emit(msg: dict) -> None:
         sys.stdout.write(json.dumps(msg, ensure_ascii=False) + "\n")

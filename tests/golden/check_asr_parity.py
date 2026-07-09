@@ -83,27 +83,34 @@ def main() -> int:
     sample = rows[: args.sample_size]
     print(f"checking {len(sample)} sample(s) (seed={args.seed})")
 
+    # legacy_snapshot.jsonl only has candidates from the original 2 faster-whisper
+    # models — qwen3_asr (added later, different backend/inference stack) has no
+    # legacy text to diff against, so this gate only ever covers faster_whisper-
+    # backed models. Filter on cfg["backend"] rather than hardcoding model keys so
+    # a future 4th faster-whisper model is picked up automatically.
+    fw_models = {k: cfg for k, cfg in ASR_MODELS.items() if cfg["backend"] == "faster_whisper"}
+
     from faster_whisper import WhisperModel
     models = {}
-    for key, cfg in ASR_MODELS.items():
+    for key, cfg in fw_models.items():
         models[key] = WhisperModel(cfg["id"], device="cuda", device_index=0,
                                     compute_type="int8_float16", cpu_threads=4)
 
     def transcribe(model_key: str, y16) -> str:
-        cfg = ASR_MODELS[model_key]
+        cfg = fw_models[model_key]
         kwargs = {"beam_size": 1, "vad_filter": False, "temperature": 0.0,
                   "language": cfg["lang"], "initial_prompt": cfg["prompt"]}
         segments, _info = models[model_key].transcribe(y16, **kwargs)
         return "".join(s.text for s in segments).strip()
 
-    agreements: dict[str, list[float]] = {k: [] for k in ASR_MODELS}
+    agreements: dict[str, list[float]] = {k: [] for k in fw_models}
     warned: list[tuple[str, str, float]] = []
 
     for row in sample:
         y16 = _load_and_resample(row["audio_path"])
         if y16 is None:
             continue
-        for model_key in ASR_MODELS:
+        for model_key in fw_models:
             legacy = legacy_text_for(row, model_key)
             new = transcribe(model_key, y16)
             if not legacy or not new:

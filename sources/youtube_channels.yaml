@@ -23,11 +23,12 @@
   priority: "high"
   estimated_hours: 800
   max_age_days: 365
-  status: "active"
+  status: "paused"
   notes: >
     CONFIRMED 2026-06-10 (handle @tvbnewshk verified with yt-dlp). ~8000 videos.
     Largest single new Cantonese source. Formal news register, multiple anchors.
     High speaker diversity. Standard HK broadcast Cantonese.
+    PAUSED 2026-07-09: YouTube rate-limited session after 2751 errors. Re-activate after 24h cooldown.
 
 - name: "RTHK 新聞頻道"
   url: "https://www.youtube.com/@rthkhongkong"
@@ -167,22 +168,6 @@
     CONFIRMED 2026-06-10. Entertainment variety. Informal/casual Cantonese, multiple speakers.
     Background music/sound effects present — filter with DNSMOS ≥ 3.0. Evaluate sample first.
 
-- name: "毛記葵涌"
-  url: "https://www.youtube.com/@maukeikwaichung"
-  type: "channel"
-  source: "youtube"
-  language: "yue"
-  domain: "talk_show"
-  style: "casual"
-  priority: "high"
-  estimated_hours: 200
-  status: "active"
-  notes: >
-    Major HK entertainment channel. Natural HK Cantonese, multiple hosts, diverse topics.
-    Very high subscriber count indicates mainstream HK Cantonese audience.
-    Audio quality varies — check DNSMOS distribution on sample before bulk download.
-    Be selective: some clips have heavy background music; prefer talk segments.
-
 - name: "果籽 Pomme"
   url: "https://www.youtube.com/@appledailypomme"
   type: "channel"
@@ -193,10 +178,9 @@
   priority: "high"
   estimated_hours: 100
   max_age_days: 365
-  status: "active"
+  status: "skip"
   notes: >
-    Feature journalism and lifestyle. On-location interviews, diverse interviewees.
-    Natural HK Cantonese, multiple speakers per episode.
+    DEFUNCT. Official channel deleted in June 2021. Unofficial backups exist, but inconsistent audio.
 
 - name: "立場新聞 (The Stand News — archived)"
   url: "https://www.youtube.com/@standnews"
@@ -208,10 +192,9 @@
   priority: "high"
   estimated_hours: 150
   max_age_days: 365
-  status: "active"
+  status: "skip"
   notes: >
-    Archived journalism channel. Cantonese-dominant. Check if channel is still accessible.
-    Focus on talk-format videos, not outdoor live reporting.
+    DEFUNCT. Official channel deleted in Dec 2021. Unofficial backups exist on YouTube but are partial.
 
 # ──────────────────────────────────────────────
 # High Priority — Finance / Lifestyle (Added 2026-06-10, Hermes Task 4b)
@@ -767,7 +750,7 @@
     Found 2026-06-10 (hermes comedy). 2011 HK Stand-up Comedy Champion. Stand-up clips
     and comedy podcast (痴線架). Younger voice, colloquial HK Cantonese.
 
-- name: "毛記電視 TV Most"
+- name: "毛記電視 TV Most (毛記葵涌)"
   url: "https://www.youtube.com/@100MOSTHongKong"
   type: "channel"
   source: "youtube"
@@ -777,12 +760,11 @@
   priority: "high"
   estimated_hours: 500
   max_age_days: 365
-  status: "evaluate"
+  status: "active"
   notes: >
-    Found 2026-06-10 (hermes comedy). Satirical comedy ('全球最冇良心電視台'). Programs:
-    六點半左右新聞報道, 勁曲金曲, political skits. Daily uploads, large archive, multiple
-    presenters. Note: existing entry 毛記葵涌 (@maukeikwaichung) may be same org — check
-    for duplicate content before bulk downloading both channels.
+    Major HK entertainment/comedy channel. Natural colloquial HK Cantonese, multiple hosts,
+    diverse topics. Pro-mic'd, but BGM present on variety segments. Selective talk-heavy
+    episodes (e.g., 六點半左右新聞報道) should be preferred. Consolidated from @maukeikwaichung.
 
 - name: "TVB Comedy 喜劇台"
   url: "https://www.youtube.com/@TVBComedy"
@@ -1985,12 +1967,15 @@
   type: "channel"
   source: "youtube"
   language: "yue"
-  domain: "other"
-  style: "casual"
-  priority: "medium"
-  estimated_hours: 130
-  status: "evaluate"
-  notes: "FOUND 2026-06-12. 1,500 videos. HK lifestyle/food vlog. Natural Cantonese."
+  domain: "lifestyle"
+  style: "narration"
+  priority: "high"
+  estimated_hours: 150
+  max_age_days: 3650
+  status: "active"
+  notes: >
+    VERIFIED. Mini-docs / lifestyle. Mix of clean high-quality voiceover narration (excellent
+    for TTS) + natural street interviews. High content volume. Consolidated from duplicate entry.
 
 - name: "Stephen Leung 吃喝玩樂"
   url: "https://www.youtube.com/@stephen_leung"
@@ -2080,41 +2065,6 @@
   status: "evaluate"
   notes: "FOUND 2026-06-12. ViuTV content production arm. Drama clips, variety, artist content."
 
-- name: "FHProductionHK"
-  url: "https://www.youtube.com/@FHProductionHK"
-  type: "channel"
-  source: "youtube"
-  language: "yue"
-  domain: "other"
-  style: "casual"
-  priority: "medium"
-  estimated_hours: 50
-  status: "evaluate"
-  notes: "FOUND 2026-06-12. HK comedy production company. Sketch comedy in Cantonese."
-
-- name: "小薯茄 Pomato"
-  url: "https://www.youtube.com/@PomatoHK"
-  type: "channel"
-  source: "youtube"
-  language: "yue"
-  domain: "other"
-  style: "casual"
-  priority: "medium"
-  estimated_hours: 50
-  status: "evaluate"
-  notes: "FOUND 2026-06-12. HK comedy sketch group. Natural colloquial Cantonese."
-
-- name: "試當真 Trial & Error"
-  url: "https://www.youtube.com/@trialanderror924"
-  type: "channel"
-  source: "youtube"
-  language: "yue"
-  domain: "other"
-  style: "casual"
-  priority: "high"
-  estimated_hours: 100
-  status: "evaluate"
-  notes: "FOUND 2026-06-12. Very popular HK comedy/variety group. High speaker diversity, natural Cantonese."
 
 - name: "啱Channel Arm Channel TV"
   url: "https://www.youtube.com/@armchanneltv"
@@ -2640,7 +2590,7 @@
     almost no BGM, speakers take turns well. Strong clean conversational material.
 
 - name: "JFFT (Just For Fun Team)"
-  url: "https://www.youtube.com/@JFFT"
+  url: "https://www.youtube.com/@JFFTHK"
   type: "channel"
   source: "youtube"
   language: "yue"
@@ -2651,7 +2601,7 @@
   max_age_days: 3650
   status: "evaluate"
   notes: >
-    VERIFIED 2026-06-29. Live streams / call-in talk. EXTREME emotional prosody
+    VERIFIED 2026-06-29. Corrected handle @JFFTHK. Live streams / call-in talk. EXTREME emotional prosody
     (yelling, animated colloquial). Heavy cleaning needed — overlap + variable
     caller mic quality; rely on Stage 13 overlap + DNSMOS gates. Use sparingly.
 
@@ -2682,7 +2632,7 @@
   priority: "medium"
   estimated_hours: 60
   max_age_days: 3650
-  status: "evaluate"
+  status: "active"
   notes: >
     VERIFIED 2026-06-29. Skits / fake-docs / short films, modern youth slang,
     highly emotional acting. Pro mic'd; some BGM to filter. Good prosody diversity.
@@ -2697,7 +2647,7 @@
   priority: "medium"
   estimated_hours: 40
   max_age_days: 3650
-  status: "evaluate"
+  status: "active"
   notes: >
     VERIFIED 2026-06-29. Emotional relationship micro-dramas — sadness/anger/
     romance inflections. Note some member-only videos. Good emotional range.
@@ -2712,26 +2662,12 @@
   priority: "medium"
   estimated_hours: 50
   max_age_days: 3650
-  status: "evaluate"
+  status: "active"
   notes: >
-    UNVERIFIED 2026-06-29 (handle resolves; content not confirmed). Comedy shorts /
-    situational drama, high-energy cheerful prosody. Some overlap in game segments.
+    VERIFIED 2026-07-08. Cheerful, high-energy modern HK Cantonese. Game shows have loud screaming and BGM,
+    but talk-only series like "雪櫃冷笑話" (Fridge Jokes) provide clean single-speaker speech.
 
 # --- (6) Lifestyle / vlog narration ---
-- name: "Mill MILK"
-  url: "https://www.youtube.com/@MillMILK"
-  type: "channel"
-  source: "youtube"
-  language: "yue"
-  domain: "lifestyle"
-  style: "narration"
-  priority: "high"
-  estimated_hours: 80
-  max_age_days: 3650
-  status: "evaluate"
-  notes: >
-    VERIFIED 2026-06-29. Mini-docs / lifestyle. Mix of clean high-quality voiceover
-    narration (excellent for TTS) + natural street interviews. High content volume.
 
 - name: "啱Channel (Arm Channel)"
   url: "https://www.youtube.com/@ArmChannel"
@@ -2749,12 +2685,212 @@
     CONFIRM Cantonese speech ratio before activating). Everyday conversational.
 
 # --- Channel name confirmed but agy handle returned 404 — find correct handle ---
-# These are real HK Cantonese channels but the researched @handle is wrong (404).
-# Look up the correct handle, then uncomment + set fields like the entries above.
-#  - 杜汶澤 喱騷 (Chapman To's Late Show) — talk/standup/variety, expressive   [bad: @LateShowHK]
-#  - 拾陸比玖 16:9                          — indie web-series drama, cinematic   [bad: @16by9hk]
-#  - 米紙 (Rice Paper)                      — cultural/food narration, clean      [bad: @ricepaperhk]
-#  - Kiki & May 隨意吃樂部                   — travel/food vlog, natural casual    [bad: @kikiandmay]
+# Verified and corrected handles added below:
+
+- name: "杜汶澤 喱騷"
+  url: "https://www.youtube.com/@chapmantoslateshow2029"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "variety"
+  style: "expressive"
+  priority: "medium"
+  estimated_hours: 30
+  max_age_days: 3650
+  status: "active"
+  notes: "VERIFIED 2026-07-08. Chapman To's Late Show - talk/standup/variety, expressive colloquial Cantonese."
+
+- name: "拾陸比玖 16:9"
+  url: "https://www.youtube.com/@16by9"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "drama"
+  style: "expressive"
+  priority: "medium"
+  estimated_hours: 20
+  max_age_days: 3650
+  status: "active"
+  notes: "VERIFIED 2026-07-08. Indie web-series drama, cinematic audio, expressive Cantonese."
+
+- name: "米紙 Rice Paper"
+  url: "https://www.youtube.com/@ricezi2hk"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "lifestyle"
+  style: "narration"
+  priority: "high"
+  estimated_hours: 80
+  max_age_days: 3650
+  status: "active"
+  notes: "VERIFIED 2026-07-08. Cultural/food documentary and narration. Clear high-quality studio voiceovers (excellent for TTS) and natural street interviews."
+
+- name: "Kiki & May 隨意吃樂部"
+  url: "https://www.youtube.com/@KikiMay"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "lifestyle"
+  style: "casual"
+  priority: "low"
+  estimated_hours: 60
+  max_age_days: 3650
+  status: "active"
+  notes: "VERIFIED 2026-07-08. Travel and food vlogs, natural casual conversation. Vlog-style narration with some background music."
+
+
+# ──────────────────────────────────────────────
+# TV Shows and Movies (Added 2026-07-08)
+# ──────────────────────────────────────────────
+
+- name: "TVB Sitcom 處境喜劇"
+  url: "https://www.youtube.com/@TVBSitcom"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "comedy"
+  style: "expressive"
+  priority: "medium"
+  estimated_hours: 500
+  max_age_days: 3650
+  status: "evaluate"
+  notes: "FOUND 2026-07-08. TVB sitcoms (Come Home Love). Highly dialogue-driven with minimal noise, ideal for clean speech extraction."
+
+- name: "香港•卡式 TVB Classic"
+  url: "https://www.youtube.com/@hk_classic"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "other"
+  style: "casual"
+  priority: "medium"
+  estimated_hours: 200
+  max_age_days: 3650
+  status: "evaluate"
+  notes: "FOUND 2026-07-08. Classic 80s-90s TVB dramas and variety. Analog noise/hiss present, but lacks modern loud BGM."
+
+- name: "亞視精選 Drama Asia (ATV)"
+  url: "https://www.youtube.com/@drama_asia"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "drama"
+  style: "expressive"
+  priority: "medium"
+  estimated_hours: 400
+  max_age_days: 3650
+  status: "evaluate"
+  notes: "FOUND 2026-07-08. Classic ATV dramas. Tape hiss may be present. Muted BGM segments provide dry dialogue."
+
+- name: "ATV 亞洲電視"
+  url: "https://www.youtube.com/@atvhongkong"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "other"
+  style: "casual"
+  priority: "medium"
+  estimated_hours: 300
+  max_age_days: 3650
+  status: "evaluate"
+  notes: "FOUND 2026-07-08. ATV talk shows, variety, cooking shows. Quiet studio environments, minimal BGM, clean speech."
+
+- name: "8號電影院 - HK Movie"
+  url: "https://www.youtube.com/@8-hkmovie"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "drama"
+  style: "expressive"
+  priority: "medium"
+  estimated_hours: 600
+  max_age_days: 3650
+  status: "evaluate"
+  notes: "FOUND 2026-07-08. Officially licensed classic HK movies (Mei Ah/TVB). Highly conversational comedies/dramas, check for BGM/action sound effects."
+
+- name: "美亞影院 Cinema Mei Ah"
+  url: "https://www.youtube.com/@CinemaMeiAh"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "drama"
+  style: "expressive"
+  priority: "medium"
+  estimated_hours: 300
+  max_age_days: 3650
+  status: "evaluate"
+  notes: "FOUND 2026-07-08. Mei Ah classic HK movies and TV series. Check for muted copyright audio (great for dry speech extraction)."
+
+- name: "粵語長片台 (Cantonese Film Classic)"
+  url: "https://www.youtube.com/@cantonesefilm_classic"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "drama"
+  style: "formal"
+  priority: "low"
+  estimated_hours: 300
+  max_age_days: 3650
+  status: "evaluate"
+  notes: "FOUND 2026-07-08. Black-and-white Cantonese classics (1940s-1970s). Formal HK Cantonese, low BGM complexity. Requires SNR filtering for analog noise."
+
+
+# ──────────────────────────────────────────────
+# Audiobooks & Storytelling (Added 2026-07-08)
+# ──────────────────────────────────────────────
+
+- name: "老娘有聲台x 緣學堂"
+  url: "https://www.youtube.com/@CantonAudioBookXEndlessLove"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "narration"
+  priority: "high"
+  estimated_hours: 250
+  max_age_days: 3650
+  status: "evaluate"
+  notes: "FOUND 2026-07-08. Readings of classics/philosophy by HK voice actress. Flawless standard HK Cantonese, studio quality, dry/minimal BGM."
+
+- name: "松樹下說書佬"
+  url: "https://www.youtube.com/@Natetsang825"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "other"
+  style: "narration"
+  priority: "high"
+  estimated_hours: 150
+  max_age_days: 3650
+  status: "evaluate"
+  notes: "FOUND 2026-07-08. Wuxia and Sci-Fi novels reading. Relaxed natural colloquial phrasing, slow narration, soft BGM."
+
+- name: "香港人的有聲書 HKers AudioBooK"
+  url: "https://www.youtube.com/@hkersaudiobook1016"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "other"
+  style: "narration"
+  priority: "high"
+  estimated_hours: 40
+  max_age_days: 3650
+  status: "evaluate"
+  notes: "FOUND 2026-07-08. Book extracts. Completely dry speech with NO background music, native HK accent."
+
+- name: "導聽書說（廣東話有聲書）"
+  url: "https://www.youtube.com/@guided_tales"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "narration"
+  priority: "medium"
+  estimated_hours: 60
+  max_age_days: 3650
+  status: "evaluate"
+  notes: "FOUND 2026-07-08. Self-help and psychology audiobooks. Clean readings, quiet background music track."
 
 # ──────────────────────────────────────────────
 # Download Configuration

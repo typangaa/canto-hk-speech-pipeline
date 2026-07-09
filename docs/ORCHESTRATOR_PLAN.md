@@ -1,18 +1,33 @@
 # Single-Process Concurrent Orchestrator — Implementation Plan
 
-Status: **10/22 call sites done, `pipe run-many` VALIDATED LIVE, running
+Status: **23/23 call sites done — every node function that opens its own
+connect() now accepts `conn=`, `pipe run-many` VALIDATED LIVE, running
 2026-07-07**. `conn=` injected into `run_filter_acoustic`,
 `run_segment_diarize`, `run_label_music`, `run_asr_transcribe`,
 `run_asr_agreement`, `run_ingest_commit`, `run_speaker_embed`,
-`run_speaker_cluster`, `run_lang_screen_auto`, `run_tier_assign`; smoke-tested
-and then run at full backlog scale against the live catalog — first
+`run_speaker_cluster`, `run_lang_screen_auto`, `run_tier_assign` (first 10
+batches); then `run_filter_text`, `run_filter_decide`, `run_segment_vad_cut`,
+`run_pregate_snr`, `run_g2p`, `run_ingest_probe`, `run_label_suite`,
+`run_label_prosody`, `run_recover_orphans`, `run_rebalance_copy`,
+`run_rebalance_delete_verified`, `run_raw_flac_transcode`,
+`run_raw_flac_delete_verified` (remaining 13, done 2026-07-07 continued —
+the last two `_delete_verified` functions were plain `def`, converted to
+`async def` first since `asyncio.gather` can't schedule a sync function).
+All 23 registered in `RUN_MANY_ADAPTERS`; regression tests for every site in
+`tests/test_run_many.py` (29 tests, all pass — one test
+(`test_run_recover_orphans_uses_injected_conn`) initially walked the REAL
+production segments tree via `recover_orphans._segments_root()` regardless
+of which conn was passed, since that node's `discover()` scans disk, not
+just SQL — fixed by monkeypatching `_segments_root` to an empty tmp dir,
+same fix already used in `tests/test_recover_orphans_node.py`).
+Live-validated at full backlog scale against the real catalog — first
 `label.music` (GPU) + `filter.acoustic` (CPU) 2026-07-06 (both finished),
 then `asr.transcribe` (2 GPUs) + `filter.acoustic` (CPU) launched 2026-07-07
 once `label.music` completed and GPUs sat idle again (still running as of
-this update). Remaining ~12 call sites NOT yet done — extend incrementally
-as new concurrent-run needs come up (see "What's left" below). Written
-2026-07-06, updated 2026-07-07 (twice: asr.py, then ingest.commit +
-speaker.py + lang_screen.py + tier.py).
+this update, backfilling the `recover.orphans` orphan-import backlog).
+Written 2026-07-06, updated 2026-07-07 (three times: asr.py, then
+ingest.commit + speaker.py + lang_screen.py + tier.py, then the remaining
+13 call sites).
 
 ## Problem
 
@@ -401,14 +416,8 @@ the same time).
 
 ## What's left (not started, lower priority / incremental)
 
-- ~12 remaining `conn = connect()` call sites (see full inventory above,
-  minus the 10 now done): `label_suite.py`, `label_prosody.py`,
-  `ingest_probe.py`, `g2p.py`, `recover_orphans.py`, `filter.py`'s
-  remaining two functions (`run_filter_text`/`run_filter_decide` — confirm
-  exact names), `rebalance.py` (2 sites), `raw_flac.py` (2 sites),
-  `segment.py`'s remaining two functions (`run_segment_vad_cut`/
-  `run_pregate_snr`). All mechanical — same 3-line change, do when a real
-  concurrent-run need comes up.
+- ~~~12 remaining `conn = connect()` call sites~~ — **done 2026-07-07**, see
+  status line above.
 - GPU device-sharing policy across >2 concurrent GPU nodes (still not
   needed — `asr.transcribe`'s two models already use one GPU each; no
   3rd GPU node has been paired in yet).

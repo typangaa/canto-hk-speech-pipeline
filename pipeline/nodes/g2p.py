@@ -152,11 +152,15 @@ def discover(conn) -> list[tuple]:
 # Supervisor: g2p — CPU-only, in-process (no worker subprocess — see module docstring).
 # ---------------------------------------------------------------------------
 
-async def run_g2p(*, batch_size: int = 2000, limit: int | None = None) -> dict:
+async def run_g2p(*, conn=None, batch_size: int = 2000, limit: int | None = None) -> dict:
+    """conn: optional pre-opened DuckDB connection (or cursor) — pass one when
+    running alongside other nodes under `pipe run-many` (see filter.py's
+    run_filter_acoustic docstring for the rationale). Defaults to a fresh
+    self-managed connect() for standalone `pipe run g2p` usage."""
     from pipeline.catalog.catalog import connect, upsert_rows
     from pipeline.orchestrator.journal import new_run_id, record_batch
 
-    conn = connect()
+    conn = conn or connect()
     rows = discover(conn)
     if limit:
         rows = rows[:limit]

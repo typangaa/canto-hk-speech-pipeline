@@ -97,6 +97,7 @@ def _batches(rows: list[tuple], size: int):
 
 async def run_label_prosody(
     *,
+    conn=None,
     n_workers: int = 4,
     threads_per_worker: int = 2,
     batch_size: int = 8,
@@ -109,13 +110,18 @@ async def run_label_prosody(
     dataloader" guidance), dispatches length-sorted batches round-robin via a
     shared queue, and commits results through the same journal + upsert_rows
     idiom as label_music.py so kill -9 resume is free.
+
+    conn: optional pre-opened DuckDB connection (or cursor) — pass one when
+    running alongside other nodes under `pipe run-many` (see filter.py's
+    run_filter_acoustic docstring for the rationale). Defaults to a fresh
+    self-managed connect() for standalone `pipe run label.prosody` usage.
     """
     from pipeline.catalog.catalog import connect, upsert_rows
     from pipeline.orchestrator.journal import new_run_id, record_batch
     from pipeline.orchestrator.pools import PoolRegistry
     from pipeline.orchestrator.worker import spawn_worker
 
-    conn = connect()
+    conn = conn or connect()
     rows = discover(conn)
     if limit:
         rows = rows[:limit]

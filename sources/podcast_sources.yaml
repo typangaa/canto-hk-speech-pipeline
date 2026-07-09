@@ -484,19 +484,6 @@ sources:
       phonology. Already downloaded episodes need accent evaluation before use.
       Re-activate only after sampling confirms accent is acceptable native HK Cantonese.
 
-  - name: "荔枝角的事 (if active)"
-    rss_url: "PLACEHOLDER"
-    source: "podcast"
-    language: "yue"
-    domain: "podcast"
-    style: "casual"
-    priority: "medium"
-    estimated_hours: 20
-    status: "evaluate"
-    notes: >
-      HK society discussion podcast. Natural conversational Cantonese with 2-3 hosts.
-      Verify current activity status -- some HK podcasts have ceased since 2021.
-      Find RSS URL via Apple Podcasts: search '荔枝角的事'.
 
   # ──────────────────────────────────────────────
   # New Sources Added 2026-06-10 (Hermes Task 4a Research)
@@ -680,16 +667,16 @@ sources:
       Anchor/Spotify hosted.
 
   - name: "願聞奇詳｜廣東話Podcast"
-    rss_url: "https://anchor.fm/s/3075d3b0/podcast/rss"
+    rss_url: "https://anchor.fm/s/111d8d260/podcast/rss"
     source: "podcast"
     language: "yue"
     domain: "talk_show"
     style: "casual"
     priority: "medium"
-    estimated_hours: 5
+    estimated_hours: 50
     max_age_days: 730
-    status: "evaluate"
-    notes: "RSS FEED DEAD (404 as of 2026-06-10). Was verified with 7 episodes previously. May have moved to new URL. Search Apple Podcasts for updated feed: '願聞奇詳'."
+    status: "active"
+    notes: "VERIFIED 2026-07-08. Updated active RSS feed. HK crime/true crime. Small panel (2 hosts)."
 
   # ──────────────────────────────────────────────
   # New Sources Added 2026-06-10 (Hermes Task 3 Research)
@@ -1379,16 +1366,6 @@ sources:
   # Health / Medical Podcasts (agy Search 2026-06-12)
   # ──────────────────────────────────────────────
 
-  - name: "五分鐘心理學 樹洞香港 Podcast"
-    rss_url: "https://anchor.fm/s/13b71908/podcast/rss"
-    source: "podcast"
-    language: "yue"
-    domain: "educational"
-    style: "casual"
-    priority: "high"
-    estimated_hours: 8
-    status: "active"
-    notes: "FOUND 2026-06-12. ~78 episodes. HK mental health psychology in Cantonese. Clear conversational speech."
 
   - name: "粵講愈健康 Cantonese Health Talk with Dr. Wu"
     rss_url: "https://anchor.fm/s/103f34658/podcast/rss"
@@ -1446,11 +1423,10 @@ sources:
     domain: "other"
     style: "casual"
     priority: "high"
-    estimated_hours: 40
-    status: "evaluate"
+    estimated_hours: 199
+    status: "active"
     notes: >
-      FOUND 2026-06-12. Active (weekly). ~199h est. HK diaspora news/political commentary.
-      Authentic HK Cantonese speakers — evaluate whether accent/dialect acceptable for corpus.
+      VERIFIED 2026-07-08. Active weekly. News and current affairs commentary. Authentic HK Cantonese speakers.
 
   - name: "學識開咪 HK Social Commentary"
     rss_url: "https://feeds.soundon.fm/podcasts/90e3d85d-a1c8-4acc-b266-093a678fa5f5.xml"
@@ -1471,8 +1447,8 @@ sources:
     style: "casual"
     priority: "medium"
     estimated_hours: 8
-    status: "evaluate"
-    notes: "FOUND 2026-06-12. Active. HK writer Kengo (健吾) social commentary. Natural HK Cantonese."
+    status: "active"
+    notes: "VERIFIED 2026-07-08. Active. HK writer Kengo (健吾) social commentary. Natural monologue HK Cantonese."
 
   # ──────────────────────────────────────────────
   # Legal / Professional Podcasts (agy Search 2026-06-12)

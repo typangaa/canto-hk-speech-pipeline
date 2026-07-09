@@ -133,7 +133,7 @@ async def spawn_worker(
         *cmd,
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
+        stderr=None,  # Inherit parent's stderr to avoid OS pipe deadlock
         env=env,
         limit=_STDOUT_LIMIT,
     )

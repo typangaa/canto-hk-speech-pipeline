@@ -174,13 +174,17 @@ def build_recovery_rows(seg_id: str, wav_path: str, source: str, transcript: dic
 # Supervisor
 # ---------------------------------------------------------------------------
 
-async def run_recover_orphans(*, limit: int | None = None) -> dict:
+async def run_recover_orphans(*, conn=None, limit: int | None = None) -> dict:
+    """conn: optional pre-opened DuckDB connection (or cursor) — pass one when
+    running alongside other nodes under `pipe run-many` (see filter.py's
+    run_filter_acoustic docstring for the rationale). Defaults to a fresh
+    self-managed connect() for standalone `pipe run recover.orphans` usage."""
     import soundfile as sf
 
     from pipeline.catalog.catalog import connect, upsert_rows
     from pipeline.orchestrator.journal import new_run_id, record_batch
 
-    conn = connect()
+    conn = conn or connect()
     log.info("recover.orphans: scanning physical segments dirs for catalog-unknown WAVs...")
     rows = discover(conn)
     if limit:

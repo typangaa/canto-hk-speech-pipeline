@@ -113,18 +113,23 @@ def _batches(rows: list[tuple], size: int):
 async def run_label_suite(
     devices: list[str],
     *,
+    conn=None,
     gpu_policy: str = "cap",
     batch_size: int = 16,
     mem_fraction: float | None = 0.15,
     limit: int | None = None,
 ) -> dict:
+    """conn: optional pre-opened DuckDB connection (or cursor) — pass one when
+    running alongside other nodes under `pipe run-many` (see filter.py's
+    run_filter_acoustic docstring for the rationale). Defaults to a fresh
+    self-managed connect() for standalone `pipe run label.suite` usage."""
     from pipeline.catalog.catalog import connect, upsert_rows
     from pipeline.orchestrator.journal import new_run_id, record_batch
     from pipeline.orchestrator.pools import PoolRegistry
     from pipeline.orchestrator.resources import GpuPolicy, Sampler
     from pipeline.orchestrator.worker import spawn_worker
 
-    conn = connect()
+    conn = conn or connect()
     rows = discover(conn)
     if limit:
         rows = rows[:limit]

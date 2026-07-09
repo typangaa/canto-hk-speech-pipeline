@@ -61,8 +61,10 @@ CREATE TABLE IF NOT EXISTS asr_results (
     model      TEXT,
     text       TEXT,
     confidence DOUBLE,
+    metadata   JSON,  -- backend-specific extras, e.g. sense_voice's emotion/audio_event tags -- NULL for models/rows that don't produce any
     PRIMARY KEY (id, model)
 );
+ALTER TABLE asr_results ADD COLUMN IF NOT EXISTS metadata JSON;
 
 -- From manifest.jsonl asr_agreement/text/text_verified fields; one row per segment with cross-model agreement stats.
 CREATE TABLE IF NOT EXISTS asr_agreement (

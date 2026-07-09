@@ -1102,8 +1102,137 @@ owner 決定去留。
 **Owner 返嚟後續(2026-07-05 同日完成)**:owner 明確確認咗 batch 1+2 嘅
 `--delete-verified` 同繼續轉碼餘下 9,153 個 raw_id 兩個步驟,兩者已喺同一 session
 內全部執行完畢(見上面「完全完成、關閉」段落)。P5-A + P5-B **正式全部關閉**。
-下一步係 P5-C(三碟 sharding,full-rebalance 原設計)——留返俾 owner 決定幾時
-開始下個 phase。
+
+#### ✅ P5-C 執行結果 + legacy-orphan recovery detour(2026-07-06)
+
+**P5-C(三碟 sharding rebalance)—— 完全完成、關閉**:
+- `config/storage_layout.yaml` 已 flip:`sharding.enabled: true`、`n_shards: 3`
+  (`/mnt/Drive2|3|4/canto/segments`)。`config/storage_layout.py` 新增
+  `shard_index()`/`shard_root()`(md5-based,跨 process 穩定),hash key = `coalesce(raw_id, id)`
+  ——同原計劃一致,唔受 FLAC/WAV 混合格式影響分佈。
+- `segment.vad_cut` 已改用 `shard_root()` 揀輸出目錄,每個新 segment 一出世就落喺啱嘅
+  shard,之後永遠唔使再 rebalance 一次。
+- 新 node `pipeline/nodes/rebalance.py`(`pipe run rebalance.segments`,同 P5-B 一樣
+  兩段式:copy+byte-verify → 獨立 `--delete-verified`)。新 schema table
+  `segment_shard_migrations`。
+- Gate test 期間搵到兩個 bug 並修正:(1) `_copy_one()` 嘅 `mkdir` 之前喺 try/except
+  之外,一個 filesystem error 會累到成 batch 一齊 crash,而唔係記做單一 item 失敗;
+  (2) `/mnt/Drive3` 掛載後屬 `root:root`(唔可寫),owner 執行
+  `sudo chown typangaa:typangaa /mnt/Drive3` 修好。
+- **執行結果**:156,162 個 segment 本身已喺啱嘅 shard(純記錄,零 I/O)+ 310,548 個
+  複製並 byte-verify(0 failed)+ `--delete-verified` 刪晒舊 Drive4 原檔(0 error)。
+  全部 466,710 個 catalog segment 現已正確三碟分佈。磁碟:Drive2 589G→697G、
+  Drive3 0→110G、Drive4 846G→628G。
+- `pipe catalog verify --full` 呢個 flag 從未存在(CLI 淨係得無參數嘅
+  `pipe catalog verify`);跑咗現有版本,17 項有 5 項 FAIL,但全部都係 P0
+  milestone(2026-07-02)凍結嘅 exact-match baseline 過時(例如 `segments`
+  expected=455299,而家合法增長到 466710),唔係新問題——日常真正把關嘅
+  `tests/test_catalog.py`(floor-based monotonic-growth 斷言)全過。
+
+**Detour:legacy-orphan recovery(rebalance 過程中意外發現,同日處理完)**:
+- 調查「點解 Drive2/3 得返 ~110G 咁少」期間,發現 Drive4 嘅 `segments/` 目錄實際存
+  ~730,885 個 WAV 檔完全唔喺 catalog 度——舊 pipeline(`scripts/03_segment.py`,
+  2026-06-09~20 行嗰陣)將每個 VAD candidate 都切落碟,但淨係捱過舊 filter stage 嘅
+  先入到 `manifest.jsonl`(P0 catalog import 嘅唯一來源),reject 咗嘅從未清理過。
+  跨三個 source 抽樣(13%-55% pass rate)+ 每個 orphan 自己殘留嘅 sidecar
+  (`.pregate.json`、`.transcript.json`)確認呢個結論,亦令逐檔精細判斷成為可能
+  (而唔係盲目 keep/delete 全部)。
+- 新 node `pipeline/nodes/recover_orphans.py`(`pipe run recover.orphans`)+ 新
+  `orphan_segments` table:靠 sidecar 分類每個 orphan——`pregate_pass` 或
+  `transcript_high_agreement`(≥0.80 agreement)→ RECOVER(back填 `segments` +
+  `asr_results` + `asr_agreement`,`text_verified=false`,同一個新切嘅 segment
+  一樣走真正嘅 `filter.text`/`filter.acoustic`/`filter.decide`/`tier.assign` 去做
+  實際 accept/reject/tier 判斷,呢個 node 本身唔判斷);其餘 → `orphan_segments.status
+  = 'pending_delete'`,**唔郁任何檔案**,純粹排隊等日後獨立簽收嘅清理 pass。
+  (呢個 node 用 0.80 門檻,比 `tier.py` 實際嘅 `SILVER_AGREE_MIN = 0.65` 嚴——
+  日後如果想撈多啲,一次 0.65 嘅 looser rescan 隨時得。)
+- **執行結果**(`nohup` 背景全量跑,無 `--limit`):730,824 scanned、**151,981
+  recovered**、578,843 queued pending_delete、0 errors,耗時 5,114s
+  (`run_id=recover_orphans_c366e9db3a86`)。
+- 157/157 tests pass(新增 `tests/test_storage_layout.py`、`tests/test_rebalance_node.py`、
+  `tests/test_recover_orphans_node.py`;`tests/test_segment_node.py` 3 個測試因
+  sharding 而家預設開咗,要 monkeypatch `_SHARDING` 關返先過)。
+- **殘留雜物**(已報告,未自動刪):raw 目錄 3 個 `.part`(中斷 download 殘留)+
+  13 個 webm/1 個 m4a/1 個 mp3(catalog 外、早於 native-container 政策嘅殘留)——
+  留俾 owner 決定去留,對 pipeline 冇影響。
+
+**Follow-up backlog(2026-07-07,進行中)**:`recover.orphans` backfill 咗
+audio+ASR text,但唔會自己跑 filter/tier——跟返 PROGRESS.md 原定「Next」清單,
+`filter.text` 已對 151,981 個 recovered segment 行完,現正用
+`pipe run-many asr.transcribe --models canto_ft,whisper_v3 --devices cuda:0,cuda:1
+-- filter.acoustic --workers 12 --threads 2`(09:47 起跑,~13.8/s,ETA 同日
+下午)一次過補齊缺嘅 ASR candidate(canto_ft 45,482 / whisper_v3 11,411)同
+`filters_acoustic`(352,813 條)。跑完之後仲要 `filter.decide` → `tier.assign` →
+`speaker.embed`/`speaker.cluster` → `manifest.build`/`manifest.export`,先算真正
+將呢批 151,981 個 recovered segment 併入可用嘅 manifest。
+
+**下一步(P5 全套已完全關閉,P5-C 唔再係「留返下個 phase」)**:
+1. 等 2026-07-07 嘅 asr.transcribe+filter.acoustic backlog job 行完。
+2. `filter.decide` → `tier.assign` → `speaker.embed/cluster` → `manifest.build/export`。
+3. `orphan_segments.pending_delete` 隊列(578,843 檔,~440GB+)——owner sign-off 未批,
+   空間唔緊張,故意擺喺度做 inventory,唔會自動執行刪除。
+4. P6(下面)。
+
+### ✅ ASR 擴展:qwen3_asr(2026-07-07)+ sense_voice(2026-07-08)+ orchestrator conn 注入全部完成
+
+**qwen3_asr(2026-07-07)**:第 3 個 ASR model 加入(`pipeline/nodes/asr.py`),
+transformers backend(`qwen_asr` package,非 ctranslate2),native `language="Cantonese"`,
+唔受 Whisper `yue` decoder-collapse 影響。雙 GPU 切分跑全量 backlog(618,695 segments),
+中途搵到並修正一個真 bug:discovery 淨係 keyed 落 model_key、唔理 device,如果同一個
+model 分兩張卡跑會令兩張卡各自攞成個 backlog 做重複運算——加咗
+`shard_rows_round_robin()` 解決(round-robin,唔係 contiguous split,因為 discovery SQL
+`ORDER BY duration_sec` 遞增,contiguous split 會令一張卡淨係攞短 clip 一張淨係攞長
+clip)。`asr.agreement` 由 2-model self-join 改寫做 N-way(`GROUP BY id` + `list()` 聚合),
+用 `model_count` 欄做 provenance-style re-trigger(legacy P0 rows 嘅 `model_count IS NULL`
+永遠唔會重觸發,新 rows 有第 3/4 個 model 到會自動重算)。全量跑完:618,695/618,695,
+0 errors,~4h(56.8/s → 36.3/s,duration-ascending queue 令後段變慢)。
+
+**sense_voice(2026-07-08)**:第 4 個 ASR model,funasr backend(`iic/SenseVoiceSmall`,
+ModelScope license,non-OSI 但商用容許),CTC non-autoregressive,native `language="yue"`
+(呢個 model 唔係 Whisper 架構,`yue` 用喺度安全,唔犯 hard constraint #7 —— 已喺
+`tests/test_asr_node.py` 明確 scope 好,見下面「本 session 修復」)。~105× RTF(RTX
+4090 實測)。輸出簡體轉繁體(OpenCC s2hk),emotion/audio-event inline tag 抽取出嚟存落
+`asr_results.metadata`(JSON 欄,`text` 淨係存乾淨文字)。全量跑完(分兩輪,中途一次
+worker-ready JSON decode 錯誤已自動 recover):618,695/618,695,0 errors。跟住
+`asr.agreement`(4-way,618,695/618,695,97.9/s,6,322s)。
+
+**Orchestrator `conn=` 注入 —— 23/23 全部完成**(見 `docs/ORCHESTRATOR_PLAN.md` 詳細
+inventory):所有會自己 `connect()` 嘅 node function 而家都收 `conn=` kwarg,可以喺
+`pipe run-many` 底下同其他 node 共用一個 DuckDB connection 並行跑。
+
+**本 session 修復(2026-07-09,review 後即場做)**:
+1. `test_model_field_never_yue` 改名做 `test_model_field_never_yue_for_faster_whisper`,
+   scope 落 `backend=="faster_whisper"` 先 check —— 呢個 test 寫喺 qwen3_asr 之前,
+   對成個 `ASR_MODELS` 做 blanket check,sense_voice 加入之後即刻紅咗(佢合法用
+   `lang="yue"`)。加咗一個反向 guard test 防止日後改返做 blanket ban。
+2. `pyproject.toml` 補齊 `funasr>=1.3.14`、`modelscope>=1.38.1`、
+   `opencc-python-reimplemented>=0.1.7`(之前淨係喺 code comment 度提,冇正式入
+   dependencies——同 `qwen-asr` 嗰種做法唔一致)。版本數字對返 `.venv` 實際裝緊嘅。
+   冇碰 `uv.lock`(同項目慣例一致,GPU-adjacent 依賴淨用 `uv pip install`)。
+3. `asr_results` 加咗 `metadata JSON` 欄(`schema.sql` CREATE TABLE + `ALTER TABLE ...
+   ADD COLUMN IF NOT EXISTS`,跟 `raw_id` 嗰條已有嘅 pattern,`init_schema()` 每次
+   `connect()` 都會補落現有 production catalog)。之前 `SenseVoiceWorker` 產生嘅
+   emotion/audio_event tag 一直被 `run_asr_transcribe()` 靜靜雞丟棄(out_rows 淨揀
+   `id/model/text/confidence` 四個 key)——而家 `r.get("metadata")` 會帶埋過去。
+   (過程中順手搵到並修正一個新 bug:schema.sql 個 inline comment 本身有分號,撞正
+   `init_schema()` 天真嘅 `split(";")` parser,搞到成個 DDL parse 壞晒。)
+4. 補齊 `SenseVoiceWorker` 單元測試(tag 解析、emotion/event 抽取、OpenCC 轉換、
+   confidence 預設、batch 順序、funasr exception → placeholder rows)——同
+   `Qwen3ASRWorker` 嗰種覆蓋深度睇齊。`tests/test_asr_node.py` 而家 38 個 test 全過。
+
+**已知限制(記錄低,未修)**:`filter.text`/`filter.decide`/`tier.assign` 嘅 discovery
+係 bare row-existence anti-join(`filter.text`)或 `provenance='tier_assign'` scoped
+anti-join(`tier.assign`,只擋自己之前 tier 過嘅 row,唔擋 legacy P0 rows)——都冇好似
+`asr_agreement.model_count` 咁做「內容變咗就重觸發」。即係話已經 `filters_text`/已經
+俾 `tier.assign` tier 過嘅 segment,即使佢哋嘅 `asr_agreement.best_text` 因為 sense_voice
+加入而變咗(可能質素更好),都唔會自動重新評估——淨係新發現(未 filter/未 tier)嘅
+segment 先食到 4-model agreement 嘅提升。如果想全部 refresh,要幫 `filters_text`/
+`tiers` 都加一個類似 `model_count` 嘅 provenance/count 重觸發欄。
+
+**Phase A(2026-07-09 下午,進行中)**:`speaker.embed`(dual-GPU)→ `speaker.cluster`
+→ `tier.assign` → `manifest.build/export`,補返 163,376 個新 segment(recovered orphans
++ 新 ingest)缺嘅 speaker embedding/tier/manifest 資料(呢批之前得 filter+g2p,冇
+speaker/tier/manifest)。
 
 ### P6 — Scale readiness(1 session)
 - 5-10× ingestion dry-run(youtube_channels.yaml 新 11 條 diversity channel 做試點)

@@ -122,14 +122,19 @@ def probe_one(raw_id: str, path: str) -> dict | None:
 
 async def run_ingest_probe(
     *,
+    conn=None,
     workers: int = 8,
     batch_size: int = 200,
     limit: int | None = None,
 ) -> dict:
+    """conn: optional pre-opened DuckDB connection (or cursor) — pass one when
+    running alongside other nodes under `pipe run-many` (see filter.py's
+    run_filter_acoustic docstring for the rationale). Defaults to a fresh
+    self-managed connect() for standalone `pipe run ingest.probe` usage."""
     from pipeline.catalog.catalog import connect, upsert_rows
     from pipeline.orchestrator.journal import new_run_id, record_batch
 
-    conn = connect()
+    conn = conn or connect()
     rows = discover(conn)
     if limit:
         rows = rows[:limit]
