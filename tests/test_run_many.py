@@ -25,6 +25,7 @@ from pipeline.nodes import recover_orphans
 from pipeline.nodes.recover_orphans import run_recover_orphans
 from pipeline.nodes.segment import run_pregate_snr, run_segment_diarize, run_segment_vad_cut
 from pipeline.nodes.speaker import run_speaker_cluster, run_speaker_embed
+from pipeline.nodes.calibrate import run_calibrate_sample
 from pipeline.nodes.tier import run_tier_assign
 
 
@@ -169,6 +170,17 @@ def test_run_tier_assign_uses_injected_conn(scratch_conn, monkeypatch):
     result = asyncio.run(run_tier_assign(conn=scratch_conn))
 
     assert result == {"processed": 0, "gold": 0, "silver": 0, "excluded": 0, "errors": 0}
+
+
+def test_run_calibrate_sample_uses_injected_conn(scratch_conn, monkeypatch):
+    def _boom(*a, **kw):
+        raise AssertionError("run_calibrate_sample must not call connect() when conn is given")
+
+    monkeypatch.setattr("pipeline.catalog.catalog.connect", _boom)
+
+    result = asyncio.run(run_calibrate_sample(conn=scratch_conn, n=10))
+
+    assert result == {"queued": 0, "run_id": None}
 
 
 def test_run_ingest_commit_uses_injected_conn(scratch_conn, monkeypatch, tmp_path):

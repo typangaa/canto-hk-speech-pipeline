@@ -381,6 +381,11 @@ async def _run_many_adapt_tier_assign(args: argparse.Namespace, conn) -> dict:
     return await run_tier_assign(conn=conn, batch_size=args.batch, limit=args.limit)
 
 
+async def _run_many_adapt_calibrate_sample(args: argparse.Namespace, conn) -> dict:
+    from pipeline.nodes.calibrate import run_calibrate_sample
+    return await run_calibrate_sample(conn=conn, n=args.n)
+
+
 async def _run_many_adapt_filter_text(args: argparse.Namespace, conn) -> dict:
     from pipeline.nodes.filter import run_filter_text
     return await run_filter_text(conn=conn, batch_size=args.batch, limit=args.limit)
@@ -479,6 +484,7 @@ RUN_MANY_ADAPTERS = {
     "speaker.cluster": _run_many_adapt_speaker_cluster,
     "lang_screen.auto": _run_many_adapt_lang_screen_auto,
     "tier.assign": _run_many_adapt_tier_assign,
+    "calibrate.sample": _run_many_adapt_calibrate_sample,
     "filter.text": _run_many_adapt_filter_text,
     "filter.decide": _run_many_adapt_filter_decide,
     "segment.vad_cut": _run_many_adapt_segment_vad_cut,
@@ -612,6 +618,42 @@ def cmd_run_tier_assign(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_run_calibrate_sample(args: argparse.Namespace) -> int:
+    import asyncio
+    import logging
+
+    from pipeline.nodes.calibrate import run_calibrate_sample
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    result = asyncio.run(run_calibrate_sample(n=args.n))
+    print(f"\nDone: {result}")
+    return 0
+
+
+def cmd_calibrate_serve(args: argparse.Namespace) -> int:
+    import logging
+    from http.server import ThreadingHTTPServer
+
+    from pipeline.catalog.catalog import connect
+    from pipeline.tools.calibrate_server import _build_app
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    log = logging.getLogger("pipeline.tools.calibrate_server")
+
+    conn = connect()
+    handler = _build_app(conn, args.batch)
+    server = ThreadingHTTPServer(("127.0.0.1", args.port), handler)
+    log.info(f"calibrate serve: listening on http://127.0.0.1:{args.port}/ (batch={args.batch or 'all'})")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+        conn.close()
+    return 0
+
+
 def cmd_run_manifest_build(args: argparse.Namespace) -> int:
     import logging
 
@@ -697,6 +739,13 @@ def main() -> int:
     golden_sub = p_golden.add_subparsers(dest="golden_command", required=True)
     p_golden_build = golden_sub.add_parser("build", help="Build stratified golden set + legacy snapshot")
     p_golden_build.set_defaults(func=cmd_golden_build)
+
+    p_calibrate = sub.add_parser("calibrate", help="Human text-verification calibration (see calibrate.sample DAG node for queuing)")
+    calibrate_sub = p_calibrate.add_subparsers(dest="calibrate_command", required=True)
+    p_calibrate_serve = calibrate_sub.add_parser("serve", help="Start the local browser review UI (blocks -- Ctrl-C to stop)")
+    p_calibrate_serve.add_argument("--port", type=int, default=8420)
+    p_calibrate_serve.add_argument("--batch", default=None, help="restrict review to one calibrate.sample run_id")
+    p_calibrate_serve.set_defaults(func=cmd_calibrate_serve)
 
     p_run = sub.add_parser("run", help="Run a DAG node via the orchestrator")
     run_sub = p_run.add_subparsers(dest="run_command", required=True)
@@ -855,6 +904,9 @@ def main() -> int:
     p_run_tier.add_argument("--batch", type=int, default=5000)
     p_run_tier.add_argument("--limit", type=int, default=None)
     p_run_tier.set_defaults(func=cmd_run_tier_assign)
+    p_run_calib_sample = run_sub.add_parser("calibrate.sample", help="P4: queue a random sample of filter-passing segments for human text-verification review (see 'pipe calibrate serve')")
+    p_run_calib_sample.add_argument("--n", type=int, default=300, help="sample size to queue")
+    p_run_calib_sample.set_defaults(func=cmd_run_calibrate_sample)
     p_run_mbuild = run_sub.add_parser("manifest.build", help="P4: build manifest entries from the catalog (in-memory, no file write)")
     p_run_mbuild.add_argument("--limit", type=int, default=None)
     p_run_mbuild.set_defaults(func=cmd_run_manifest_build)

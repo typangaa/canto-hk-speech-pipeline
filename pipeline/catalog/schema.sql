@@ -164,6 +164,24 @@ CREATE TABLE IF NOT EXISTS tiers (
 );
 ALTER TABLE tiers ADD COLUMN IF NOT EXISTS provenance TEXT;
 
+-- Human calibration review queue (owner decision 2026-07-10: text_verified/gold was
+-- structurally dead -- asr.transcribe always writes text_verified=False and no live DAG node
+-- ever flips it, the only path that once did was the legacy scripts/05_calibrate.py against
+-- data/segments/*.transcript.json sidecars that no longer exist). calibrate.sample
+-- (pipeline/nodes/calibrate.py) inserts 'pending' rows for a random sample of filter-passing
+-- segments; pipeline/tools/calibrate_server.py's local browser UI turns each into
+-- 'verified'/'skipped'/'rejected' and, on 'verified', also flips asr_agreement.text_verified
+-- and tiers.tier='gold' for that id. Sample-based by design, not full-corpus -- see
+-- pipeline/nodes/calibrate.py's module docstring for why.
+CREATE TABLE IF NOT EXISTS calibration_review (
+    id            TEXT PRIMARY KEY,
+    decision      TEXT,       -- 'pending' | 'verified' | 'skipped' | 'rejected'
+    reviewed_text TEXT,
+    sample_batch  TEXT,
+    queued_at     TIMESTAMP,
+    reviewed_at   TIMESTAMP
+);
+
 -- From metadata/lang_id.jsonl; per-segment language identification probabilities.
 CREATE TABLE IF NOT EXISTS labels_lang (
     id           TEXT    PRIMARY KEY,
