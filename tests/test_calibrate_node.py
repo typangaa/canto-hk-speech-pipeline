@@ -6,6 +6,10 @@ import pytest
 from pipeline.catalog.catalog import init_schema
 from pipeline.nodes.calibrate import (
     discover,
+    get_item,
+    list_batches,
+    list_history,
+    list_sources,
     next_pending,
     queue_stats,
     record_decision,
@@ -177,3 +181,102 @@ def test_queue_stats_counts_by_decision(scratch_conn):
 
     stats = queue_stats(conn)
     assert stats == {"pending": 1, "verified": 2, "skipped": 1, "rejected": 0, "total": 4}
+
+
+def test_queue_stats_scoped_by_source(scratch_conn):
+    conn = scratch_conn
+    _seed_segment(conn, "a", source="rthk")
+    _seed_segment(conn, "b", source="podcast")
+    conn.execute("INSERT INTO calibration_review (id, decision) VALUES ('a', 'verified')")
+    conn.execute("INSERT INTO calibration_review (id, decision) VALUES ('b', 'skipped')")
+
+    assert queue_stats(conn, source="rthk") == {
+        "pending": 0, "verified": 1, "skipped": 0, "rejected": 0, "total": 1,
+    }
+    assert queue_stats(conn, source="podcast")["skipped"] == 1
+
+
+# ---------------------------------------------------------------------------
+# next_pending() ordering / source filter
+# ---------------------------------------------------------------------------
+
+def test_next_pending_order_agreement_asc(scratch_conn):
+    conn = scratch_conn
+    _seed_segment(conn, "high", agreement=0.9)
+    _seed_segment(conn, "low", agreement=0.3)
+    conn.execute("INSERT INTO calibration_review (id, decision, queued_at) VALUES ('high', 'pending', '2026-07-10 00:00:00')")
+    conn.execute("INSERT INTO calibration_review (id, decision, queued_at) VALUES ('low', 'pending', '2026-07-10 00:00:01')")
+
+    item = next_pending(conn, order="agreement_asc")
+    assert item["id"] == "low"
+
+    item = next_pending(conn, order="agreement_desc")
+    assert item["id"] == "high"
+
+
+def test_next_pending_filters_by_source(scratch_conn):
+    conn = scratch_conn
+    _seed_segment(conn, "a", source="rthk")
+    _seed_segment(conn, "b", source="podcast")
+    conn.execute("INSERT INTO calibration_review (id, decision, queued_at) VALUES ('a', 'pending', '2026-07-10 00:00:00')")
+    conn.execute("INSERT INTO calibration_review (id, decision, queued_at) VALUES ('b', 'pending', '2026-07-10 00:00:01')")
+
+    item = next_pending(conn, source="podcast")
+    assert item["id"] == "b"
+
+
+# ---------------------------------------------------------------------------
+# get_item() — reopen any item (pending or decided) by id
+# ---------------------------------------------------------------------------
+
+def test_get_item_returns_decided_item_with_reviewed_text(scratch_conn):
+    conn = scratch_conn
+    _seed_segment(conn, "s1")
+    conn.execute("INSERT INTO calibration_review (id, decision) VALUES ('s1', 'pending')")
+    record_decision(conn, "s1", "verified", "已經校正嘅文字")
+
+    item = get_item(conn, "s1")
+    assert item["decision"] == "verified"
+    assert item["reviewed_text"] == "已經校正嘅文字"
+    assert item["candidates"]
+
+
+def test_get_item_unknown_id_returns_none(scratch_conn):
+    assert get_item(scratch_conn, "nope") is None
+
+
+# ---------------------------------------------------------------------------
+# list_history() / list_batches() / list_sources()
+# ---------------------------------------------------------------------------
+
+def test_list_history_excludes_pending_orders_newest_first(scratch_conn):
+    conn = scratch_conn
+    for seg_id in ("a", "b", "c"):
+        _seed_segment(conn, seg_id)
+    conn.execute("INSERT INTO calibration_review (id, decision, reviewed_at) VALUES ('a', 'verified', '2026-07-10 00:00:01')")
+    conn.execute("INSERT INTO calibration_review (id, decision, reviewed_at) VALUES ('b', 'pending', NULL)")
+    conn.execute("INSERT INTO calibration_review (id, decision, reviewed_at) VALUES ('c', 'skipped', '2026-07-10 00:00:02')")
+
+    items = list_history(conn)
+    assert [i["id"] for i in items] == ["c", "a"]
+
+
+def test_list_batches_reports_per_batch_stats(scratch_conn):
+    conn = scratch_conn
+    _seed_segment(conn, "a")
+    _seed_segment(conn, "b")
+    conn.execute("INSERT INTO calibration_review (id, decision, sample_batch) VALUES ('a', 'pending', 'batch1')")
+    conn.execute("INSERT INTO calibration_review (id, decision, sample_batch) VALUES ('b', 'verified', 'batch2')")
+
+    batches = {b["sample_batch"]: b for b in list_batches(conn)}
+    assert batches["batch1"]["pending"] == 1
+    assert batches["batch2"]["verified"] == 1
+
+
+def test_list_sources_returns_distinct_sources(scratch_conn):
+    conn = scratch_conn
+    _seed_segment(conn, "a", source="rthk")
+    _seed_segment(conn, "b", source="podcast")
+    _seed_segment(conn, "c", source="rthk")
+
+    assert list_sources(conn) == ["podcast", "rthk"]

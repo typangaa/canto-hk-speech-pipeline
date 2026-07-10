@@ -124,33 +124,24 @@ def record_decision(conn, seg_id: str, decision: str, text: str | None) -> None:
         )
 
 
-def next_pending(conn, sample_batch: str | None = None) -> dict | None:
-    """Return the next 'pending' review item (segment + ASR context) for the
-    browser UI, or None if the queue (optionally scoped to one sample_batch)
-    is empty."""
-    where_batch = "AND c.sample_batch = ?" if sample_batch else ""
-    params = [sample_batch] if sample_batch else []
-    row = conn.execute(
-        f"""
-        SELECT c.id, a.best_text, a.agreement, s.source, s.audio_path,
-               s.duration_sec, s.program
-        FROM calibration_review c
-        JOIN asr_agreement a ON c.id = a.id
-        JOIN segments s ON c.id = s.id
-        WHERE c.decision = 'pending' {where_batch}
-        ORDER BY c.queued_at
-        LIMIT 1
-        """,
-        params,
-    ).fetchone()
-    if row is None:
-        return None
+_ORDER_SQL = {
+    "queued": "c.queued_at ASC",
+    "agreement_asc": "a.agreement ASC",
+    "agreement_desc": "a.agreement DESC",
+}
 
-    seg_id, best_text, agreement, source, audio_path, duration_sec, program = row
-    candidates = conn.execute(
+
+def _fetch_candidates(conn, seg_id: str) -> list[dict]:
+    rows = conn.execute(
         "SELECT model, text, confidence FROM asr_results WHERE id = ? ORDER BY model",
         [seg_id],
     ).fetchall()
+    return [{"model": m, "text": t, "confidence": c} for m, t, c in rows]
+
+
+def _row_to_item(row, candidates) -> dict:
+    (seg_id, best_text, agreement, source, audio_path, duration_sec, program,
+     decision, reviewed_text) = row
     return {
         "id": seg_id,
         "best_text": best_text,
@@ -159,17 +150,137 @@ def next_pending(conn, sample_batch: str | None = None) -> dict | None:
         "audio_path": audio_path,
         "duration_sec": duration_sec,
         "program": program,
-        "candidates": [
-            {"model": m, "text": t, "confidence": c} for m, t, c in candidates
-        ],
+        "decision": decision,
+        "reviewed_text": reviewed_text,
+        "candidates": candidates,
     }
 
 
-def queue_stats(conn, sample_batch: str | None = None) -> dict:
-    where_batch = "WHERE sample_batch = ?" if sample_batch else ""
-    params = [sample_batch] if sample_batch else []
+def next_pending(
+    conn,
+    sample_batch: str | None = None,
+    source: str | None = None,
+    order: str = "queued",
+) -> dict | None:
+    """Return the next 'pending' review item (segment + ASR context) for the
+    browser UI, or None if the queue (optionally scoped to sample_batch /
+    source) is empty. `order` picks which segment surfaces first: 'queued'
+    (FIFO, default), 'agreement_asc' (lowest cross-model agreement first --
+    the segments most likely to actually need correction), or
+    'agreement_desc'."""
+    where = ["c.decision = 'pending'"]
+    params: list = []
+    if sample_batch:
+        where.append("c.sample_batch = ?")
+        params.append(sample_batch)
+    if source:
+        where.append("s.source = ?")
+        params.append(source)
+    order_sql = _ORDER_SQL.get(order, _ORDER_SQL["queued"])
+
+    row = conn.execute(
+        f"""
+        SELECT c.id, a.best_text, a.agreement, s.source, s.audio_path,
+               s.duration_sec, s.program, c.decision, c.reviewed_text
+        FROM calibration_review c
+        JOIN asr_agreement a ON c.id = a.id
+        JOIN segments s ON c.id = s.id
+        WHERE {' AND '.join(where)}
+        ORDER BY {order_sql}
+        LIMIT 1
+        """,
+        params,
+    ).fetchone()
+    if row is None:
+        return None
+    return _row_to_item(row, _fetch_candidates(conn, row[0]))
+
+
+def get_item(conn, seg_id: str) -> dict | None:
+    """Fetch one review item by id regardless of its decision state -- used
+    by the history panel to reopen an already-decided segment for re-edit
+    (re-submitting just calls record_decision again, which is a plain
+    UPDATE, so changing your mind about a past decision is safe)."""
+    row = conn.execute(
+        """
+        SELECT c.id, a.best_text, a.agreement, s.source, s.audio_path,
+               s.duration_sec, s.program, c.decision, c.reviewed_text
+        FROM calibration_review c
+        JOIN asr_agreement a ON c.id = a.id
+        JOIN segments s ON c.id = s.id
+        WHERE c.id = ?
+        """,
+        [seg_id],
+    ).fetchone()
+    if row is None:
+        return None
+    return _row_to_item(row, _fetch_candidates(conn, row[0]))
+
+
+def list_history(conn, sample_batch: str | None = None, limit: int = 20) -> list[dict]:
+    """Most-recently-decided items (any non-'pending' decision), newest
+    first -- feeds the browser UI's 'recently reviewed' panel so a decision
+    can be revisited without re-queuing."""
+    where = ["c.decision != 'pending'"]
+    params: list = []
+    if sample_batch:
+        where.append("c.sample_batch = ?")
+        params.append(sample_batch)
+    params.append(limit)
     rows = conn.execute(
-        f"SELECT decision, count(*) FROM calibration_review {where_batch} GROUP BY decision",
+        f"""
+        SELECT c.id, c.decision, c.reviewed_text, c.reviewed_at, s.source
+        FROM calibration_review c
+        JOIN segments s ON c.id = s.id
+        WHERE {' AND '.join(where)}
+        ORDER BY c.reviewed_at DESC
+        LIMIT ?
+        """,
+        params,
+    ).fetchall()
+    return [
+        {
+            "id": seg_id,
+            "decision": decision,
+            "reviewed_text": reviewed_text,
+            "reviewed_at": str(reviewed_at) if reviewed_at else None,
+            "source": source,
+        }
+        for seg_id, decision, reviewed_text, reviewed_at, source in rows
+    ]
+
+
+def list_batches(conn) -> list[dict]:
+    """Every sample_batch that has queued rows, each with its own
+    queue_stats -- feeds the browser UI's batch-jump dropdown."""
+    rows = conn.execute(
+        "SELECT DISTINCT sample_batch FROM calibration_review "
+        "WHERE sample_batch IS NOT NULL ORDER BY sample_batch"
+    ).fetchall()
+    return [{"sample_batch": b, **queue_stats(conn, b)} for (b,) in rows]
+
+
+def list_sources(conn) -> list[str]:
+    rows = conn.execute(
+        "SELECT DISTINCT source FROM segments WHERE source IS NOT NULL ORDER BY source"
+    ).fetchall()
+    return [r[0] for r in rows]
+
+
+def queue_stats(conn, sample_batch: str | None = None, source: str | None = None) -> dict:
+    where = []
+    params: list = []
+    if sample_batch:
+        where.append("c.sample_batch = ?")
+        params.append(sample_batch)
+    if source:
+        where.append("s.source = ?")
+        params.append(source)
+    where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+    join_sql = "JOIN segments s ON c.id = s.id" if source else ""
+    rows = conn.execute(
+        f"SELECT c.decision, count(*) FROM calibration_review c {join_sql} "
+        f"{where_sql} GROUP BY c.decision",
         params,
     ).fetchall()
     stats = {"pending": 0, "verified": 0, "skipped": 0, "rejected": 0}
