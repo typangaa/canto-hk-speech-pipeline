@@ -23,6 +23,7 @@ node, and vice versa.
 """
 
 import argparse
+import asyncio
 import json
 import logging
 import threading
@@ -33,13 +34,23 @@ from urllib.parse import parse_qs, urlparse
 from pipeline.catalog.catalog import connect
 from pipeline.nodes.calibrate import (
     get_item,
+    jyutping_preview,
     list_batches,
     list_history,
     list_sources,
     next_pending,
     queue_stats,
     record_decision,
+    run_calibrate_sample,
+    summary_stats,
 )
+
+# Auto-refill: when /api/next finds nothing AND the UI isn't scoped to one
+# specific batch (a batch is a deliberate, fixed sample -- silently minting a
+# new one under it would be confusing), top up the queue with a small fresh
+# sample instead of just reporting "empty". A manual "Refill" button
+# (POST /api/refill) is always available regardless of batch scope.
+_AUTO_REFILL_N = 100
 
 log = logging.getLogger(__name__)
 
@@ -85,7 +96,13 @@ def _build_app(conn, default_batch: str | None):
                 order = qs.get("order", ["queued"])[0]
                 with _write_lock:
                     item = next_pending(conn, batch, source, order)
-                self._send_json({"item": item})
+                    refilled = None
+                    if item is None and not batch:
+                        result = asyncio.run(run_calibrate_sample(conn=conn, n=_AUTO_REFILL_N))
+                        if result["queued"]:
+                            refilled = result
+                            item = next_pending(conn, batch, source, order)
+                self._send_json({"item": item, "refilled": refilled})
                 return
 
             if parsed.path == "/api/item":
@@ -126,6 +143,19 @@ def _build_app(conn, default_batch: str | None):
                 self._send_json(stats)
                 return
 
+            if parsed.path == "/api/summary":
+                batch = qs.get("batch", [None])[0] or None
+                with _write_lock:
+                    summary = summary_stats(conn, batch)
+                self._send_json(summary)
+                return
+
+            if parsed.path == "/api/g2p_preview":
+                text = qs.get("text", [""])[0]
+                preview = jyutping_preview(text)
+                self._send_json(preview)
+                return
+
             if parsed.path == "/api/audio":
                 seg_id = qs.get("id", [None])[0]
                 if not seg_id:
@@ -158,6 +188,19 @@ def _build_app(conn, default_batch: str | None):
             self.send_error(404)
 
         def do_POST(self):  # noqa: N802 - stdlib method name
+            if self.path == "/api/refill":
+                length = int(self.headers.get("Content-Length", 0))
+                try:
+                    payload = json.loads(self.rfile.read(length)) if length else {}
+                    n = int(payload.get("n", 200))
+                except json.JSONDecodeError:
+                    self.send_error(400, "malformed request body")
+                    return
+                with _write_lock:
+                    result = asyncio.run(run_calibrate_sample(conn=conn, n=n))
+                self._send_json(result)
+                return
+
             if self.path != "/api/submit":
                 self.send_error(404)
                 return
@@ -167,13 +210,14 @@ def _build_app(conn, default_batch: str | None):
                 seg_id = payload["id"]
                 decision = payload["decision"]
                 text = payload.get("text")
+                flag_reason = payload.get("flag_reason")
             except (KeyError, json.JSONDecodeError):
                 self.send_error(400, "malformed request body")
                 return
 
             try:
                 with _write_lock:
-                    record_decision(conn, seg_id, decision, text)
+                    record_decision(conn, seg_id, decision, text, flag_reason)
                     stats = queue_stats(conn)
             except ValueError as exc:
                 self._send_json({"error": str(exc)}, status=400)
@@ -232,13 +276,23 @@ _PAGE_HTML = r"""<!doctype html>
   .meta .decision-pill.verified { background: var(--good); color: white; }
   .meta .decision-pill.skipped { background: var(--panel-2); color: var(--muted); }
   .meta .decision-pill.rejected { background: var(--bad); color: white; }
+  .meta .decision-pill.flagged { background: var(--warn); color: #1c1300; }
 
   /* ---- audio + playback controls ---- */
-  .player-row { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 1rem; flex-wrap: wrap; }
+  .player-row { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.6rem; flex-wrap: wrap; }
   audio { flex: 1 1 260px; height: 34px; }
   .pbtn { background: var(--panel-2); color: var(--muted); border: 1px solid var(--border);
           border-radius: 6px; padding: 0.3rem 0.55rem; font-size: 0.78rem; cursor: pointer; }
   .pbtn.active { color: var(--accent); border-color: var(--accent); }
+  #waveform { width: 100%; height: 56px; display: block; margin-bottom: 1rem; border-radius: 6px;
+              background: var(--panel-2); cursor: pointer; }
+
+  /* ---- Cantonese particle quick-insert toolbar ---- */
+  #particles { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.7rem; }
+  #particles button { background: var(--panel-2); color: var(--accent); border: 1px solid var(--border);
+                       border-radius: 5px; padding: 0.2rem 0.5rem; font-size: 0.88rem; cursor: pointer; }
+  #particles button:hover { border-color: var(--accent); }
+  #particles .plabel { color: var(--dim); font-size: 0.72rem; align-self: center; margin-right: 0.2rem; }
 
   /* ---- ASR candidates with diff ---- */
   .candidates { display: flex; flex-direction: column; gap: 0.45rem; margin-bottom: 1rem; }
@@ -265,14 +319,38 @@ _PAGE_HTML = r"""<!doctype html>
                           border-radius: 5px; padding: 0.2rem 0.5rem; cursor: pointer; }
   .editor-row #undoBtn:disabled { opacity: 0.35; cursor: default; }
 
-  .actions { display: flex; gap: 0.6rem; }
+  /* ---- Jyutping validity preview ---- */
+  #jyutping-preview { font-size: 0.78rem; color: var(--dim); margin-bottom: 0.9rem;
+                       font-family: ui-monospace, "SF Mono", monospace; line-height: 1.5; }
+  #jyutping-preview .frac { font-weight: 600; }
+  #jyutping-preview .frac.ok { color: var(--good); }
+  #jyutping-preview .frac.warn { color: var(--warn); }
+  #jyutping-preview .frac.bad { color: var(--bad); }
+  #jyutping-preview .bad-token { color: var(--bad); text-decoration: underline wavy; }
+
+  .actions { display: flex; gap: 0.6rem; flex-wrap: wrap; align-items: center; }
   button.action { font-size: 0.95rem; padding: 0.6rem 1.1rem; border-radius: 6px; border: none;
                   cursor: pointer; font-weight: 500; }
   #verify { background: var(--good); color: white; }
   #skip { background: var(--panel-2); color: var(--text); border: 1px solid var(--border) !important; }
   #reject { background: var(--bad); color: white; }
+  #flag { background: var(--warn); color: #1c1300; }
   .hint { color: var(--dim); font-size: 0.74rem; margin-top: 0.8rem; }
   #done { display: none; color: var(--muted); }
+  #done button { margin-top: 0.6rem; }
+
+  /* ---- flag-reason inline box ---- */
+  #flag-box { display: none; gap: 0.5rem; align-items: center; margin-top: 0.7rem; }
+  #flag-box input { flex: 1; background: var(--panel-2); color: var(--text); border: 1px solid var(--warn);
+                     border-radius: 6px; padding: 0.4rem 0.6rem; font-size: 0.85rem; }
+  #flag-box button { border-radius: 6px; padding: 0.35rem 0.7rem; font-size: 0.8rem; cursor: pointer; border: none; }
+  #flag-confirm { background: var(--warn); color: #1c1300; }
+  #flag-cancel { background: var(--panel-2); color: var(--muted); border: 1px solid var(--border) !important; }
+
+  /* ---- refill ---- */
+  #refillBtn { background: var(--panel-2); color: var(--muted); border: 1px solid var(--border);
+               border-radius: 6px; padding: 0.35rem 0.6rem; font-size: 0.78rem; cursor: pointer; }
+  #refill-toast { font-size: 0.76rem; color: var(--accent); margin-top: 0.5rem; display: none; }
 
   /* ---- history sidebar ---- */
   #history h2 { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em;
@@ -286,12 +364,35 @@ _PAGE_HTML = r"""<!doctype html>
   .hist-item .hist-decision.verified { color: var(--good); }
   .hist-item .hist-decision.skipped { color: var(--muted); }
   .hist-item .hist-decision.rejected { color: var(--bad); }
+  .hist-item .hist-decision.flagged { color: var(--warn); }
   .hist-item .hist-text { color: var(--text); overflow: hidden; text-overflow: ellipsis;
                            white-space: nowrap; }
   #backBtn { background: var(--panel-2); color: var(--muted); border: 1px solid var(--border);
              border-radius: 6px; padding: 0.3rem 0.6rem; font-size: 0.78rem; cursor: pointer;
              margin-bottom: 0.6rem; }
   #backBtn:disabled { opacity: 0.35; cursor: default; }
+
+  /* ---- summary dashboard ---- */
+  #summary { margin-top: 1rem; }
+  #summary .summary-head { display: flex; align-items: center; gap: 0.8rem; margin-bottom: 0.8rem; }
+  #summary .summary-head h2 { font-size: 0.85rem; color: var(--muted); margin: 0; text-transform: uppercase;
+                               letter-spacing: 0.04em; }
+  #summaryRefresh { background: var(--panel-2); color: var(--accent); border: 1px solid var(--border);
+                     border-radius: 6px; padding: 0.3rem 0.65rem; font-size: 0.78rem; cursor: pointer; }
+  #summary-body { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.9rem; }
+  .stat-card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 0.9rem; }
+  .stat-card h3 { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.03em; color: var(--dim);
+                  margin: 0 0 0.6rem; }
+  .stat-card .big-number { font-size: 1.6rem; font-variant-numeric: tabular-nums; color: var(--text); }
+  .stat-card .sub { color: var(--dim); font-size: 0.75rem; margin-top: 0.2rem; }
+  .bar-row { display: flex; align-items: center; gap: 0.5rem; font-size: 0.78rem; margin-bottom: 0.4rem; }
+  .bar-row .bar-label { width: 82px; flex-shrink: 0; color: var(--muted); overflow: hidden;
+                         text-overflow: ellipsis; white-space: nowrap; }
+  .bar-row .bar-track { flex: 1; height: 8px; background: var(--border); border-radius: 4px; overflow: hidden;
+                         display: flex; }
+  .bar-row .bar-track span { display: block; height: 100%; }
+  .bar-row .bar-value { width: 32px; text-align: right; color: var(--dim); font-variant-numeric: tabular-nums; }
+  #summary-empty { color: var(--dim); font-size: 0.82rem; }
 </style>
 </head>
 <body>
@@ -302,6 +403,7 @@ _PAGE_HTML = r"""<!doctype html>
     <span class="verified"><b id="s-verified">0</b> verified</span>
     <span><b id="s-skipped">0</b> skipped</span>
     <span class="rejected"><b id="s-rejected">0</b> rejected</span>
+    <span><b id="s-flagged">0</b> flagged</span>
     <span><b id="s-pending">0</b> pending</span>
     <span style="color:var(--dim)">/ <span id="s-total">0</span></span>
   </div>
@@ -309,6 +411,7 @@ _PAGE_HTML = r"""<!doctype html>
     <span id="pb-verified" style="background:var(--good)"></span>
     <span id="pb-skipped" style="background:var(--dim)"></span>
     <span id="pb-rejected" style="background:var(--bad)"></span>
+    <span id="pb-flagged" style="background:var(--warn)"></span>
   </div>
   <div class="filters">
     <select id="batchSelect"><option value="">All batches</option></select>
@@ -318,6 +421,7 @@ _PAGE_HTML = r"""<!doctype html>
       <option value="agreement_asc">Lowest agreement first</option>
       <option value="agreement_desc">Highest agreement first</option>
     </select>
+    <button id="refillBtn" title="Queue another random sample">↻ Refill</button>
   </div>
 </div>
 
@@ -334,8 +438,11 @@ _PAGE_HTML = r"""<!doctype html>
         <button class="pbtn" data-speed="1.25">1.25×</button>
         <button class="pbtn" data-speed="1.5">1.5×</button>
       </div>
+      <canvas id="waveform" width="760" height="56" title="Click to seek"></canvas>
       <div class="candidates" id="candidates"></div>
+      <div id="particles"><span class="plabel">Particles:</span></div>
       <textarea id="text" autofocus></textarea>
+      <div id="jyutping-preview"></div>
       <div class="editor-row">
         <span>Click a candidate's <b>Insert</b> button (or press 1–4) to copy it in — the text box never changes on its own.</span>
         <button id="undoBtn" disabled>↩ Undo insert</button>
@@ -344,14 +451,32 @@ _PAGE_HTML = r"""<!doctype html>
         <button class="action" id="verify">Verify (Enter)</button>
         <button class="action" id="skip">Skip (S)</button>
         <button class="action" id="reject">Reject (D)</button>
+        <button class="action" id="flag">Flag issue (F)</button>
       </div>
-      <div class="hint">Space replays/pauses audio when the text box isn't focused. Highlighted diff: <ins>green</ins> = candidate adds this, <del>red</del> = candidate removes this (relative to the box's current text).</div>
+      <div id="flag-box">
+        <input id="flag-reason" placeholder="What's wrong? (segmentation, wrong language, corrupt audio…)">
+        <button id="flag-confirm">Confirm flag</button>
+        <button id="flag-cancel">Cancel</button>
+      </div>
+      <div class="hint">Space replays/pauses audio when the text box isn't focused. Highlighted diff: <ins>green</ins> = candidate adds this, <del>red</del> = candidate removes this (relative to the box's current text). Click the waveform to seek.</div>
     </div>
-    <div id="done">Queue empty for this filter — no pending segments left.</div>
+    <div id="done">
+      Queue empty for this filter — no pending segments left.<br>
+      <button id="doneRefillBtn">↻ Queue a new sample</button>
+    </div>
+
+    <div id="summary">
+      <div class="summary-head">
+        <h2>Sample summary</h2>
+        <button id="summaryRefresh">↻ Refresh</button>
+      </div>
+      <div id="summary-body"><span id="summary-empty">Click Refresh to load.</span></div>
+    </div>
   </div>
 
   <div id="history">
     <button id="backBtn" disabled>← Back to previous</button>
+    <div id="refill-toast"></div>
     <h2>Recently reviewed</h2>
     <div id="history-list"></div>
   </div>
@@ -363,6 +488,14 @@ let current = null;
 let undoStack = [];
 let visitStack = [];   // ids of items shown this session, for Back navigation
 let reviewingFromHistory = false;
+let audioCtx = null;
+
+// Cantonese particles/fillers ASR commonly drops or mis-renders as a
+// Mandarin homophone -- see the chat reference list this toolbar mirrors.
+const PARTICLES = [
+  '啊', '呀', '喇', '嘅', '㗎', '咩', '呢', '喎', '噃', '咧', '囉', '咯', '嘛', '啦',
+  '掛', '添', '喳', '唉', '咦', '嘩', '喂', '吓', '嗯', '噉', '咁', '嗰', '哋', '喺', '畀', '緊', '咗',
+];
 
 function currentFilters() {
   return {
@@ -432,12 +565,14 @@ async function refreshStats() {
   document.getElementById('s-verified').textContent = s.verified;
   document.getElementById('s-skipped').textContent = s.skipped;
   document.getElementById('s-rejected').textContent = s.rejected;
+  document.getElementById('s-flagged').textContent = s.flagged;
   document.getElementById('s-pending').textContent = s.pending;
   document.getElementById('s-total').textContent = s.total;
   const total = Math.max(s.total, 1);
   document.getElementById('pb-verified').style.width = (100 * s.verified / total) + '%';
   document.getElementById('pb-skipped').style.width = (100 * s.skipped / total) + '%';
   document.getElementById('pb-rejected').style.width = (100 * s.rejected / total) + '%';
+  document.getElementById('pb-flagged').style.width = (100 * s.flagged / total) + '%';
 }
 
 async function refreshHistory() {
@@ -449,12 +584,55 @@ async function refreshHistory() {
   for (const it of items) {
     const div = document.createElement('div');
     div.className = 'hist-item';
+    const bodyText = it.decision === 'flagged'
+      ? (it.flag_reason || '(no reason given)')
+      : (it.reviewed_text || '(no text)');
     div.innerHTML =
       `<div class="hist-top"><span class="hist-decision ${it.decision}">${it.decision}</span><span>${it.source}</span></div>` +
-      `<div class="hist-text">${escapeHtml(it.reviewed_text || '(no text)')}</div>`;
+      `<div class="hist-text">${escapeHtml(bodyText)}</div>`;
     div.onclick = () => openItem(it.id);
     list.appendChild(div);
   }
+}
+
+// ---- Cantonese particle quick-insert toolbar ----
+function insertAtCursor(str) {
+  const box = document.getElementById('text');
+  undoStack.push(box.value);
+  document.getElementById('undoBtn').disabled = false;
+  const start = box.selectionStart ?? box.value.length;
+  const end = box.selectionEnd ?? box.value.length;
+  box.value = box.value.slice(0, start) + str + box.value.slice(end);
+  const pos = start + str.length;
+  box.focus();
+  box.setSelectionRange(pos, pos);
+  rerenderCandidateDiffs();
+  refreshJyutpingPreview();
+}
+
+function renderParticleToolbar() {
+  const bar = document.getElementById('particles');
+  for (const p of PARTICLES) {
+    const btn = document.createElement('button');
+    btn.textContent = p;
+    btn.onclick = () => insertAtCursor(p);
+    bar.appendChild(btn);
+  }
+}
+
+// ---- Jyutping validity live preview ----
+async function refreshJyutpingPreview() {
+  const text = document.getElementById('text').value;
+  const el = document.getElementById('jyutping-preview');
+  if (!text.trim()) { el.innerHTML = ''; return; }
+  const r = await fetch('/api/g2p_preview?' + qs({ text }));
+  const p = await r.json();
+  const pct = Math.round(p.valid_fraction * 100);
+  const cls = p.valid_fraction >= 0.95 ? 'ok' : p.valid_fraction >= 0.80 ? 'warn' : 'bad';
+  const badPart = p.bad_tokens.length
+    ? ` — invalid: ${p.bad_tokens.map((t) => `<span class="bad-token">${escapeHtml(t)}</span>`).join(' ')}`
+    : '';
+  el.innerHTML = `jyutping: ${escapeHtml(p.jyutping) || '(none)'} &nbsp; <span class="frac ${cls}">${pct}% valid</span>${badPart}`;
 }
 
 async function refreshFilterOptions() {
@@ -463,26 +641,73 @@ async function refreshFilterOptions() {
     fetch('/api/sources').then((r) => r.json()),
   ]);
   const batchSelect = document.getElementById('batchSelect');
+  const keepBatch = batchSelect.value;
+  batchSelect.querySelectorAll('option[value]:not([value=""])').forEach((o) => o.remove());
   for (const b of batches) {
     const opt = document.createElement('option');
     opt.value = b.sample_batch;
     opt.textContent = `${b.sample_batch} (${b.pending} pending)`;
     batchSelect.appendChild(opt);
   }
-  if (DEFAULT_BATCH) batchSelect.value = DEFAULT_BATCH;
+  batchSelect.value = keepBatch || DEFAULT_BATCH || '';
+
   const sourceSelect = document.getElementById('sourceSelect');
+  const keepSource = sourceSelect.value;
+  sourceSelect.querySelectorAll('option[value]:not([value=""])').forEach((o) => o.remove());
   for (const s of sources) {
     const opt = document.createElement('option');
     opt.value = s; opt.textContent = s;
     sourceSelect.appendChild(opt);
   }
+  sourceSelect.value = keepSource || '';
 }
+
+// ---- waveform: decode via Web Audio API, draw peaks, click-to-seek ----
+async function drawWaveform(url) {
+  const canvas = document.getElementById('waveform');
+  const ctx = canvas.getContext('2d');
+  canvas.width = canvas.clientWidth || 760;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const buf = await (await fetch(url)).arrayBuffer();
+    const audioBuffer = await audioCtx.decodeAudioData(buf);
+    const data = audioBuffer.getChannelData(0);
+    const width = canvas.width, height = canvas.height, amp = height / 2;
+    const step = Math.max(1, Math.ceil(data.length / width));
+    ctx.fillStyle = 'rgba(108,148,255,0.55)';
+    for (let i = 0; i < width; i++) {
+      let min = 1.0, max = -1.0;
+      const base = i * step;
+      for (let j = 0; j < step; j++) {
+        const datum = data[base + j] || 0;
+        if (datum < min) min = datum;
+        if (datum > max) max = datum;
+      }
+      ctx.fillRect(i, (1 + min) * amp, 1, Math.max(1, (max - min) * amp));
+    }
+  } catch (err) {
+    ctx.fillStyle = 'var(--dim)';
+    ctx.font = '12px sans-serif';
+    ctx.fillText('(waveform unavailable)', 8, canvas.height / 2);
+  }
+}
+
+document.getElementById('waveform').addEventListener('click', (e) => {
+  const player = document.getElementById('player');
+  if (!player.duration) return;
+  const rect = e.target.getBoundingClientRect();
+  const frac = (e.clientX - rect.left) / rect.width;
+  player.currentTime = frac * player.duration;
+  player.play().catch(() => {});
+});
 
 // ---- rendering a review item (shared by loadNext / openItem) ----
 function renderItem(item) {
   current = item;
   undoStack = [];
   document.getElementById('undoBtn').disabled = true;
+  document.getElementById('flag-box').style.display = 'none';
 
   const agreementCls = item.agreement < 0.65 ? 'low' : '';
   let metaHtml =
@@ -491,12 +716,17 @@ function renderItem(item) {
     `<span class="agreement-pill ${agreementCls}">agreement ${item.agreement?.toFixed(2)}</span>`;
   if (item.decision && item.decision !== 'pending') {
     metaHtml += `<span class="decision-pill ${item.decision}">${item.decision}</span>`;
+    if (item.decision === 'flagged' && item.flag_reason) {
+      metaHtml += `<span style="color:var(--warn)">${escapeHtml(item.flag_reason)}</span>`;
+    }
   }
   document.getElementById('meta').innerHTML = metaHtml;
 
+  const audioUrl = '/api/audio?id=' + encodeURIComponent(item.id);
   const player = document.getElementById('player');
-  player.src = '/api/audio?id=' + encodeURIComponent(item.id);
+  player.src = audioUrl;
   player.loop = document.getElementById('loopBtn').classList.contains('active');
+  drawWaveform(audioUrl);
 
   document.getElementById('text').value = item.reviewed_text || item.best_text || '';
 
@@ -514,6 +744,7 @@ function renderItem(item) {
     cbox.appendChild(div);
   });
   rerenderCandidateDiffs();
+  refreshJyutpingPreview();
 
   document.getElementById('review').style.display = '';
   document.getElementById('done').style.display = 'none';
@@ -531,6 +762,7 @@ function applyCandidate(text) {
   box.value = text;
   document.getElementById('undoBtn').disabled = false;
   rerenderCandidateDiffs();
+  refreshJyutpingPreview();
 }
 
 function undoInsert() {
@@ -538,14 +770,19 @@ function undoInsert() {
   document.getElementById('text').value = undoStack.pop();
   document.getElementById('undoBtn').disabled = undoStack.length === 0;
   rerenderCandidateDiffs();
+  refreshJyutpingPreview();
 }
 
 // ---- navigation ----
 async function loadNext() {
   const { batch, source, order } = currentFilters();
   const r = await fetch('/api/next?' + qs({ batch, source, order }));
-  const { item } = await r.json();
+  const { item, refilled } = await r.json();
   reviewingFromHistory = false;
+  if (refilled) {
+    showRefillToast(refilled.queued);
+    refreshFilterOptions();
+  }
   if (!item) {
     document.getElementById('review').style.display = 'none';
     document.getElementById('done').style.display = 'block';
@@ -581,13 +818,13 @@ async function goBack() {
 document.getElementById('backBtn').onclick = goBack;
 
 // ---- decisions ----
-async function submit(decision) {
+async function submit(decision, flagReason) {
   if (!current) return;
   const text = document.getElementById('text').value;
   await fetch('/api/submit', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ id: current.id, decision, text }),
+    body: JSON.stringify({ id: current.id, decision, text, flag_reason: flagReason || null }),
   });
   await Promise.all([refreshStats(), refreshHistory()]);
   if (reviewingFromHistory) {
@@ -602,6 +839,103 @@ document.getElementById('verify').onclick = () => submit('verified');
 document.getElementById('skip').onclick = () => submit('skipped');
 document.getElementById('reject').onclick = () => submit('rejected');
 document.getElementById('undoBtn').onclick = undoInsert;
+
+// ---- flag issue (4th decision, does not touch text_verified/tiers) ----
+function openFlagBox() {
+  document.getElementById('flag-box').style.display = 'flex';
+  document.getElementById('flag-reason').value = '';
+  document.getElementById('flag-reason').focus();
+}
+document.getElementById('flag').onclick = openFlagBox;
+document.getElementById('flag-cancel').onclick = () => {
+  document.getElementById('flag-box').style.display = 'none';
+  document.getElementById('text').focus();
+};
+document.getElementById('flag-confirm').onclick = () => {
+  submit('flagged', document.getElementById('flag-reason').value.trim());
+};
+document.getElementById('flag-reason').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); document.getElementById('flag-confirm').click(); }
+  else if (e.key === 'Escape') { document.getElementById('flag-cancel').click(); }
+});
+
+// ---- queue refill (manual + reacting to auto-refill from /api/next) ----
+async function refillQueue(n) {
+  await fetch('/api/refill', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ n: n || 200 }),
+  });
+  await refreshFilterOptions();
+  await Promise.all([refreshStats(), refreshHistory()]);
+  loadNext();
+}
+document.getElementById('refillBtn').onclick = () => refillQueue(200);
+document.getElementById('doneRefillBtn').onclick = () => refillQueue(200);
+
+function showRefillToast(n) {
+  const el = document.getElementById('refill-toast');
+  el.textContent = `Auto-refilled: queued ${n} more segments`;
+  el.style.display = 'block';
+  clearTimeout(window._toastTimer);
+  window._toastTimer = setTimeout(() => { el.style.display = 'none'; }, 4000);
+}
+
+// ---- sample summary dashboard (explicit refresh, not auto-polling) ----
+function barRow(label, value, total, color) {
+  const pct = total > 0 ? (100 * value / total) : 0;
+  return `<div class="bar-row"><span class="bar-label">${escapeHtml(label)}</span>` +
+         `<span class="bar-track"><span style="width:${pct}%;background:${color}"></span></span>` +
+         `<span class="bar-value">${value}</span></div>`;
+}
+
+async function refreshSummary() {
+  const { batch } = currentFilters();
+  const btn = document.getElementById('summaryRefresh');
+  btn.disabled = true; btn.textContent = 'Loading…';
+  const r = await fetch('/api/summary?' + qs({ batch }));
+  const s = await r.json();
+  btn.disabled = false; btn.textContent = '↻ Refresh';
+
+  const dc = s.decision_counts;
+  const decisionCard = `
+    <div class="stat-card"><h3>Decisions (${dc.total} sampled)</h3>
+      ${barRow('verified', dc.verified, dc.total, 'var(--good)')}
+      ${barRow('skipped', dc.skipped, dc.total, 'var(--dim)')}
+      ${barRow('rejected', dc.rejected, dc.total, 'var(--bad)')}
+      ${barRow('flagged', dc.flagged, dc.total, 'var(--warn)')}
+      ${barRow('pending', dc.pending, dc.total, 'var(--accent)')}
+    </div>`;
+
+  const sourceRows = Object.entries(s.by_source).map(([source, counts]) => {
+    const total = Object.values(counts).reduce((a, b) => a + b, 0);
+    return `<div style="margin-bottom:0.6rem"><div class="bar-row"><span class="bar-label"><b>${escapeHtml(source)}</b></span><span class="bar-value">${total}</span></div>` +
+      barRow('verified', counts.verified || 0, total, 'var(--good)') +
+      barRow('flagged', counts.flagged || 0, total, 'var(--warn)') + '</div>';
+  }).join('') || '<span style="color:var(--dim)">no data</span>';
+  const sourceCard = `<div class="stat-card"><h3>By source</h3>${sourceRows}</div>`;
+
+  const agr = s.avg_agreement_by_decision;
+  const agreementCard = `
+    <div class="stat-card"><h3>Avg ASR agreement by decision</h3>
+      ${Object.entries(agr).map(([d, v]) => `<div class="bar-row"><span class="bar-label">${d}</span><span class="bar-value">${v}</span></div>`).join('') || '<span style="color:var(--dim)">no data</span>'}
+    </div>`;
+
+  const editCard = `
+    <div class="stat-card"><h3>Human correction size (verified)</h3>
+      <div class="big-number">${s.avg_edit_distance_verified ?? '—'}</div>
+      <div class="sub">avg characters changed vs ASR text, n=${s.verified_edit_sample_size}</div>
+    </div>`;
+
+  const flagRows = s.top_flag_reasons.length
+    ? s.top_flag_reasons.map((f) => `<div class="bar-row"><span class="bar-label" style="width:auto;flex:1">${escapeHtml(f.reason)}</span><span class="bar-value">${f.count}</span></div>`).join('')
+    : '<span style="color:var(--dim)">none yet</span>';
+  const flagCard = `<div class="stat-card"><h3>Top flag reasons</h3>${flagRows}</div>`;
+
+  document.getElementById('summary-body').innerHTML =
+    decisionCard + sourceCard + agreementCard + editCard + flagCard;
+}
+document.getElementById('summaryRefresh').onclick = refreshSummary;
 
 // ---- playback controls ----
 document.getElementById('loopBtn').onclick = (e) => {
@@ -630,18 +964,24 @@ document.querySelectorAll('.pbtn[data-speed]').forEach((btn) => {
   document.getElementById(id).onchange = () => { refreshStats(); refreshHistory(); loadNext(); };
 });
 
-// ---- live diff re-render as you type / paste corrections manually ----
+// ---- live diff + Jyutping preview re-render as you type / paste corrections manually ----
 document.getElementById('text').addEventListener('input', () => {
   clearTimeout(window._diffTimer);
-  window._diffTimer = setTimeout(rerenderCandidateDiffs, 120);
+  window._diffTimer = setTimeout(() => {
+    rerenderCandidateDiffs();
+    refreshJyutpingPreview();
+  }, 150);
 });
 
 // ---- keyboard shortcuts ----
 document.addEventListener('keydown', (e) => {
   const inBox = document.activeElement === document.getElementById('text');
+  const inFlagReason = document.activeElement === document.getElementById('flag-reason');
+  if (inFlagReason) return;  // flag-reason has its own Enter/Escape handler
   if (e.key === 'Enter' && inBox && !e.shiftKey) { e.preventDefault(); submit('verified'); }
   else if (e.key.toLowerCase() === 's' && !inBox) { submit('skipped'); }
   else if (e.key.toLowerCase() === 'd' && !inBox) { submit('rejected'); }
+  else if (e.key.toLowerCase() === 'f' && !inBox) { openFlagBox(); }
   else if (e.key === ' ' && !inBox) {
     e.preventDefault();
     const p = document.getElementById('player');
@@ -654,6 +994,7 @@ document.addEventListener('keydown', (e) => {
 });
 
 (async function init() {
+  renderParticleToolbar();
   await refreshFilterOptions();
   await Promise.all([refreshStats(), refreshHistory()]);
   await loadNext();

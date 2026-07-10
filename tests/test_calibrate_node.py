@@ -5,8 +5,10 @@ import pytest
 
 from pipeline.catalog.catalog import init_schema
 from pipeline.nodes.calibrate import (
+    _levenshtein,
     discover,
     get_item,
+    jyutping_preview,
     list_batches,
     list_history,
     list_sources,
@@ -14,6 +16,7 @@ from pipeline.nodes.calibrate import (
     queue_stats,
     record_decision,
     run_calibrate_sample,
+    summary_stats,
 )
 
 
@@ -54,8 +57,8 @@ def test_discover_excludes_filter_failing_segments(scratch_conn):
     _seed_segment(conn, "pass1", passes_filter=True)
     _seed_segment(conn, "fail1", passes_filter=False)
 
-    ids = discover(conn, 10)
-    assert ids == ["pass1"]
+    picked = discover(conn, 10)
+    assert [seg_id for seg_id, _ in picked] == ["pass1"]
 
 
 def test_discover_excludes_already_queued_segments(scratch_conn):
@@ -81,6 +84,21 @@ def test_run_calibrate_sample_queues_pending_rows(scratch_conn):
     assert len(rows) == 3
     assert all(decision == "pending" for decision, _ in rows)
     assert all(batch == result["run_id"] for _, batch in rows)
+
+
+def test_run_calibrate_sample_snapshots_original_best_text(scratch_conn):
+    """Regression guard: 'verified' decisions overwrite asr_agreement.best_text
+    in place, so summary_stats' edit-distance metric needs its own snapshot
+    taken at queue time, before any correction happens."""
+    conn = scratch_conn
+    _seed_segment(conn, "s0")
+
+    asyncio.run(run_calibrate_sample(conn=conn, n=1))
+
+    row = conn.execute(
+        "SELECT original_best_text FROM calibration_review WHERE id='s0'"
+    ).fetchone()
+    assert row == ("呢個係測試文字",)
 
 
 def test_run_calibrate_sample_empty_when_nothing_eligible(scratch_conn):
@@ -180,7 +198,7 @@ def test_queue_stats_counts_by_decision(scratch_conn):
         )
 
     stats = queue_stats(conn)
-    assert stats == {"pending": 1, "verified": 2, "skipped": 1, "rejected": 0, "total": 4}
+    assert stats == {"pending": 1, "verified": 2, "skipped": 1, "rejected": 0, "flagged": 0, "total": 4}
 
 
 def test_queue_stats_scoped_by_source(scratch_conn):
@@ -191,7 +209,7 @@ def test_queue_stats_scoped_by_source(scratch_conn):
     conn.execute("INSERT INTO calibration_review (id, decision) VALUES ('b', 'skipped')")
 
     assert queue_stats(conn, source="rthk") == {
-        "pending": 0, "verified": 1, "skipped": 0, "rejected": 0, "total": 1,
+        "pending": 0, "verified": 1, "skipped": 0, "rejected": 0, "flagged": 0, "total": 1,
     }
     assert queue_stats(conn, source="podcast")["skipped"] == 1
 
@@ -280,3 +298,86 @@ def test_list_sources_returns_distinct_sources(scratch_conn):
     _seed_segment(conn, "c", source="rthk")
 
     assert list_sources(conn) == ["podcast", "rthk"]
+
+
+# ---------------------------------------------------------------------------
+# record_decision('flagged', ...) -- pipeline-bug reports, no gold side-effect
+# ---------------------------------------------------------------------------
+
+def test_record_decision_flagged_stores_reason_without_touching_gold(scratch_conn):
+    conn = scratch_conn
+    _seed_segment(conn, "s1")
+    conn.execute("INSERT INTO calibration_review (id, decision) VALUES ('s1', 'pending')")
+    conn.execute("INSERT INTO tiers (id, tier, provenance) VALUES ('s1', 'silver', 'tier_assign')")
+
+    record_decision(conn, "s1", "flagged", None, flag_reason="segment 切錯咗,含兩個speaker")
+
+    review = conn.execute(
+        "SELECT decision, flag_reason FROM calibration_review WHERE id='s1'"
+    ).fetchone()
+    assert review == ("flagged", "segment 切錯咗,含兩個speaker")
+
+    # 'flagged' must NOT touch text_verified or tiers (unlike 'verified')
+    agreement_row = conn.execute("SELECT text_verified FROM asr_agreement WHERE id='s1'").fetchone()
+    assert agreement_row == (False,)
+    tier_row = conn.execute("SELECT tier FROM tiers WHERE id='s1'").fetchone()
+    assert tier_row == ("silver",)
+
+
+# ---------------------------------------------------------------------------
+# jyutping_preview() -- reuses g2p.py's real conversion/validation
+# ---------------------------------------------------------------------------
+
+def test_jyutping_preview_valid_cantonese_text():
+    result = jyutping_preview("心臟病中風")
+    assert result["accept"] is True
+    assert result["valid_fraction"] == 1.0
+    assert result["bad_tokens"] == []
+    assert "sam1" in result["jyutping"]
+
+
+def test_jyutping_preview_empty_text():
+    result = jyutping_preview("")
+    assert result == {"jyutping": "", "valid_fraction": 1.0, "accept": True, "bad_tokens": []}
+
+
+# ---------------------------------------------------------------------------
+# _levenshtein() / summary_stats()
+# ---------------------------------------------------------------------------
+
+def test_levenshtein_basic_cases():
+    assert _levenshtein("", "") == 0
+    assert _levenshtein("abc", "abc") == 0
+    assert _levenshtein("", "abc") == 3
+    assert _levenshtein("abc", "") == 3
+    assert _levenshtein("心臟病", "心病") == 1
+
+
+def test_summary_stats_aggregates_decisions_and_edit_distance(scratch_conn):
+    conn = scratch_conn
+    _seed_segment(conn, "a", source="rthk", agreement=0.9)
+    _seed_segment(conn, "b", source="podcast", agreement=0.5)
+    conn.execute("INSERT INTO calibration_review (id, decision, original_best_text) VALUES ('a', 'pending', '呢個係測試文字')")
+    conn.execute("INSERT INTO calibration_review (id, decision, original_best_text) VALUES ('b', 'pending', '呢個係測試文字')")
+    record_decision(conn, "a", "verified", "呢個係校正咗嘅文字")   # differs from seeded best_text
+    record_decision(conn, "b", "flagged", None, flag_reason="audio corrupt")
+
+    stats = summary_stats(conn)
+    assert stats["decision_counts"]["verified"] == 1
+    assert stats["decision_counts"]["flagged"] == 1
+    assert stats["by_source"]["rthk"]["verified"] == 1
+    assert stats["by_source"]["podcast"]["flagged"] == 1
+    assert stats["verified_edit_sample_size"] == 1
+    assert stats["avg_edit_distance_verified"] > 0
+    assert stats["top_flag_reasons"] == [{"reason": "audio corrupt", "count": 1}]
+
+
+def test_summary_stats_scoped_by_batch(scratch_conn):
+    conn = scratch_conn
+    _seed_segment(conn, "a")
+    _seed_segment(conn, "b")
+    conn.execute("INSERT INTO calibration_review (id, decision, sample_batch) VALUES ('a', 'verified', 'batch1')")
+    conn.execute("INSERT INTO calibration_review (id, decision, sample_batch) VALUES ('b', 'verified', 'batch2')")
+
+    stats = summary_stats(conn, sample_batch="batch1")
+    assert stats["decision_counts"]["total"] == 1

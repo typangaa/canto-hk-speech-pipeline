@@ -175,12 +175,22 @@ ALTER TABLE tiers ADD COLUMN IF NOT EXISTS provenance TEXT;
 -- pipeline/nodes/calibrate.py's module docstring for why.
 CREATE TABLE IF NOT EXISTS calibration_review (
     id            TEXT PRIMARY KEY,
-    decision      TEXT,       -- 'pending' | 'verified' | 'skipped' | 'rejected'
+    decision      TEXT,       -- 'pending' | 'verified' | 'skipped' | 'rejected' | 'flagged'
     reviewed_text TEXT,
     sample_batch  TEXT,
     queued_at     TIMESTAMP,
     reviewed_at   TIMESTAMP
 );
+-- 'flagged' (2026-07-10 UI iteration): a 4th decision for pipeline-bug reports surfaced during
+-- review (bad segmentation, non-Cantonese slipping past lang_screen, corrupt audio, etc.) --
+-- distinct from 'rejected' (this segment's text just isn't verifiable). Does NOT touch
+-- asr_agreement/tiers like 'verified' does; flag_reason is free text for the owner to triage.
+ALTER TABLE calibration_review ADD COLUMN IF NOT EXISTS flag_reason TEXT;
+-- Snapshot of asr_agreement.best_text taken AT QUEUE TIME, before a 'verified' decision
+-- overwrites best_text in place with the human-corrected text. Without this snapshot,
+-- summary_stats' "how much did the human need to change" edit-distance metric would always
+-- read 0 (comparing the corrected text against itself).
+ALTER TABLE calibration_review ADD COLUMN IF NOT EXISTS original_best_text TEXT;
 
 -- From metadata/lang_id.jsonl; per-segment language identification probabilities.
 CREATE TABLE IF NOT EXISTS labels_lang (
