@@ -14,17 +14,20 @@ Every session, in this order before writing any code:
 # 1. Read progress from last session
 cat PROGRESS.md
 
-# 2. Check disk space (corpus is 3-way sharded across warm ext4 drives — Drive2/3/4 all in active use since P5-C)
+# 2. Read outstanding work — pending_task.md is the current task backlog (see below)
+cat pending_task.md
+
+# 3. Check disk space (corpus is 3-way sharded across warm ext4 drives — Drive2/3/4 all in active use since P5-C)
 df -h /mnt/Drive2/ /mnt/Drive3/ /mnt/Drive4/
 
-# 3. Check GPU availability (needed for diarization, ASR, speaker embedding, lang screen, music tagging)
+# 4. Check GPU availability (needed for diarization, ASR, speaker embedding, lang screen, music tagging)
 nvidia-smi --query-gpu=name,memory.free --format=csv
 
-# 4. Check what DAG nodes already exist (current system — see "Pipeline Architecture" below)
+# 5. Check what DAG nodes already exist (current system — see "Pipeline Architecture" below)
 ls pipeline/nodes/
 python -m pipeline.cli run --help
 
-# 5. Check catalog state (DuckDB is the source of truth, not per-file sidecar JSON)
+# 6. Check catalog state (DuckDB is the source of truth, not per-file sidecar JSON)
 python -m pipeline.cli catalog verify
 ```
 
@@ -32,6 +35,15 @@ Update `PROGRESS.md` at the end of every session using the format at the bottom 
 Also check `docs/REARCHITECTURE_IMPLEMENTATION_PLAN.md` §8 (milestone status) and
 `docs/ORCHESTRATOR_PLAN.md` (status line at top) if you're touching pipeline internals —
 both are living status docs, updated more frequently than this file.
+
+**`pending_task.md`** (repo root) is the living task backlog — tiered (🔴 data-trust-critical
+→ 🟠 functional gaps → 🟡 P6 engineering cleanup → 🟢 optional), each task with what/how/effort/
+depends-on. **Whenever a task from this file is completed, update it in the same session**:
+move the task into its "Done" section (with completion date + commit/ref), don't just delete
+it — the file is the running record of what's been fixed vs. what's still open. If a completed
+task closes a numbered issue from `docs/PIPELINE_REVIEW_2026-07-11.md` §6, update that doc's
+disposition table too. This file is git-tracked (not gitignored like `PROGRESS.md`) since it's
+a forward-looking plan, not a personal session log.
 
 ---
 
@@ -49,6 +61,7 @@ See "Pipeline Architecture (Current)" below for the real system.
 canto-hk-speech-pipeline/
 ├── CLAUDE.md                     ← you are here (read every session)
 ├── PROGRESS.md                   ← session log (read first, update last)
+├── pending_task.md               ← tiered task backlog (git-tracked; update when a task completes)
 ├── DECISIONS.md                  ← technical decision log
 │
 ├── docs/
