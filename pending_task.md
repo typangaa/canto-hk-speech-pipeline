@@ -25,43 +25,9 @@ Source: round-2 post-execution review of `docs/PIPELINE_REVIEW_2026-07-11.md` §
 - **Depends on**: nothing. `calibrate serve` is already running (PID 971786 at review time).
 - **Owner**: human (not delegable to Claude).
 
-### T2. Re-baseline `catalog verify` row_count checks (Issue N1)
-- **What**: 10 `row_count[*]` checks compare against the stale P0-import baseline
-  (455,299) vs. actual (618,695+, still growing) — always FAIL, pure noise.
-- **Risk**: alarm fatigue — a real row-loss regression would hide among 10 "always FAIL" lines.
-- **How** (prefer option 2): either (1) snapshot a new baseline (will go stale again as
-  corpus grows), or (2) change semantics to `actual >= baseline` and report the delta,
-  only failing on shrinkage.
-- **Effort**: small, ~1 hour (`pipeline/catalog/` verify logic + its tests).
-- **Depends on**: nothing.
-
-### T3. Fix flaky snapshot test (Issue N2)
-- **What**: `tests/test_catalog.py::test_manifest_build_matches_expected_corpus_totals`
-  hardcodes `count==458843` / `gold==43`; drifts whenever `pipe calibrate serve` is live
-  reviewing (observed gold 43→49, count +1 in one session).
-- **How**: loosen to tolerant assertions (`count >= baseline` + a sanity upper bound;
-  `gold >= 43`), or `pytest.skip` when `calibrate serve` is detected running.
-- **Effort**: tiny, ~15 min. Can land in the same commit as T2.
-- **Depends on**: nothing.
-
 ---
 
 ## 🟠 Tier 2 — functional gaps, close before P6
-
-### T4. Port `report.build` node (Issue #3)
-- **What**: dataset-statistics report node (old stage-10 equivalent) never ported;
-  `metadata/DATASET_REPORT.md` stuck at 2026-06-11; **acceptance criteria cannot be
-  verified as a whole without it**.
-- **How**:
-  1. New `pipeline/nodes/report.py`, reads catalog (`filters`/`tiers`/`speakers`/`segments`),
-     computes each of CLAUDE.md's 12 acceptance criteria, writes `metadata/DATASET_REPORT.md`;
-  2. Follow node conventions: `conn=None` injection, provenance tag, CLI registration,
-     `metadata/logs/report_build.log`, add tests;
-  3. Once ported, `git rm scripts/10_report.py` (its stated retirement condition is
-     exactly "report.build ported") — `scripts/` goes to zero; update CLAUDE.md/README.
-- **Effort**: medium, ~half a day (old `10_report.py` is a reference but reads dead
-  `data/filtered/`; must be rewritten against the catalog).
-- **Depends on**: none hard; numbers are more meaningful after T6 (re-export).
 
 ### T5. Filter/tier re-evaluation mechanism (Issue #4)
 - **What**: `filter.text`/`filter.decide`/`tier.assign` discovery is a bare
@@ -158,4 +124,32 @@ Pulled by training needs:  T13
 
 ## Done
 
-_(nothing completed yet as of 2026-07-11 — this section fills in as tasks close)_
+### T2. Re-baseline `catalog verify` row_count checks (Issue N1) — done 2026-07-11
+`pipeline/catalog/verify.py`'s `check_row_counts()` now does floor-only (or floor+ceiling
+for the three tables that are 1:1-with-segments: `asr_agreement`/`filters`/`tiers`) checks
+against live-queried 2026-07-11 baselines, replacing the old exact-match `EXPECTED` dict —
+same pattern already established in `tests/test_catalog.py`'s `*_monotonic_growth` tests.
+Verified: `pipe catalog verify` now shows 17/17 PASS (was 10/17 FAIL). See
+`docs/PIPELINE_REVIEW_2026-07-11.md` §6 Issue N1 disposition.
+
+### T3. Fix flaky snapshot test (Issue N2) — done 2026-07-11
+`tests/test_catalog.py::test_manifest_build_matches_expected_corpus_totals` converted
+from hardcoded `==` to tolerant floor/ceiling/tolerance-window assertions (count/n_speakers:
+floor + generous ceiling; gold: floor only, expected to trend up; auto_gold/silver/bronze:
+±1,000-row tolerance window, since they deplete as rows promote to gold). Landed in the
+same batch as T2. Verified: full suite green (304 passed), including this test, while a
+live `calibrate serve` review session was actively drifting `gold` in the background.
+
+### T4. Port `report.build` node (Issue #3) — done 2026-07-11
+New `pipeline/nodes/report.py`: `run_report_build(*, min_tier=None)` reuses
+`manifest.py`'s `run_manifest_build()` to read the manifest-eligible pool LIVE from the
+catalog on every call (never a stale file), computes all 12 CLAUDE.md Acceptance Criteria
+(fixing a legacy bug where the old script silently never checked 2 of its 11 declared
+thresholds), and writes `metadata/DATASET_REPORT.md`. `text_verified` and single-speaker
+are reported honestly (not faked to pass) — see the node's module docstring. Registered as
+`pipe run report.build` (`--min-tier` scoping, matching `manifest.build`/`manifest.export`'s
+convention). `scripts/10_report.py` retired via `git rm` per its own documented condition —
+`scripts/` is now empty. Live run against the real catalog: 458,844 entries / 1018.9h /
+8,817 speakers, 10/11 criteria PASS (only `text_verified` fails, correctly — see T1).
+CLAUDE.md/README.md updated to match. See `docs/PIPELINE_REVIEW_2026-07-11.md` §6 Issue #3
+disposition.

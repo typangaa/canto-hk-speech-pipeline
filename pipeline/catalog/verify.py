@@ -2,7 +2,14 @@
 """
 pipeline/catalog/verify.py
 P0 gate checks (docs/REARCHITECTURE_IMPLEMENTATION_PLAN.md §12):
-  1. Row counts match the legacy jsonl source-of-truth exactly.
+  1. Row counts only ever grow (floor check against a dated baseline, plus a
+     <= segments ceiling for tables that are 1:1-with-segments in principle).
+     Originally (P0) this was an exact-match check against a frozen legacy-jsonl
+     import count, but the corpus has grown continuously since (orphan recovery,
+     backlog processing, ongoing ingestion — now 618,695+ segments and counting),
+     so exact equality now always fails. Same fix pattern as
+     tests/test_catalog.py's *_monotonic_growth tests — see that file's docstring
+     for the full history.
   2. Path-existence sample check == 100% (already run during build; re-verified here).
   3. Discovery-SQL arithmetic: segments minus labels_music == the SQL anti-join
      result exactly (validates the "music not-yet-tagged" query the P1 pilot
@@ -21,30 +28,56 @@ from pipeline.config import REPO_ROOT
 
 METADATA_DIR = REPO_ROOT / "metadata"
 
-# Expected counts, derived directly from the legacy jsonl files (see
-# docs/REARCHITECTURE_IMPLEMENTATION_PLAN.md P0 section + session notes).
-# raw_files=6272 (not 6631): downloaded.jsonl has 359 duplicate ids from
-# 00_reingest.py double-logging some files — see ingest.py import_raw_files().
-EXPECTED = {
-    "segments": 455299,
-    "raw_files": 6272,
-    "asr_results": 910598,
-    "asr_agreement": 455299,
-    "filters": 455299,
-    "g2p": 455299,
-    "tiers": 455299,
-    "labels_lang": 455275,
-    "labels_overlap": 455275,
-    "labels_music": 105668,
+# Row-count floor baselines, updated 2026-07-11 when this exact-match check was
+# replaced with a floor: row counts should only ever grow from here, never
+# shrink. Values below are the live catalog counts queried on 2026-07-11 (see
+# tests/test_catalog.py for the equivalent, previously-established pattern —
+# SEGMENTS_P0_BASELINE / RAW_FILES_BASELINE / ONE_TO_ONE_TABLE_BASELINES /
+# G2P_BASELINE / LABELS_MUSIC_P0_BASELINE / LABELS_LANG_OVERLAP_P0_BASELINE).
+#
+# - segments / raw_files: top of the growth chain, floor only, no ceiling.
+# - asr_agreement / filters / tiers: 1:1-with-segments in principle (become
+#   eligible once >= 2 ASR models have landed for a segment — see
+#   asr.agreement's docstring), so floor + a <= segments ceiling.
+# - g2p: runs only on human-verified/agreement-passing text, a subset of
+#   asr_agreement — floor only.
+# - labels_lang / labels_overlap / labels_music: floor only (labels_music has
+#   already caught up to the full segments count as of 2026-07-11; the other
+#   two still trail slightly — label.suite fills the gap opportunistically).
+# - asr_results: not 1:1 with segments (multiple ASR models write multiple
+#   rows per segment id, so its natural ceiling is much higher than segments
+#   count) — floor only, no ceiling.
+ROW_COUNT_FLOORS = {
+    "segments": 618695,
+    "raw_files": 10990,
+    "asr_results": 2508851,
+    "asr_agreement": 618695,
+    "filters": 618695,
+    "g2p": 484832,
+    "tiers": 618695,
+    "labels_lang": 455642,
+    "labels_overlap": 455642,
+    "labels_music": 618695,
 }
+
+# Tables that are 1:1-with-segments in principle and therefore also get a
+# <= total_segments ceiling check, matching tests/test_catalog.py's
+# ONE_TO_ONE_TABLE_BASELINES convention.
+ONE_TO_ONE_WITH_SEGMENTS = {"asr_agreement", "filters", "tiers"}
 
 
 def check_row_counts(conn) -> list[tuple[str, bool, str]]:
     results = []
-    for table, expected in EXPECTED.items():
+    total_segments = conn.execute("SELECT COUNT(*) FROM segments").fetchone()[0]
+    for table, baseline in ROW_COUNT_FLOORS.items():
         actual = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-        ok = actual == expected
-        results.append((f"row_count[{table}]", ok, f"expected={expected} actual={actual}"))
+        ok = actual >= baseline
+        detail = f"baseline={baseline} actual={actual} (floor, must be >=)"
+        if table in ONE_TO_ONE_WITH_SEGMENTS:
+            ceiling_ok = actual <= total_segments
+            ok = ok and ceiling_ok
+            detail += f" segments={total_segments} (ceiling, must be <=)"
+        results.append((f"row_count[{table}]", ok, detail))
     return results
 
 

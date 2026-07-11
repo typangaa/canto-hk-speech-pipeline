@@ -276,26 +276,71 @@ def test_tiers_valid_values(catalog_conn):
 
 
 def test_manifest_build_matches_expected_corpus_totals(catalog_conn):
-    """P4 gate: manifest.build()'s catalog join must reproduce the exact totals the
-    current on-disk metadata/manifest.jsonl was built with. Baseline updated
-    2026-07-11 after the tier-threshold-v3 backfill (DECISIONS.md 2026-07-11 entry:
-    auto_gold 0.90->0.95, silver 0.65->0.85, new bronze tier at 0.70, manifest floor
-    raised 0.65->0.70): 458,843 entries / 8,817 speakers / gold=43 / auto_gold=72,014 /
+    """P4 gate: manifest.build()'s catalog join must reproduce roughly the totals the
+    current on-disk metadata/manifest.jsonl was built with. Baseline set 2026-07-11
+    after the tier-threshold-v3 backfill (DECISIONS.md 2026-07-11 entry: auto_gold
+    0.90->0.95, silver 0.65->0.85, new bronze tier at 0.70, manifest floor raised
+    0.65->0.70): 458,843 entries / 8,817 speakers / gold=43 / auto_gold=72,014 /
     silver=235,646 / bronze=151,140. This is a SMALLER, more conservative pool than the
     prior 471,299-entry baseline (raising the floor from 0.65 to 0.70 drops ~12,456
     segments to 'excluded' outright) -- a real, intentional tightening, not a regression.
-    gold continues to drift forward by a few rows per live calibrate_server review
-    session (see record_decision()'s docstring) -- a small +N drift on gold/total is
-    expected; a large or unexplained jump elsewhere is not. A mismatch here means the
-    eligibility join (filters.pass, g2p.valid_fraction, tier IN
-    (gold,auto_gold,silver,bronze)) or the tier-threshold backfill regressed -- update
-    this baseline only after an intentional, verified manifest.export re-run."""
+
+    This test was ORIGINALLY exact-equality and was observed to be flaky within a
+    single session: a live `pipe calibrate serve` human-review process running in the
+    background flips `text_verified` + promotes `tier='gold'` for reviewed segments
+    (see record_decision()'s docstring), which drifts gold upward and depletes
+    auto_gold/silver/bronze correspondingly. Observed today (2026-07-11): gold drifted
+    43->49 (and separately 43->58 later in the same session) and `count` drifted
+    458843->458844 -- purely from that live process, not a regression. The assertions
+    below are tolerant of that expected drift while still catching a genuine
+    regression (e.g. the eligibility join silently dropping thousands of rows, or
+    tier.assign's thresholds being accidentally changed again without a DECISIONS.md
+    entry):
+      - count / n_speakers: floor at the baseline (never shrink) plus a generous
+        ceiling (baseline + 5,000 / + 500 respectively) that tolerates ordinary
+        background ingestion completing eligibility for a batch of new segments
+        within a session, while still catching a several-thousand-row anomaly from a
+        broken join.
+      - gold: floor only (>= 43) -- it is EXPECTED to trend upward indefinitely as
+        more calibrate_server review sessions land; there is no meaningful ceiling.
+      - auto_gold / silver / bronze: these get DEPLETED (not grown) as segments are
+        promoted out of them into gold, so exact equality is wrong in that direction
+        too. Use a +/-1,000-row tolerance window around the baseline -- small enough
+        to still fail loudly if tier.assign re-runs with wrong thresholds (which
+        moves tens of thousands of rows across a corpus this size), generous enough
+        to absorb ordinary calibrate-session depletion and new-segment tier
+        assignment happening concurrently.
+    Update this baseline only after an intentional, verified manifest.export re-run."""
     from pipeline.nodes.manifest import run_manifest_build
 
+    BASELINE_COUNT = 458843
+    BASELINE_SPEAKERS = 8817
+    BASELINE_GOLD = 43
+    BASELINE_AUTO_GOLD = 72014
+    BASELINE_SILVER = 235646
+    BASELINE_BRONZE = 151140
+    TIER_DEPLETION_TOLERANCE = 1000
+
     result = run_manifest_build()
-    assert result["count"] == 458843
-    assert result["n_speakers"] == 8817
-    assert result["tier_counts"].get("gold", 0) == 43
-    assert result["tier_counts"].get("auto_gold") == 72014
-    assert result["tier_counts"].get("silver") == 235646
-    assert result["tier_counts"].get("bronze") == 151140
+
+    assert BASELINE_COUNT <= result["count"] <= BASELINE_COUNT + 5000, (
+        f"manifest count {result['count']} outside expected range "
+        f"[{BASELINE_COUNT}, {BASELINE_COUNT + 5000}]"
+    )
+    assert BASELINE_SPEAKERS <= result["n_speakers"] <= BASELINE_SPEAKERS + 500, (
+        f"n_speakers {result['n_speakers']} outside expected range "
+        f"[{BASELINE_SPEAKERS}, {BASELINE_SPEAKERS + 500}]"
+    )
+    assert result["tier_counts"].get("gold", 0) >= BASELINE_GOLD, (
+        f"gold tier count {result['tier_counts'].get('gold', 0)} below floor {BASELINE_GOLD}"
+    )
+    for tier, baseline in (
+        ("auto_gold", BASELINE_AUTO_GOLD),
+        ("silver", BASELINE_SILVER),
+        ("bronze", BASELINE_BRONZE),
+    ):
+        actual = result["tier_counts"].get(tier)
+        assert abs(actual - baseline) <= TIER_DEPLETION_TOLERANCE, (
+            f"{tier} tier count {actual} drifted more than "
+            f"{TIER_DEPLETION_TOLERANCE} from baseline {baseline}"
+        )

@@ -17,10 +17,10 @@ See `CLAUDE.md`'s "Pipeline Architecture (Current)" section for the full node ta
 label suite). Every node is idempotent — discovery is a SQL anti-join against
 already-processed rows, so a node can be killed and re-run safely.
 
-`scripts/10_report.py` is the only file remaining from the pre-DAG script chain — kept as
-a reference for the not-yet-ported `report.build` node (see `docs/KNOWN_ISSUES.md` /
-`CLAUDE.md`'s Acceptance Criteria section). It is not runnable as-is (reads a retired
-`data/filtered/` symlink).
+The `scripts/` directory is now empty — the last file, `10_report.py`, was retired
+2026-07-11 once its DAG replacement (`report.build`, reads the catalog live and writes
+`metadata/DATASET_REPORT.md` with the full Acceptance Criteria checklist) was ported. All
+20 numbered/one-off legacy scripts are recoverable from git history if ever needed.
 
 ---
 
@@ -90,6 +90,7 @@ python -m pipeline.cli run g2p
 python -m pipeline.cli run speaker.embed
 python -m pipeline.cli run tier.assign
 python -m pipeline.cli run manifest.export
+python -m pipeline.cli run report.build      # dataset stats + Acceptance Criteria -> metadata/DATASET_REPORT.md
 
 # 4. Human calibration — review low-agreement segments (browser UI)
 python -m pipeline.cli calibrate serve
@@ -169,8 +170,6 @@ canto-hk-speech-pipeline/
 │   ├── orchestrator/            # resource pools, run journal
 │   ├── workers/                 # GPU worker-subprocess base class
 │   └── nodes/                   # one file per DAG stage
-├── scripts/
-│   └── 10_report.py            # legacy reference only — report.build not yet ported
 ├── sources/                    # Source configuration (YAML)
 │   ├── rthk_sources.yaml
 │   ├── youtube_channels.yaml

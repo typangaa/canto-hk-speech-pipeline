@@ -51,11 +51,10 @@ a forward-looking plan, not a personal session log.
 
 **As of the 2026-07-02 re-architecture, the pipeline runs as a `pipeline/` Python package —
 a catalog-driven DAG orchestrator — not the flat `scripts/01_*.py … 10_*.py` chain this
-project started with.** The old scripts are being retired one-by-one as each stage is
-ported and golden-set-parity-tested; a few (`04_transcribe.py`, `06_filter.py`, `07_g2p.py`,
-`08_speaker_id.py`, `09_manifest.py`, `10_report.py`) still exist on disk purely as
-pre-migration reference/fallback and should be treated as **legacy, not where new work goes**.
-See "Pipeline Architecture (Current)" below for the real system.
+project started with.** Every stage is now ported: the old numbered scripts were retired
+via `git rm` on 2026-07-11 (recoverable from git history if ever needed), including
+`10_report.py` once `report.build` (below) was ported — the `scripts/` directory is now
+empty. See "Pipeline Architecture (Current)" below for the real system.
 
 ```
 canto-hk-speech-pipeline/
@@ -97,9 +96,9 @@ canto-hk-speech-pipeline/
 │                                    segment, asr, filter, g2p, speaker, tier, label_*, manifest,
 │                                    recover_orphans, rebalance, raw_flac (see table below)
 │
-├── scripts/                      ← LEGACY, retired 2026-07-11 — only 10_report.py remains
-│                                    (kept as report.build port reference; 19 ported/one-off
-│                                    scripts removed via `git rm`, recoverable from git history)
+├── scripts/                      ← EMPTY, fully retired 2026-07-11 — all 20 legacy scripts
+│                                    (including 10_report.py, once report.build was ported)
+│                                    removed via `git rm`, recoverable from git history
 │
 ├── data/                         ← cleaned up 2026-07-11 (Phase A); real SSOT is config/storage_layout.yaml
 │   ├── raw/       → /mnt/Drive2/canto-corpus/data/raw/{rthk,youtube,podcast}/  (native container, transient, still active)
@@ -114,7 +113,8 @@ canto-hk-speech-pipeline/
     ├── train.jsonl              ← training split (95%)
     ├── val.jsonl                ← validation split (5%)
     ├── labels.jsonl             ← unified label store (label.store node)
-    └── DATASET_REPORT.md        ← human-readable summary (final output; report node not yet ported — see Acceptance Criteria)
+    └── DATASET_REPORT.md        ← human-readable summary, regenerated live from the catalog by
+                                     `pipe run report.build` (ported 2026-07-11) — see Acceptance Criteria
 ```
 
 ---
@@ -148,6 +148,7 @@ duplicating output.
 | `tier.assign` | `asr_agreement` | `tiers` | **verification-confidence** tier: gold / auto_gold / silver / bronze / excluded (see note below — different axis from the label-framework A/B quality tier) |
 | `calibrate.sample` | `asr_agreement`+`filters`+`tiers` | `calibration_review` | queues a random sample (optionally scoped by `tier`/`min_agreement`) for human text-verification review via `pipe calibrate serve`'s browser UI; a `'verified'` decision flips `asr_agreement.text_verified` + `tiers.tier='gold'` |
 | `manifest.build` / `manifest.export` | `filters`+`g2p`+`speakers`+`tiers` | `metadata/manifest.jsonl`, `train.jsonl`, `val.jsonl` (or `manifest_agreeNNN.jsonl` etc. with `--min-agreement`) | final JSONL assembly, 95/5 split |
+| `report.build` | same join as `manifest.build` (live, not from a file) | `metadata/DATASET_REPORT.md` | dataset-statistics + all 12 Acceptance Criteria rows, computed fresh from the catalog on every run (ported 2026-07-11, replaces `scripts/10_report.py`); `--min-tier` scopes the check (e.g. `gold` for the strictly human-verified subset) |
 | `label.suite` / `label.music` / `label.prosody` | `segments`/`raw_files` | `labels_lang`, `labels_overlap`, `labels_music`, `labels_prosody` | decode-once fan-out; feeds the separate TTS-quality label store |
 | `label.calibrate` / `label.store` | label tables | `metadata/labels/calibration.json`, `metadata/labels.jsonl` | rate/pitch calibration + bucketed label export |
 | `recover.orphans` | disk WAVs missing from catalog | `orphan_segments` | one-time: classify legacy pre-catalog segment WAVs, recover promising ones, queue the rest `pending_delete` (never auto-deletes) |
@@ -157,8 +158,8 @@ duplicating output.
 Milestone status (`docs/REARCHITECTURE_IMPLEMENTATION_PLAN.md` §8 is authoritative): **P0–P5 done**
 (foundations, orchestrator core, decode-once label suite, all heavy-stage node ports, metadata
 cutover, storage execution including the 3-way shard). **P6 (scale readiness) not yet started.**
-A dataset-statistics report node (the old stage-10 equivalent) has **not** been ported yet —
-see Acceptance Criteria below.
+The dataset-statistics report node (the old stage-10 equivalent) was ported 2026-07-11 as
+`report.build` — see Acceptance Criteria below.
 
 **Concurrency layer — `pipe run-many`**: DuckDB's write lock is per-*process*, not
 per-transaction, so two separate `pipe run X` invocations can never hold the writer at
@@ -444,11 +445,14 @@ Dataset is ready for TTS training when ALL pass:
 | Duration in 3–20s range | 100% |
 | Windows paths in manifest | 0 |
 
-Check with: `python -m pipeline.cli catalog verify`, then query `metadata/corpus.duckdb` directly
-for the criteria above (`filters`/`tiers`/`speakers`/`segments` tables). **A dedicated report
-node has not been ported yet** — the legacy `scripts/10_report.py` (reads `data/filtered/`, not
-the catalog) is stale and should not be trusted for current numbers; writing a `report.build`
-node against the catalog is open work, not yet scheduled into a milestone.
+Check with: `python -m pipeline.cli run report.build` — reads the catalog live (via the same
+join `manifest.build` uses) and writes `metadata/DATASET_REPORT.md` with a PASS/FAIL line for
+each of the 11 computable criteria above (single-speaker is reported separately as a
+pipeline-design guarantee, not independently re-verified per-segment — see
+`pipeline/nodes/report.py`'s module docstring). `--min-tier gold` scopes the check to the
+strictly human-verified subset only. As of 2026-07-11 the full manifest-eligible pool passes
+10/11 (only `text_verified` fails, expected — most of the pool is statistical-confidence
+tiers, not human-reviewed; see the QA backlog in `pending_task.md`).
 
 ---
 

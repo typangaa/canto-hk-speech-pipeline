@@ -706,6 +706,18 @@ def cmd_run_manifest_export(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_run_report_build(args: argparse.Namespace) -> int:
+    import logging
+
+    from pipeline.nodes.report import run_report_build
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    result = run_report_build(min_tier=args.min_tier)
+    summary = {k: v for k, v in result.items() if k != "criteria"}
+    print(f"\nDone: {summary}")
+    return 0
+
+
 def cmd_run_label_calibrate(args: argparse.Namespace) -> int:
     import logging
 
@@ -963,6 +975,12 @@ def main() -> int:
                                      "(e.g. 'auto_gold' includes gold+auto_gold) to manifest_tier_<tier>.jsonl "
                                      "etc. -- combinable with --min-agreement")
     p_run_mexport.set_defaults(func=cmd_run_manifest_export)
+    p_run_report = run_sub.add_parser("report.build", help="P4: dataset-statistics + acceptance-criteria report, read live from the catalog -> metadata/DATASET_REPORT.md")
+    p_run_report.add_argument("--min-tier", default=None, choices=["gold", "auto_gold", "silver", "bronze"],
+                               help="scope the report to entries at or above this tiers.tier value "
+                                    "(e.g. 'gold' checks the strictly human-verified subset only) -- "
+                                    "see pipeline/nodes/manifest.py's min_tier convention")
+    p_run_report.set_defaults(func=cmd_run_report_build)
     p_run_lcalib = run_sub.add_parser("label.calibrate", help="P4: compute rate/pitch calibration constants -> metadata/labels/calibration.json")
     p_run_lcalib.set_defaults(func=cmd_run_label_calibrate)
     p_run_lstore = run_sub.add_parser("label.store", help="P4: join+bucket label tables -> metadata/labels.jsonl (requires label.calibrate first)")

@@ -27,3 +27,8 @@ manifest:
 labels:
   store: metadata/labels.jsonl
   calibration: metadata/labels/calibration.json
+
+# report.build (pipeline/nodes/report.py) -- dataset-statistics + acceptance-criteria
+# report, read live from the catalog on every run (replaces scripts/10_report.py).
+report:
+  path: metadata/DATASET_REPORT.md

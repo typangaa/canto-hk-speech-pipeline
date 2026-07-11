@@ -25,3 +25,5 @@ VAL_FRAC = float(_CFG["manifest"]["val_frac"])
 
 LABELS_STORE_PATH = REPO_ROOT / _CFG["labels"]["store"]
 LABELS_CALIBRATION_PATH = REPO_ROOT / _CFG["labels"]["calibration"]
+
+REPORT_PATH = REPO_ROOT / _CFG["report"]["path"]
