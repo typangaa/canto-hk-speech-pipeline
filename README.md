@@ -8,22 +8,19 @@ A reproducible data pipeline for building a **Hong Kong Cantonese speech corpus*
 
 ## Pipeline Overview
 
-| Stage | Script | Input | Output | Tool |
-|-------|--------|-------|--------|------|
-| 00 | `00_reingest.py` | Legacy data | Re-indexed segments | internal |
-| 01 | `01_discover.py` | `sources/*.yaml` | `metadata/discovery.json` | yt-dlp (simulate) |
-| 02 | `02_download.py` | `sources/*.yaml` | `data/raw/` WAVs | yt-dlp / feedparser |
-| 03 | `03_segment.py` | `data/raw/` | `data/segments/` WAVs | pyannote, VAD |
-| 03b | `03b_acoustic_pregate.py` | `data/segments/` | pregate JSON | speechmos, SNR |
-| 04 | `04_transcribe.py` | `data/segments/` | `.transcript.json` | faster-whisper (2-pass) |
-| 05 | `05_calibrate.py` | `.transcript.json` | verified `text` field | human review |
-| 06 | `06_filter.py` | `.transcript.json` | `.filter.json` | DNSMOS, SNR, length |
-| 07 | `07_g2p.py` | `.filter.json` | `.jyutping.json` | canto-hk-g2p |
-| 08 | `08_speaker_id.py` | `data/segments/` | global speaker IDs | SpeechBrain |
-| 09 | `09_manifest.py` | `.jyutping.json` | `metadata/train.jsonl` | — |
-| 10 | `10_report.py` | `metadata/train.jsonl` | `DATASET_REPORT.md` | — |
+The pipeline runs as a **catalog-driven DAG** (`pipeline/` package) — every stage is a
+`python -m pipeline.cli run <node.name>` call, and every stage's input/output is a table
+in `metadata/corpus.duckdb` (the single source of truth), not a chain of numbered scripts.
+See `CLAUDE.md`'s "Pipeline Architecture (Current)" section for the full node table
+(`ingest.download` → `segment.diarize`/`segment.vad_cut` → `asr.transcribe` →
+`filter.*`/`g2p`/`speaker.*`/`tier.assign` → `manifest.build`/`manifest.export`, plus the
+label suite). Every node is idempotent — discovery is a SQL anti-join against
+already-processed rows, so a node can be killed and re-run safely.
 
-Each stage is **idempotent** — already-processed files are skipped. Stages can be run per-source with `--source rthk|youtube|podcast|hktv|all`.
+`scripts/10_report.py` is the only file remaining from the pre-DAG script chain — kept as
+a reference for the not-yet-ported `report.build` node (see `docs/KNOWN_ISSUES.md` /
+`CLAUDE.md`'s Acceptance Criteria section). It is not runnable as-is (reads a retired
+`data/filtered/` symlink).
 
 ---
 
@@ -52,8 +49,12 @@ pip install yt-dlp
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+uv pip install -e .
 ```
+
+Dependencies are declared in `pyproject.toml` and locked in `uv.lock` — install with
+`uv pip install`, never `uv sync` (this project's `.venv` has GPU torch/CUDA libs
+installed outside lock tracking; `uv sync` will prune them and break the environment).
 
 **Cantonese G2P** (build from source until PyPI release):
 
@@ -77,38 +78,27 @@ maturin develop --release
 #    Edit sources/rthk_sources.yaml, sources/youtube_channels.yaml,
 #    sources/podcast_sources.yaml with the programs you want to collect.
 
-# 2. Discover available content (no download)
-python scripts/01_discover.py --source rthk
+# 2. Check catalog state (DuckDB is the source of truth)
+python -m pipeline.cli catalog verify
 
-# 3. Download audio
-python scripts/02_download.py --source rthk
+# 3. Run a DAG node
+python -m pipeline.cli run ingest.download --source rthk
+python -m pipeline.cli run segment.diarize
+python -m pipeline.cli run asr.transcribe
+python -m pipeline.cli run filter.text
+python -m pipeline.cli run g2p
+python -m pipeline.cli run speaker.embed
+python -m pipeline.cli run tier.assign
+python -m pipeline.cli run manifest.export
 
-# 4. Segment + diarize
-python scripts/03_segment.py --source rthk
-
-# 5. Transcribe (two-pass Whisper)
-python scripts/04_transcribe.py --source rthk
-
-# 6. Human calibration — review low-agreement segments
-python scripts/05_calibrate.py --source rthk
-
-# 7. Filter by quality (DNSMOS, SNR, duration)
-python scripts/06_filter.py --source rthk
-
-# 8. G2P romanisation (Jyutping)
-python scripts/07_g2p.py --source rthk
-
-# 9. Speaker clustering
-python scripts/08_speaker_id.py --source rthk
-
-# 10. Build manifest
-python scripts/09_manifest.py
-
-# 11. Quality report
-python scripts/10_report.py
+# 4. Human calibration — review low-agreement segments (browser UI)
+python -m pipeline.cli calibrate serve
 ```
 
-All scripts support `--dry-run` (log actions without writing files) and `--limit N` (process only N files for testing).
+Run `python -m pipeline.cli run --help` for the full node list. Most nodes support
+`--limit N` (process only N rows for testing) and `--dry-run` where applicable. GPU-heavy
+nodes can be run concurrently against a shared DuckDB connection with
+`python -m pipeline.cli run-many <node> -- <node> ...`.
 
 ---
 
@@ -172,29 +162,26 @@ If you build a dataset and want to publish it (e.g. on Hugging Face):
 
 ```
 canto-hk-speech-pipeline/
-├── scripts/                    # Pipeline stages 00–10
-│   ├── 01_discover.py
-│   ├── 02_download.py
-│   ├── 03_segment.py
-│   ├── 03b_acoustic_pregate.py
-│   ├── 04_transcribe.py
-│   ├── 05_calibrate.py
-│   ├── 06_filter.py
-│   ├── 07_g2p.py
-│   ├── 08_speaker_id.py
-│   ├── 09_manifest.py
-│   └── 10_report.py
+├── pipeline/                   # THE current system — catalog-driven DAG
+│   ├── cli.py                  # `python -m pipeline.cli {catalog|golden|run|run-many}`
+│   ├── catalog/                 # DuckDB connect/upsert/verify
+│   ├── audio/                   # decode-once bus + resampled-variant cache
+│   ├── orchestrator/            # resource pools, run journal
+│   ├── workers/                 # GPU worker-subprocess base class
+│   └── nodes/                   # one file per DAG stage
+├── scripts/
+│   └── 10_report.py            # legacy reference only — report.build not yet ported
 ├── sources/                    # Source configuration (YAML)
 │   ├── rthk_sources.yaml
 │   ├── youtube_channels.yaml
 │   └── podcast_sources.yaml
 ├── docs/                       # Design documents
-│   ├── PIPELINE_SPEC.md        # Stage-by-stage implementation details
+│   ├── PIPELINE_SPEC.md        # Legacy stage-by-stage implementation details
 │   ├── QUALITY_SPEC.md         # Filter thresholds and rationale
 │   ├── MANIFEST_SCHEMA.md      # Output field definitions
 │   ├── KNOWN_ISSUES.md         # Failure modes and workarounds
 │   └── SOURCE_GUIDE.md         # How to add new audio sources
-├── requirements.txt
+├── pyproject.toml / uv.lock    # dependency declaration — install with `uv pip install`
 ├── LICENSE                     # Apache 2.0 (pipeline code only)
 └── README.md
 ```

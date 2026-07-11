@@ -84,12 +84,15 @@ canto-hk-speech-pipeline/
 │                                    segment, asr, filter, g2p, speaker, tier, label_*, manifest,
 │                                    recover_orphans, rebalance, raw_flac (see table below)
 │
-├── scripts/                      ← LEGACY, being retired — do not extend; port to pipeline/nodes/ instead
+├── scripts/                      ← LEGACY, retired 2026-07-11 — only 10_report.py remains
+│                                    (kept as report.build port reference; 19 ported/one-off
+│                                    scripts removed via `git rm`, recoverable from git history)
 │
-├── data/                         ← legacy per-source symlink tree; real SSOT is config/storage_layout.yaml
-│   ├── raw/       → /mnt/Drive2/canto-corpus/data/raw/{rthk,youtube,podcast}/  (native container, transient)
-│   ├── segments/  → per-source symlinks (pre-P5-C; segments are now 3-way sharded, see below)
-│   └── filtered/  → /mnt/Drive4/canto/filtered/  (physicalization retired per §7.3, catalog `filters.pass` is authoritative)
+├── data/                         ← cleaned up 2026-07-11 (Phase A); real SSOT is config/storage_layout.yaml
+│   ├── raw/       → /mnt/Drive2/canto-corpus/data/raw/{rthk,youtube,podcast}/  (native container, transient, still active)
+│   └── ct2_models/                (2.9GB, canto_ft ctranslate2 model — active, asr.transcribe uses it)
+│   (the misleading `data/segments/*`-→-Drive4-only symlinks and dead `data/filtered`/`data/final`
+│   have been removed — segments are 3-way sharded across Drive2/3/4, never read via a symlink)
 │
 └── metadata/
     ├── corpus.duckdb            ← THE catalog — single source of truth for every pipeline stage's state
@@ -199,7 +202,7 @@ See `sources/rthk_sources.yaml` for target programs. RTHK publishes content on Y
 | RTHK (expansion) | `sources/rthk_sources.yaml` | High | 200–500h |
 | YouTube HK Cantonese | `sources/youtube_channels.yaml` | High | varies |
 | HK Cantonese Podcasts | `sources/podcast_sources.yaml` | Medium | 50–200h |
-| Other HK TV | `sources/hktv_sources.yaml` | Low | TBD |
+| Other HK TV | `sources/hktv_sources.yaml` (not yet created) | Low | TBD |
 
 Source research guide: `docs/SOURCE_GUIDE.md`
 
