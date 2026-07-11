@@ -76,8 +76,9 @@ CREATE TABLE IF NOT EXISTS asr_agreement (
 ALTER TABLE asr_agreement ADD COLUMN IF NOT EXISTS model_count INTEGER;
 -- canto_ft's own (real, logprob-derived) confidence for this id -- NULL if canto_ft has no
 -- active row (see pipeline/nodes/asr.py's compute_agreement_row()). Added 2026-07-10 to gate
--- tier.assign's auto_gold tier (agreement >= 0.90 AND canto_ft_confidence > 0.8); populated
--- going forward by asr.agreement, backfilled for existing rows -- see DECISIONS.md 2026-07-10.
+-- tier.assign's auto_gold tier (agreement >= 0.95 AND canto_ft_confidence > 0.8, threshold
+-- raised 2026-07-11); populated going forward by asr.agreement, backfilled for existing rows --
+-- see DECISIONS.md 2026-07-10 / 2026-07-11.
 ALTER TABLE asr_agreement ADD COLUMN IF NOT EXISTS canto_ft_confidence DOUBLE;
 
 -- From manifest.jsonl quality fields; one row per segment with acoustic quality filter scores.
@@ -164,11 +165,15 @@ ALTER TABLE g2p ADD COLUMN IF NOT EXISTS provenance TEXT;
 -- LABEL_FRAMEWORK_SPEC.md §10's proposed 'A'/'B' (pretrain/clean) TTS-quality tier — that is a
 -- separate, not-yet-built consumer of the full label store (needs calibrate+build finished first,
 -- plus emotion which is gated on an owner spot-check). Do not conflate the two when extending this.
--- Four values as of 2026-07-10 (DECISIONS.md): 'gold' (text_verified=True, human-reviewed via
--- calibrate_server), 'auto_gold' (agreement>=0.90 AND canto_ft_confidence>0.8, NOT human-reviewed
+-- Five values as of 2026-07-11 (DECISIONS.md): 'gold' (text_verified=True, human-reviewed via
+-- calibrate_server), 'auto_gold' (agreement>=0.95 AND canto_ft_confidence>0.8, NOT human-reviewed
 -- -- a statistical-confidence tier, sample-QA'd via calibrate.sample(tier='auto_gold'), never
--- claims to BE human-verified), 'silver' (agreement>=0.65), 'excluded'. Precedence gold > auto_gold
--- > silver > excluded -- see pipeline/nodes/tier.py's assign_tier().
+-- claims to BE human-verified), 'silver' (agreement>=0.85), 'bronze' (agreement>=0.70, the
+-- noisiest manifest-eligible tier -- QA'd at a higher sample rate, see calibrate.py's
+-- QA_SAMPLE_RATE_BY_TIER), 'excluded' (agreement<0.70). Precedence gold > auto_gold > silver >
+-- bronze > excluded -- see pipeline/nodes/tier.py's assign_tier(). Thresholds raised + bronze
+-- added 2026-07-11 (was auto_gold>=0.90 / silver>=0.65 / no bronze, 2026-07-10) -- a stricter,
+-- more conservative re-cut of the same corpus, not additive; see DECISIONS.md 2026-07-11.
 CREATE TABLE IF NOT EXISTS tiers (
     id   TEXT PRIMARY KEY,
     tier TEXT

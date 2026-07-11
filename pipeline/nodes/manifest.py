@@ -76,12 +76,27 @@ from datetime import date
 
 log = logging.getLogger(__name__)
 
-# Matches scripts/09_manifest.py's SILVER_AGREE_MIN-derived tier gate: gold/auto_gold/silver
-# segments enter the manifest. tier.assign's "excluded" sentinel (agreement < 0.65 and not
-# human-verified) is deliberately not in this tuple. auto_gold added 2026-07-10 (DECISIONS.md,
-# docs/FINDINGS_ASR_AGREEMENT_THRESHOLDS.md) -- a statistical-confidence tier, see
-# pipeline/nodes/tier.py's module docstring; NOT equivalent to text_verified.
-INCLUDED_TIERS = ("gold", "auto_gold", "silver")
+# Matches scripts/09_manifest.py's SILVER_AGREE_MIN-derived tier gate: gold/auto_gold/silver/
+# bronze segments enter the manifest. tier.assign's "excluded" sentinel (agreement < 0.70 and
+# not human-verified) is deliberately not in this tuple. auto_gold added 2026-07-10, bronze
+# added + thresholds raised 2026-07-11 (DECISIONS.md, docs/FINDINGS_ASR_AGREEMENT_THRESHOLDS.md)
+# -- auto_gold/bronze are statistical-confidence tiers, see pipeline/nodes/tier.py's module
+# docstring; NOT equivalent to text_verified.
+INCLUDED_TIERS = ("gold", "auto_gold", "silver", "bronze")
+
+# Best-to-worst precedence, matching pipeline/nodes/tier.py's assign_tier() cascade. Used by
+# min_tier (added 2026-07-11) to compute an "at-or-above" tier cut -- e.g. min_tier='auto_gold'
+# includes {'gold', 'auto_gold'} (gold is strictly better, so it's always included alongside
+# whatever floor tier is requested), matching min_agreement's >= semantics.
+TIER_PRECEDENCE = ("gold", "auto_gold", "silver", "bronze")
+
+
+def _tiers_at_or_above(min_tier: str) -> tuple[str, ...]:
+    if min_tier not in TIER_PRECEDENCE:
+        raise ValueError(f"min_tier must be one of {TIER_PRECEDENCE}, got {min_tier!r}")
+    idx = TIER_PRECEDENCE.index(min_tier)
+    return TIER_PRECEDENCE[: idx + 1]
+
 
 # min_agreement (added 2026-07-10) lets a caller cut a smaller, higher-confidence subset of
 # the manifest by asr_agreement.agreement -- e.g. --min-agreement 0.95 for a ~100h "cleanest"
@@ -89,6 +104,15 @@ INCLUDED_TIERS = ("gold", "auto_gold", "silver")
 # existing silver bar. See docs/FINDINGS_ASR_AGREEMENT_THRESHOLDS.md for the hours-per-threshold
 # data behind these numbers. Implemented as `(? IS NULL OR a.agreement >= ?)` so the same query
 # serves both the default (unfiltered) and cut exports -- no separate SQL string needed.
+#
+# min_tier (added 2026-07-11) lets a caller cut by the tier column directly instead of/as well
+# as raw agreement -- e.g. min_tier='auto_gold' for exactly the segments tier.assign already
+# classified gold-equivalent-or-better (agreement>=0.95 AND canto_ft_confidence>0.8, OR
+# human-verified). This is NOT the same as min_agreement=0.95: a segment can have agreement>=0.95
+# but fail the canto_ft_confidence gate and land in 'silver' instead of 'auto_gold' -- min_tier
+# reads the tier tier.assign already computed rather than re-deriving a agreement-only cut.
+# The `{tier_list}` placeholder is filled via .format() with a validated (against
+# TIER_PRECEDENCE) `?`-placeholder list, never raw user SQL -- see discover().
 MANIFEST_DISCOVER_SQL = """
     SELECT
         s.id, s.audio_path, s.source, s.source_url, s.program, s.domain,
@@ -105,7 +129,7 @@ MANIFEST_DISCOVER_SQL = """
     WHERE
         (f.pass = TRUE OR (f.pass IS NULL AND f.provenance IS NULL))
         AND (g.valid_fraction >= 0.80 OR (g.valid_fraction IS NULL AND g.provenance IS NULL))
-        AND t.tier IN ('gold', 'auto_gold', 'silver')
+        AND t.tier IN ({tier_list})
         AND g.jyutping IS NOT NULL AND g.jyutping != ''
         AND (? IS NULL OR a.agreement >= ?)
     ORDER BY s.id
@@ -170,30 +194,43 @@ def build_entry(row: tuple, asr_candidates: list[dict]) -> dict:
     }
 
 
-def discover(conn, min_agreement: float | None = None) -> list[tuple]:
-    return conn.execute(MANIFEST_DISCOVER_SQL, [min_agreement, min_agreement]).fetchall()
+def discover(conn, min_agreement: float | None = None, min_tier: str | None = None) -> list[tuple]:
+    tiers = _tiers_at_or_above(min_tier) if min_tier is not None else INCLUDED_TIERS
+    tier_list = ", ".join("?" for _ in tiers)
+    sql = MANIFEST_DISCOVER_SQL.format(tier_list=tier_list)
+    return conn.execute(sql, [*tiers, min_agreement, min_agreement]).fetchall()
 
 
-def build_manifest(conn, min_agreement: float | None = None) -> list[dict]:
+def build_manifest(
+    conn, min_agreement: float | None = None, min_tier: str | None = None
+) -> list[dict]:
     """Runs the full catalog join and returns every eligible manifest entry, sorted by id."""
-    rows = discover(conn, min_agreement)
+    rows = discover(conn, min_agreement, min_tier)
     candidates_by_id = _fetch_asr_candidates_by_id(conn)
     return [build_entry(row, candidates_by_id.get(row[0], [])) for row in rows]
 
 
-def run_manifest_build(*, limit: int | None = None, min_agreement: float | None = None) -> dict:
+def run_manifest_build(
+    *,
+    limit: int | None = None,
+    min_agreement: float | None = None,
+    min_tier: str | None = None,
+) -> dict:
     """Synchronous, CLI-style -- builds the manifest in-memory and returns it plus a
     summary; does not write files (see run_manifest_export for that). Kept separate from
     export so a caller can inspect/validate the built list before committing it to disk.
 
     min_agreement: optional asr_agreement.agreement cutoff for a smaller, higher-confidence
     subset (see MANIFEST_DISCOVER_SQL's comment / docs/FINDINGS_ASR_AGREEMENT_THRESHOLDS.md).
-    None (default) = full pool, unchanged behaviour."""
+    min_tier: optional tier-column cutoff, e.g. 'auto_gold' for {'gold','auto_gold'} only --
+    see TIER_PRECEDENCE / _tiers_at_or_above(). Both default to None = full pool, unchanged
+    behaviour; the two can be combined (e.g. min_tier='silver' AND min_agreement=0.90 for an
+    extra-strict cut within the silver-or-better tiers)."""
     from pipeline.catalog.catalog import connect_ro
 
     t0 = time.time()
     conn = connect_ro()
-    entries = build_manifest(conn, min_agreement)
+    entries = build_manifest(conn, min_agreement, min_tier)
     conn.close()
     if limit:
         entries = entries[:limit]
@@ -208,8 +245,9 @@ def run_manifest_build(*, limit: int | None = None, min_agreement: float | None 
     log.info(
         f"manifest.build: {len(entries)} entries ({total_hours:.1f}h, {n_speakers} speakers) "
         f"in {elapsed:.1f}s -- gold={tier_counts.get('gold', 0)} auto_gold={tier_counts.get('auto_gold', 0)} "
-        f"silver={tier_counts.get('silver', 0)}"
+        f"silver={tier_counts.get('silver', 0)} bronze={tier_counts.get('bronze', 0)}"
         + (f" [min_agreement={min_agreement}]" if min_agreement is not None else "")
+        + (f" [min_tier={min_tier}]" if min_tier is not None else "")
     )
     return {
         "entries": entries,
@@ -296,8 +334,24 @@ def _agreement_tag(min_agreement: float) -> str:
     return f"agree{round(min_agreement * 100):03d}"
 
 
+def _export_tag(min_agreement: float | None, min_tier: str | None) -> str | None:
+    """Combines min_agreement/min_tier into one filename tag, e.g. min_tier='auto_gold' ->
+    'tier_auto_gold'; both set -> 'tier_auto_gold_agree090'. None if neither is set (the
+    default, unfiltered export keeps the original filenames -- see run_manifest_export)."""
+    parts = []
+    if min_tier is not None:
+        parts.append(f"tier_{min_tier}")
+    if min_agreement is not None:
+        parts.append(_agreement_tag(min_agreement))
+    return "_".join(parts) if parts else None
+
+
 def run_manifest_export(
-    *, limit: int | None = None, dry_run: bool = False, min_agreement: float | None = None
+    *,
+    limit: int | None = None,
+    dry_run: bool = False,
+    min_agreement: float | None = None,
+    min_tier: str | None = None,
 ) -> dict:
     """Builds the manifest then writes metadata/manifest.jsonl + train.jsonl + val.jsonl.
     manifest.jsonl is sorted by id; train/val preserve existing split membership (see
@@ -305,22 +359,22 @@ def run_manifest_export(
     "Output ordering" section for why this is not a byte-identical reorder of the legacy
     files, only a membership-preserving one).
 
-    min_agreement (added 2026-07-10): when None (default), writes the exact same three
-    filenames as always -- CLAUDE.md hard constraint #9 (zero-risk / external interface
-    unchanged) requires this default call to stay byte-compatible with what canto-tts
-    already reads. When set, writes to SEPARATE files (manifest_agreeNNN.jsonl /
-    train_agreeNNN.jsonl / val_agreeNNN.jsonl in the same directory) instead, so a cut
-    export (e.g. --min-agreement 0.95 for a ~100h subset) never overwrites the full-pool
-    manifest. Each cut's train/val split membership is tracked independently against its
-    own prior train_agreeNNN.jsonl/val_agreeNNN.jsonl (same preserve-then-extend logic as
-    the default export, just scoped to that cut's own files)."""
+    min_agreement (added 2026-07-10) / min_tier (added 2026-07-11): when both are None
+    (default), writes the exact same three filenames as always -- CLAUDE.md hard constraint
+    #9 (zero-risk / external interface unchanged) requires this default call to stay
+    byte-compatible with what canto-tts already reads. When either is set, writes to
+    SEPARATE files instead (e.g. manifest_tier_auto_gold.jsonl / train_tier_auto_gold.jsonl /
+    val_tier_auto_gold.jsonl for min_tier='auto_gold'; see _export_tag()), so a cut export
+    never overwrites the full-pool manifest. Each cut's train/val split membership is
+    tracked independently against its own prior train_<tag>.jsonl/val_<tag>.jsonl (same
+    preserve-then-extend logic as the default export, just scoped to that cut's own files)."""
     from pipeline.config import MANIFEST_PATH, TRAIN_PATH, VAL_PATH, VAL_FRAC
 
-    result = run_manifest_build(limit=limit, min_agreement=min_agreement)
+    result = run_manifest_build(limit=limit, min_agreement=min_agreement, min_tier=min_tier)
     entries = result["entries"]
 
-    if min_agreement is not None:
-        tag = _agreement_tag(min_agreement)
+    tag = _export_tag(min_agreement, min_tier)
+    if tag is not None:
         manifest_path = MANIFEST_PATH.with_name(f"manifest_{tag}.jsonl")
         train_path = TRAIN_PATH.with_name(f"train_{tag}.jsonl")
         val_path = VAL_PATH.with_name(f"val_{tag}.jsonl")

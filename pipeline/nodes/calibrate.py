@@ -28,13 +28,21 @@ DECISIONS.md). Re-measured with whisper_v3 excluded (3-way: canto_ft/qwen3_asr/
 sense_voice), agreement >= 0.90 clears **41.1%** of the corpus (~446h), not
 ~0% -- the earlier "not viable" conclusion was an artifact of whisper_v3
 dragging down the whole distribution, not a property of the corpus. Full
-numbers: docs/FINDINGS_ASR_AGREEMENT_THRESHOLDS.md. This is why tiers.tier now
-has a 4th value, 'auto_gold' (pipeline/nodes/tier.py), for segments clearing
+numbers: docs/FINDINGS_ASR_AGREEMENT_THRESHOLDS.md. This is why tiers.tier
+gained a 4th value, 'auto_gold' (pipeline/nodes/tier.py), for segments clearing
 that bar WITHOUT human review -- a statistical-confidence tier, sample-QA'd via
 this node's tier/min_agreement-scoped sampling below, not exhaustively
 reviewed. Random sampling (this node's original purpose) remains how auto_gold
 itself gets spot-checked, and remains the only path for segments below the
 auto_gold bar to reach true human-verified 'gold'.
+
+REVISION (2026-07-11, owner decision): thresholds tightened and a 5th tier,
+'bronze', added -- auto_gold raised 0.90->0.95, silver raised 0.65->0.85, and
+the manifest-eligibility floor raised 0.65->0.70 (bronze = agreement>=0.70,
+below that is 'excluded'). See DECISIONS.md 2026-07-11. QA sample rate is now
+risk-scaled per tier (QA_SAMPLE_RATE_BY_TIER below) rather than a flat 2-5%:
+bronze is the noisiest manifest-eligible tier and gets the highest sample rate,
+auto_gold the lowest (highest a-priori confidence).
 
 This node only SELECTS the sample and reserves it (writes 'pending' rows) --
 it never touches audio or text itself. The actual review happens
@@ -48,6 +56,32 @@ import logging
 import time
 
 log = logging.getLogger(__name__)
+
+# Risk-scaled QA sample rate per tier (owner decision, 2026-07-11): the noisier the tier's
+# a-priori confidence, the higher the fraction of it that gets human review. auto_gold clears
+# the strictest statistical bar (agreement>=0.95 AND canto_ft_confidence>0.8) so it needs the
+# least checking; bronze is the lowest manifest-eligible bar (agreement>=0.70) so it needs the
+# most. 'gold' (already human-verified) and 'excluded' (never enters the manifest) are not QA'd.
+QA_SAMPLE_RATE_BY_TIER = {
+    "auto_gold": 0.015,  # ~1-2%
+    "silver": 0.04,      # ~3-5%
+    "bronze": 0.10,      # ~8-12%
+}
+
+
+def recommended_sample_n(conn, tier: str, min_n: int = 50) -> int:
+    """Population-scaled QA sample size for `tier`, per QA_SAMPLE_RATE_BY_TIER --
+    population is filter-passing segments currently carrying that tier. Floors at
+    `min_n` so a small/newly-introduced tier still gets a meaningful spot-check."""
+    if tier not in QA_SAMPLE_RATE_BY_TIER:
+        raise ValueError(f"no QA sample rate defined for tier {tier!r}")
+    population = conn.execute(
+        "SELECT count(*) FROM tiers t JOIN filters f ON f.id = t.id "
+        "WHERE t.tier = ? AND f.pass = TRUE",
+        [tier],
+    ).fetchone()[0]
+    return max(min_n, round(population * QA_SAMPLE_RATE_BY_TIER[tier]))
+
 
 SAMPLE_DISCOVER_SQL = """
     SELECT a.id, a.best_text
@@ -67,7 +101,8 @@ def discover(
 ) -> list[tuple[str, str]]:
     """tier/min_agreement (added 2026-07-10) narrow the sample population for scoped QA:
       - tier='auto_gold' -- QA the statistical-confidence tier specifically
-        (pipeline/nodes/tier.py's auto_gold, agreement>=0.90 AND canto_ft_confidence>0.8).
+        (pipeline/nodes/tier.py's auto_gold, agreement>=0.95 AND canto_ft_confidence>0.8).
+        Also valid: tier='silver' / tier='bronze' for those tiers' own QA pools.
       - min_agreement=0.95/0.85/etc -- QA a specific --min-agreement export cut
         (pipeline/nodes/manifest.py), independent of tier labels.
     Both default to None, reproducing the original unscoped behaviour exactly (random

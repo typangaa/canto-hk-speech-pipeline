@@ -1,7 +1,15 @@
+import duckdb
+import pytest
+
+from pipeline.catalog.catalog import init_schema
 from pipeline.nodes.manifest import (
     INCLUDED_TIERS,
+    TIER_PRECEDENCE,
+    _export_tag,
     _stratified_split_new_entries,
+    _tiers_at_or_above,
     build_entry,
+    discover,
     train_val_split,
 )
 
@@ -66,7 +74,97 @@ def test_build_entry_missing_created_at_falls_back_to_today():
 
 def test_included_tiers_excludes_the_excluded_sentinel():
     assert "excluded" not in INCLUDED_TIERS
-    assert set(INCLUDED_TIERS) == {"gold", "auto_gold", "silver"}
+    assert set(INCLUDED_TIERS) == {"gold", "auto_gold", "silver", "bronze"}
+
+
+# ---------------------------------------------------------------------------
+# min_tier cut -- _tiers_at_or_above() / _export_tag() / discover()
+# ---------------------------------------------------------------------------
+
+def test_tiers_at_or_above_auto_gold_includes_gold():
+    assert _tiers_at_or_above("auto_gold") == ("gold", "auto_gold")
+
+
+def test_tiers_at_or_above_bronze_includes_everything():
+    assert _tiers_at_or_above("bronze") == TIER_PRECEDENCE
+
+
+def test_tiers_at_or_above_gold_is_gold_only():
+    assert _tiers_at_or_above("gold") == ("gold",)
+
+
+def test_tiers_at_or_above_rejects_excluded():
+    with pytest.raises(ValueError):
+        _tiers_at_or_above("excluded")
+
+
+def test_export_tag_none_when_unfiltered():
+    assert _export_tag(None, None) is None
+
+
+def test_export_tag_min_tier_only():
+    assert _export_tag(None, "auto_gold") == "tier_auto_gold"
+
+
+def test_export_tag_min_agreement_only():
+    assert _export_tag(0.95, None) == "agree095"
+
+
+def test_export_tag_combines_both():
+    assert _export_tag(0.90, "silver") == "tier_silver_agree090"
+
+
+@pytest.fixture
+def scratch_conn(tmp_path):
+    conn = duckdb.connect(str(tmp_path / "scratch.duckdb"))
+    init_schema(conn)
+    yield conn
+    conn.close()
+
+
+def _seed_manifest_row(conn, seg_id, *, tier, agreement=0.9):
+    conn.execute(
+        "INSERT INTO segments (id, audio_path, source, duration_sec, sample_rate) "
+        "VALUES (?, '/tmp/x.flac', 'podcast', 6.0, 48000)",
+        [seg_id],
+    )
+    conn.execute(
+        "INSERT INTO asr_agreement (id, agreement, best_text, text_verified) VALUES (?, ?, 'hello', FALSE)",
+        [seg_id, agreement],
+    )
+    conn.execute("INSERT INTO g2p (id, jyutping, valid_fraction, provenance) VALUES (?, 'hello', 1.0, 'g2p_node')", [seg_id])
+    conn.execute("INSERT INTO filters (id, pass, provenance) VALUES (?, TRUE, 'filter_decide')", [seg_id])
+    conn.execute("INSERT INTO tiers (id, tier, provenance) VALUES (?, ?, 'tier_assign')", [seg_id, tier])
+
+
+def test_discover_min_tier_auto_gold_includes_gold_excludes_silver(scratch_conn):
+    conn = scratch_conn
+    _seed_manifest_row(conn, "g1", tier="gold")
+    _seed_manifest_row(conn, "ag1", tier="auto_gold")
+    _seed_manifest_row(conn, "sv1", tier="silver")
+    _seed_manifest_row(conn, "br1", tier="bronze")
+
+    picked_ids = {row[0] for row in discover(conn, min_tier="auto_gold")}
+    assert picked_ids == {"g1", "ag1"}
+
+
+def test_discover_min_tier_none_returns_all_included_tiers(scratch_conn):
+    conn = scratch_conn
+    _seed_manifest_row(conn, "g1", tier="gold")
+    _seed_manifest_row(conn, "br1", tier="bronze")
+    _seed_manifest_row(conn, "ex1", tier="excluded")
+
+    picked_ids = {row[0] for row in discover(conn)}
+    assert picked_ids == {"g1", "br1"}
+
+
+def test_discover_min_tier_and_min_agreement_combine(scratch_conn):
+    conn = scratch_conn
+    _seed_manifest_row(conn, "sv_low", tier="silver", agreement=0.86)
+    _seed_manifest_row(conn, "sv_high", tier="silver", agreement=0.97)
+
+    picked_ids = {row[0] for row in discover(conn, min_agreement=0.95, min_tier="silver")}
+    assert picked_ids == {"sv_high"}
 
 
 # ---------------------------------------------------------------------------

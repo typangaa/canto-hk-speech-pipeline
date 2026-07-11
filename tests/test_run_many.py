@@ -169,7 +169,7 @@ def test_run_tier_assign_uses_injected_conn(scratch_conn, monkeypatch):
 
     result = asyncio.run(run_tier_assign(conn=scratch_conn))
 
-    assert result == {"processed": 0, "gold": 0, "auto_gold": 0, "silver": 0, "excluded": 0, "errors": 0}
+    assert result == {"processed": 0, "gold": 0, "auto_gold": 0, "silver": 0, "bronze": 0, "excluded": 0, "errors": 0}
 
 
 def test_run_calibrate_sample_uses_injected_conn(scratch_conn, monkeypatch):

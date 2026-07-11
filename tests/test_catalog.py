@@ -260,15 +260,17 @@ def test_tiers_valid_values(catalog_conn):
     above (it grows with the corpus, no longer a fixed count as of the
     2026-07-09 tier.assign resume that took it from 245,500 to all 618,695
     segments) -- this test just checks every row's tier value is one of the
-    four valid verification-confidence tiers (gold/auto_gold/silver/excluded;
-    'gold' now has a small and growing row count since pipeline/nodes/calibrate.py +
-    calibrate_server.py went live 2026-07-10 -- see
+    five valid verification-confidence tiers (gold/auto_gold/silver/bronze/
+    excluded; 'gold' now has a small and growing row count since
+    pipeline/nodes/calibrate.py + calibrate_server.py went live 2026-07-10 -- see
     test_manifest_build_matches_expected_corpus_totals below for the current
     count and why it drifts). 'auto_gold' added 2026-07-10 (DECISIONS.md) --
     a statistical-confidence tier, populated by the whisper_v3-retirement
-    backfill, not tier.assign's live discovery alone (see pipeline/nodes/tier.py)."""
+    backfill. 'bronze' added + thresholds raised 2026-07-11 (DECISIONS.md) --
+    a lower-confidence statistical tier below silver, populated by the
+    threshold-v3 backfill (see pipeline/nodes/tier.py)."""
     bad_tiers = catalog_conn.execute(
-        "SELECT DISTINCT tier FROM tiers WHERE tier NOT IN ('gold', 'auto_gold', 'silver', 'excluded')"
+        "SELECT DISTINCT tier FROM tiers WHERE tier NOT IN ('gold', 'auto_gold', 'silver', 'bronze', 'excluded')"
     ).fetchall()
     assert not bad_tiers, f"unexpected tier value(s): {bad_tiers}"
 
@@ -276,24 +278,24 @@ def test_tiers_valid_values(catalog_conn):
 def test_manifest_build_matches_expected_corpus_totals(catalog_conn):
     """P4 gate: manifest.build()'s catalog join must reproduce the exact totals the
     current on-disk metadata/manifest.jsonl was built with. Baseline updated
-    2026-07-11 after the whisper_v3-retirement / auto_gold backfill (DECISIONS.md
-    2026-07-10 entry): 471,299 entries / 8,981 speakers / gold=43 / auto_gold=198,877 /
-    silver=272,379. The jump from the pre-backfill 369,708 is REAL and expected, not a
-    regression: excluding whisper_v3 raises 3-way agreement broadly across the corpus
-    (docs/FINDINGS_ASR_AGREEMENT_THRESHOLDS.md -- 3-way agreement>=0.65 covers 97.6% of
-    the filter-passing pool vs the old 4-way's 94.9%), so segments that previously fell
-    below the 0.65 silver bar (whisper_v3 disagreement dragging their 4-way score down)
-    now clear it. gold continues to drift forward by a few rows per live calibrate_server
-    review session (see record_decision()'s docstring) -- a small +N drift on gold/total
-    is expected; a large or unexplained jump elsewhere is not. A mismatch here means the
-    eligibility join (filters.pass, g2p.valid_fraction, tier IN (gold,auto_gold,silver))
-    or the agreement/tier backfill regressed -- update this baseline only after an
-    intentional, verified manifest.export re-run."""
+    2026-07-11 after the tier-threshold-v3 backfill (DECISIONS.md 2026-07-11 entry:
+    auto_gold 0.90->0.95, silver 0.65->0.85, new bronze tier at 0.70, manifest floor
+    raised 0.65->0.70): 458,843 entries / 8,817 speakers / gold=43 / auto_gold=72,014 /
+    silver=235,646 / bronze=151,140. This is a SMALLER, more conservative pool than the
+    prior 471,299-entry baseline (raising the floor from 0.65 to 0.70 drops ~12,456
+    segments to 'excluded' outright) -- a real, intentional tightening, not a regression.
+    gold continues to drift forward by a few rows per live calibrate_server review
+    session (see record_decision()'s docstring) -- a small +N drift on gold/total is
+    expected; a large or unexplained jump elsewhere is not. A mismatch here means the
+    eligibility join (filters.pass, g2p.valid_fraction, tier IN
+    (gold,auto_gold,silver,bronze)) or the tier-threshold backfill regressed -- update
+    this baseline only after an intentional, verified manifest.export re-run."""
     from pipeline.nodes.manifest import run_manifest_build
 
     result = run_manifest_build()
-    assert result["count"] == 471299
-    assert result["n_speakers"] == 8981
+    assert result["count"] == 458843
+    assert result["n_speakers"] == 8817
     assert result["tier_counts"].get("gold", 0) == 43
-    assert result["tier_counts"].get("auto_gold") == 198877
-    assert result["tier_counts"].get("silver") == 272379
+    assert result["tier_counts"].get("auto_gold") == 72014
+    assert result["tier_counts"].get("silver") == 235646
+    assert result["tier_counts"].get("bronze") == 151140

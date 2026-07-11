@@ -129,7 +129,7 @@ duplicating output.
 | `g2p` | `asr_agreement` (verified text only) | `g2p` | canto-hk-g2p → Jyutping; regex-validated `^[a-z]+[1-6]$` |
 | `speaker.embed` | `segments` | `speaker_embeddings` | ECAPA-TDNN d-vector, sidecar-`.npy`-reuse-first |
 | `speaker.cluster` | `speaker_embeddings` | `speakers` | cross-file agglomerative clustering, whole-source recompute |
-| `tier.assign` | `asr_agreement` | `tiers` | **verification-confidence** tier: gold / auto_gold / silver / excluded (see note below — different axis from the label-framework A/B quality tier) |
+| `tier.assign` | `asr_agreement` | `tiers` | **verification-confidence** tier: gold / auto_gold / silver / bronze / excluded (see note below — different axis from the label-framework A/B quality tier) |
 | `calibrate.sample` | `asr_agreement`+`filters`+`tiers` | `calibration_review` | queues a random sample (optionally scoped by `tier`/`min_agreement`) for human text-verification review via `pipe calibrate serve`'s browser UI; a `'verified'` decision flips `asr_agreement.text_verified` + `tiers.tier='gold'` |
 | `manifest.build` / `manifest.export` | `filters`+`g2p`+`speakers`+`tiers` | `metadata/manifest.jsonl`, `train.jsonl`, `val.jsonl` (or `manifest_agreeNNN.jsonl` etc. with `--min-agreement`) | final JSONL assembly, 95/5 split |
 | `label.suite` / `label.music` / `label.prosody` | `segments`/`raw_files` | `labels_lang`, `labels_overlap`, `labels_music`, `labels_prosody` | decode-once fan-out; feeds the separate TTS-quality label store |
@@ -392,17 +392,20 @@ Domain enum: `documentary | news | talk_show | podcast | drama | vlog | educatio
 Full schema with validation rules: `docs/MANIFEST_SCHEMA.md`
 
 ⚠️ **"Tier" is overloaded — two different axes share the name.** The `tiers` catalog
-table / `tier.assign` node produces a **verification-confidence** tier with 4 values
-(added `auto_gold` 2026-07-10, DECISIONS.md): `gold` (human text-verified via `pipe
-calibrate serve`), `auto_gold` (**not** human-verified — a statistical-confidence tier:
-3-way ASR agreement ≥ 0.90 AND `canto_ft`'s own confidence > 0.8, sample-QA'd rather than
-exhaustively reviewed — never treat as equivalent to `text_verified`), `silver` (ASR
-agreement ≥ 0.65), `excluded`. `docs/LABEL_FRAMEWORK_SPEC.md` §10 separately proposes an
-**A/B TTS-quality** tier (pretrain vs. clean) built from the label store — not yet built.
-Do not conflate the two when reading/writing either one. See
-`docs/FINDINGS_ASR_AGREEMENT_THRESHOLDS.md` for the agreement-threshold-vs-corpus-hours
-data behind the `auto_gold` bar and the recommended `manifest.export --min-agreement` cut
-per target dataset size (100h/500h/1000h).
+table / `tier.assign` node produces a **verification-confidence** tier with 5 values
+(added `auto_gold` 2026-07-10, thresholds raised + `bronze` added 2026-07-11, DECISIONS.md):
+`gold` (human text-verified via `pipe calibrate serve`), `auto_gold` (**not** human-verified
+— a statistical-confidence tier: 3-way ASR agreement ≥ 0.95 AND `canto_ft`'s own confidence
+> 0.8, sample-QA'd rather than exhaustively reviewed — never treat as equivalent to
+`text_verified`), `silver` (ASR agreement ≥ 0.85), `bronze` (ASR agreement ≥ 0.70 — the
+lowest manifest-eligible bar, QA'd at the highest sample rate of the three statistical
+tiers, see `pipeline/nodes/calibrate.py`'s `QA_SAMPLE_RATE_BY_TIER`), `excluded` (< 0.70).
+`docs/LABEL_FRAMEWORK_SPEC.md` §10 separately proposes an **A/B TTS-quality** tier
+(pretrain vs. clean) built from the label store — not yet built. Do not conflate the two
+when reading/writing either one. See `docs/FINDINGS_ASR_AGREEMENT_THRESHOLDS.md` for the
+original (2026-07-10, pre-tightening) agreement-threshold-vs-corpus-hours data and
+`manifest.export --min-agreement` cut per target dataset size (100h/500h/1000h) — current
+tier bars are stricter, see DECISIONS.md 2026-07-11 for the re-measured distribution.
 
 ---
 

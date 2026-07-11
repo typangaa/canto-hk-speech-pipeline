@@ -686,7 +686,7 @@ def cmd_run_manifest_build(args: argparse.Namespace) -> int:
     from pipeline.nodes.manifest import run_manifest_build
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    result = run_manifest_build(limit=args.limit, min_agreement=args.min_agreement)
+    result = run_manifest_build(limit=args.limit, min_agreement=args.min_agreement, min_tier=args.min_tier)
     summary = {k: v for k, v in result.items() if k != "entries"}
     print(f"\nDone: {summary}")
     return 0
@@ -698,7 +698,9 @@ def cmd_run_manifest_export(args: argparse.Namespace) -> int:
     from pipeline.nodes.manifest import run_manifest_export
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    result = run_manifest_export(limit=args.limit, dry_run=args.dry_run, min_agreement=args.min_agreement)
+    result = run_manifest_export(
+        limit=args.limit, dry_run=args.dry_run, min_agreement=args.min_agreement, min_tier=args.min_tier
+    )
     summary = {k: v for k, v in result.items() if k != "entries"}
     print(f"\nDone: {summary}")
     return 0
@@ -926,7 +928,7 @@ def main() -> int:
     p_run_spk_cluster.add_argument("--limit", type=int, default=None,
                                     help="cap segments loaded per source (testing)")
     p_run_spk_cluster.set_defaults(func=cmd_run_speaker_cluster)
-    p_run_tier = run_sub.add_parser("tier.assign", help="P4: verification-confidence tier (gold/auto_gold/silver/excluded), CPU in-supervisor")
+    p_run_tier = run_sub.add_parser("tier.assign", help="P4: verification-confidence tier (gold/auto_gold/silver/bronze/excluded), CPU in-supervisor")
     p_run_tier.add_argument("--batch", type=int, default=5000)
     p_run_tier.add_argument("--limit", type=int, default=None)
     p_run_tier.set_defaults(func=cmd_run_tier_assign)
@@ -944,15 +946,22 @@ def main() -> int:
     p_run_mbuild.add_argument("--min-agreement", type=float, default=None,
                                help="only include entries with asr_agreement.agreement >= this value "
                                     "(see docs/FINDINGS_ASR_AGREEMENT_THRESHOLDS.md)")
+    p_run_mbuild.add_argument("--min-tier", default=None, choices=["gold", "auto_gold", "silver", "bronze"],
+                               help="only include entries at or above this tiers.tier value "
+                                    "(e.g. 'auto_gold' includes gold+auto_gold) -- see pipeline/nodes/tier.py")
     p_run_mbuild.set_defaults(func=cmd_run_manifest_build)
     p_run_mexport = run_sub.add_parser("manifest.export", help="P4: build + write metadata/manifest.jsonl + train.jsonl + val.jsonl")
     p_run_mexport.add_argument("--limit", type=int, default=None)
     p_run_mexport.add_argument("--dry-run", action="store_true")
     p_run_mexport.add_argument("--min-agreement", type=float, default=None,
-                                help="write a smaller high-confidence cut to manifest_agreeNNN.jsonl / "
-                                     "train_agreeNNN.jsonl / val_agreeNNN.jsonl instead of the default "
+                                help="write a smaller high-confidence cut to manifest_<tag>.jsonl / "
+                                     "train_<tag>.jsonl / val_<tag>.jsonl instead of the default "
                                      "files (never overwrites them) -- see docs/FINDINGS_ASR_AGREEMENT_THRESHOLDS.md "
                                      "for suggested cuts per target dataset size")
+    p_run_mexport.add_argument("--min-tier", default=None, choices=["gold", "auto_gold", "silver", "bronze"],
+                                help="write a cut containing only entries at or above this tiers.tier value "
+                                     "(e.g. 'auto_gold' includes gold+auto_gold) to manifest_tier_<tier>.jsonl "
+                                     "etc. -- combinable with --min-agreement")
     p_run_mexport.set_defaults(func=cmd_run_manifest_export)
     p_run_lcalib = run_sub.add_parser("label.calibrate", help="P4: compute rate/pitch calibration constants -> metadata/labels/calibration.json")
     p_run_lcalib.set_defaults(func=cmd_run_label_calibrate)

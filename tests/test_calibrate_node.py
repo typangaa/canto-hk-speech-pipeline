@@ -5,6 +5,7 @@ import pytest
 
 from pipeline.catalog.catalog import init_schema
 from pipeline.nodes.calibrate import (
+    QA_SAMPLE_RATE_BY_TIER,
     _levenshtein,
     discover,
     get_item,
@@ -15,6 +16,7 @@ from pipeline.nodes.calibrate import (
     next_pending,
     queue_stats,
     record_decision,
+    recommended_sample_n,
     run_calibrate_sample,
     summary_stats,
 )
@@ -28,7 +30,7 @@ def scratch_conn(tmp_path):
     conn.close()
 
 
-def _seed_segment(conn, seg_id, *, passes_filter=True, agreement=0.7, source="podcast"):
+def _seed_segment(conn, seg_id, *, passes_filter=True, agreement=0.7, source="podcast", tier=None):
     conn.execute(
         "INSERT INTO segments (id, audio_path, source, duration_sec, program) "
         "VALUES (?, ?, ?, 6.0, 'test-program')",
@@ -46,6 +48,11 @@ def _seed_segment(conn, seg_id, *, passes_filter=True, agreement=0.7, source="po
         "INSERT INTO asr_results (id, model, text, confidence) VALUES (?, 'canto_ft', '呢個係測試文字', 0.9)",
         [seg_id],
     )
+    if tier is not None:
+        conn.execute(
+            "INSERT INTO tiers (id, tier, provenance) VALUES (?, ?, 'tier_assign')",
+            [seg_id, tier],
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -104,6 +111,58 @@ def test_run_calibrate_sample_snapshots_original_best_text(scratch_conn):
 def test_run_calibrate_sample_empty_when_nothing_eligible(scratch_conn):
     result = asyncio.run(run_calibrate_sample(conn=scratch_conn, n=10))
     assert result == {"queued": 0, "run_id": None}
+
+
+def test_discover_scoped_to_tier(scratch_conn):
+    conn = scratch_conn
+    _seed_segment(conn, "ag1", tier="auto_gold")
+    _seed_segment(conn, "sv1", tier="silver")
+    _seed_segment(conn, "br1", tier="bronze")
+
+    picked = discover(conn, 10, tier="auto_gold")
+    assert [seg_id for seg_id, _ in picked] == ["ag1"]
+
+    picked = discover(conn, 10, tier="bronze")
+    assert [seg_id for seg_id, _ in picked] == ["br1"]
+
+
+def test_discover_scoped_to_min_agreement(scratch_conn):
+    conn = scratch_conn
+    _seed_segment(conn, "low", agreement=0.72)
+    _seed_segment(conn, "high", agreement=0.97)
+
+    picked = discover(conn, 10, min_agreement=0.95)
+    assert [seg_id for seg_id, _ in picked] == ["high"]
+
+
+def test_discover_tier_and_min_agreement_combine(scratch_conn):
+    conn = scratch_conn
+    _seed_segment(conn, "br_low", agreement=0.72, tier="bronze")
+    _seed_segment(conn, "sv_high", agreement=0.90, tier="silver")
+
+    picked = discover(conn, 10, tier="silver", min_agreement=0.85)
+    assert [seg_id for seg_id, _ in picked] == ["sv_high"]
+
+
+def test_recommended_sample_n_scales_with_population_and_rate(scratch_conn):
+    conn = scratch_conn
+    for i in range(1000):
+        _seed_segment(conn, f"br{i}", tier="bronze")
+
+    n = recommended_sample_n(conn, "bronze")
+    assert n == round(1000 * QA_SAMPLE_RATE_BY_TIER["bronze"])
+
+
+def test_recommended_sample_n_floors_at_min_n_for_small_populations(scratch_conn):
+    conn = scratch_conn
+    _seed_segment(conn, "ag1", tier="auto_gold")
+
+    assert recommended_sample_n(conn, "auto_gold", min_n=50) == 50
+
+
+def test_recommended_sample_n_rejects_unknown_tier(scratch_conn):
+    with pytest.raises(ValueError):
+        recommended_sample_n(scratch_conn, "excluded")
 
 
 # ---------------------------------------------------------------------------

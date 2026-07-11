@@ -92,3 +92,19 @@ in, so there's no reason to accept lower-confidence data.
 
 See `pipeline/nodes/manifest.py`'s `--min-agreement` export flag and
 `pipeline/nodes/calibrate.py`'s `min_agreement`-scoped sampling for the implementation.
+
+## Addendum (2026-07-11) — tier bars superseded by a tighter re-cut
+
+The analysis above (agreement thresholds 0.65–0.95, computed against the corpus as it stood
+right after the 2026-07-10 whisper_v3-retirement backfill) is kept as-is for its historical
+`--min-agreement` cut vs. hours data, which is still valid for one-off `manifest.export
+--min-agreement` cuts. However, the **live `tiers.tier` assignment** (`pipeline/nodes/tier.py`)
+no longer uses the 0.90/0.65 bars this document was written around — the owner requested a
+stricter re-cut the same week: `auto_gold` raised 0.90→0.95, `silver` raised 0.65→0.85, and a
+new `bronze` tier introduced at 0.70 (manifest-eligibility floor also rises 0.65→0.70). See
+`DECISIONS.md` 2026-07-11 for the full rationale and the re-measured tier distribution under
+the new bars (458,843 manifest-eligible segments / 1,018.9h, down from 471,299 / 1,042.7h).
+
+Do not use this document's 0.90/0.65 figures as the current `tier.assign` behavior — check
+`pipeline/nodes/tier.py`'s `AUTO_GOLD_AGREE_MIN` / `SILVER_AGREE_MIN` / `BRONZE_AGREE_MIN`
+constants directly, or `DECISIONS.md`'s most recent tier-threshold entry.
