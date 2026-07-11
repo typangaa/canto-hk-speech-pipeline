@@ -112,6 +112,24 @@ def cmd_run_label_suite(args: argparse.Namespace) -> int:
     return 0
 
 
+def _check_asr_models_enabled(model_keys: list[str]) -> None:
+    """Guard rail (added 2026-07-10, DECISIONS.md): refuse to dispatch any ASR model
+    ASR_MODELS marks disabled (currently just whisper_v3, retired for measured
+    inaccuracy -- see pipeline/nodes/asr.py's module docstring). Without this, someone
+    could still pass --models with the old 4-model list from habit/an old script and
+    silently burn GPU time on a model whose output is never read by asr.agreement/
+    manifest.build anymore."""
+    from pipeline.nodes.asr import ASR_MODELS, is_model_enabled
+
+    for key in model_keys:
+        if key in ASR_MODELS and not is_model_enabled(key):
+            raise SystemExit(
+                f"--models includes {key!r}, which is retired (ASR_MODELS[{key!r}]['enabled'] "
+                f"= False) -- see pipeline/nodes/asr.py's module docstring and DECISIONS.md. "
+                f"Remove it from --models."
+            )
+
+
 def cmd_run_asr_transcribe(args: argparse.Namespace) -> int:
     import asyncio
     import logging
@@ -123,6 +141,7 @@ def cmd_run_asr_transcribe(args: argparse.Namespace) -> int:
     devices = [d.strip() for d in args.devices.split(",")]
     if len(model_keys) != len(devices):
         raise SystemExit(f"--models ({len(model_keys)}) and --devices ({len(devices)}) must have the same count")
+    _check_asr_models_enabled(model_keys)
     assignments = list(zip(model_keys, devices))
     result = asyncio.run(run_asr_transcribe(
         assignments,
@@ -320,6 +339,7 @@ async def _run_many_adapt_asr_transcribe(args: argparse.Namespace, conn) -> dict
     devices = [d.strip() for d in args.devices.split(",")]
     if len(model_keys) != len(devices):
         raise SystemExit(f"--models ({len(model_keys)}) and --devices ({len(devices)}) must have the same count")
+    _check_asr_models_enabled(model_keys)
     assignments = list(zip(model_keys, devices))
     return await run_asr_transcribe(
         assignments,
@@ -383,7 +403,9 @@ async def _run_many_adapt_tier_assign(args: argparse.Namespace, conn) -> dict:
 
 async def _run_many_adapt_calibrate_sample(args: argparse.Namespace, conn) -> dict:
     from pipeline.nodes.calibrate import run_calibrate_sample
-    return await run_calibrate_sample(conn=conn, n=args.n)
+    return await run_calibrate_sample(
+        conn=conn, n=args.n, tier=args.tier, min_agreement=args.min_agreement
+    )
 
 
 async def _run_many_adapt_filter_text(args: argparse.Namespace, conn) -> dict:
@@ -625,7 +647,7 @@ def cmd_run_calibrate_sample(args: argparse.Namespace) -> int:
     from pipeline.nodes.calibrate import run_calibrate_sample
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    result = asyncio.run(run_calibrate_sample(n=args.n))
+    result = asyncio.run(run_calibrate_sample(n=args.n, tier=args.tier, min_agreement=args.min_agreement))
     print(f"\nDone: {result}")
     return 0
 
@@ -634,14 +656,19 @@ def cmd_calibrate_serve(args: argparse.Namespace) -> int:
     import logging
     from http.server import ThreadingHTTPServer
 
-    from pipeline.catalog.catalog import connect
+    from pipeline.catalog.catalog import CATALOG_PATH, connect_ro
     from pipeline.tools.calibrate_server import _build_app
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     log = logging.getLogger("pipeline.tools.calibrate_server")
 
-    conn = connect()
-    handler = _build_app(conn, args.batch)
+    # Fail fast if the catalog doesn't exist yet -- this connection is opened
+    # and closed immediately, never held (see calibrate_server.py's module
+    # docstring: each request now opens its own short-lived connection so
+    # the write lock isn't held for the whole server session).
+    connect_ro(CATALOG_PATH).close()
+
+    handler = _build_app(args.batch)
     server = ThreadingHTTPServer(("127.0.0.1", args.port), handler)
     log.info(f"calibrate serve: listening on http://127.0.0.1:{args.port}/ (batch={args.batch or 'all'})")
     try:
@@ -650,7 +677,6 @@ def cmd_calibrate_serve(args: argparse.Namespace) -> int:
         pass
     finally:
         server.server_close()
-        conn.close()
     return 0
 
 
@@ -660,7 +686,7 @@ def cmd_run_manifest_build(args: argparse.Namespace) -> int:
     from pipeline.nodes.manifest import run_manifest_build
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    result = run_manifest_build(limit=args.limit)
+    result = run_manifest_build(limit=args.limit, min_agreement=args.min_agreement)
     summary = {k: v for k, v in result.items() if k != "entries"}
     print(f"\nDone: {summary}")
     return 0
@@ -672,7 +698,7 @@ def cmd_run_manifest_export(args: argparse.Namespace) -> int:
     from pipeline.nodes.manifest import run_manifest_export
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    result = run_manifest_export(limit=args.limit, dry_run=args.dry_run)
+    result = run_manifest_export(limit=args.limit, dry_run=args.dry_run, min_agreement=args.min_agreement)
     summary = {k: v for k, v in result.items() if k != "entries"}
     print(f"\nDone: {summary}")
     return 0
@@ -900,19 +926,33 @@ def main() -> int:
     p_run_spk_cluster.add_argument("--limit", type=int, default=None,
                                     help="cap segments loaded per source (testing)")
     p_run_spk_cluster.set_defaults(func=cmd_run_speaker_cluster)
-    p_run_tier = run_sub.add_parser("tier.assign", help="P4: verification-confidence tier (gold/silver/excluded), CPU in-supervisor")
+    p_run_tier = run_sub.add_parser("tier.assign", help="P4: verification-confidence tier (gold/auto_gold/silver/excluded), CPU in-supervisor")
     p_run_tier.add_argument("--batch", type=int, default=5000)
     p_run_tier.add_argument("--limit", type=int, default=None)
     p_run_tier.set_defaults(func=cmd_run_tier_assign)
     p_run_calib_sample = run_sub.add_parser("calibrate.sample", help="P4: queue a random sample of filter-passing segments for human text-verification review (see 'pipe calibrate serve')")
     p_run_calib_sample.add_argument("--n", type=int, default=300, help="sample size to queue")
+    p_run_calib_sample.add_argument("--tier", default=None,
+                                     help="scope the sample to one tiers.tier value, e.g. 'auto_gold' "
+                                          "(QA the statistical-confidence tier specifically)")
+    p_run_calib_sample.add_argument("--min-agreement", type=float, default=None,
+                                     help="scope the sample to asr_agreement.agreement >= this value "
+                                          "(QA a specific --min-agreement manifest.export cut)")
     p_run_calib_sample.set_defaults(func=cmd_run_calibrate_sample)
     p_run_mbuild = run_sub.add_parser("manifest.build", help="P4: build manifest entries from the catalog (in-memory, no file write)")
     p_run_mbuild.add_argument("--limit", type=int, default=None)
+    p_run_mbuild.add_argument("--min-agreement", type=float, default=None,
+                               help="only include entries with asr_agreement.agreement >= this value "
+                                    "(see docs/FINDINGS_ASR_AGREEMENT_THRESHOLDS.md)")
     p_run_mbuild.set_defaults(func=cmd_run_manifest_build)
     p_run_mexport = run_sub.add_parser("manifest.export", help="P4: build + write metadata/manifest.jsonl + train.jsonl + val.jsonl")
     p_run_mexport.add_argument("--limit", type=int, default=None)
     p_run_mexport.add_argument("--dry-run", action="store_true")
+    p_run_mexport.add_argument("--min-agreement", type=float, default=None,
+                                help="write a smaller high-confidence cut to manifest_agreeNNN.jsonl / "
+                                     "train_agreeNNN.jsonl / val_agreeNNN.jsonl instead of the default "
+                                     "files (never overwrites them) -- see docs/FINDINGS_ASR_AGREEMENT_THRESHOLDS.md "
+                                     "for suggested cuts per target dataset size")
     p_run_mexport.set_defaults(func=cmd_run_manifest_export)
     p_run_lcalib = run_sub.add_parser("label.calibrate", help="P4: compute rate/pitch calibration constants -> metadata/labels/calibration.json")
     p_run_lcalib.set_defaults(func=cmd_run_label_calibrate)

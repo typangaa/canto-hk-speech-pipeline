@@ -76,11 +76,19 @@ from datetime import date
 
 log = logging.getLogger(__name__)
 
-# Matches scripts/09_manifest.py's SILVER_AGREE_MIN-derived tier gate: only gold/silver
+# Matches scripts/09_manifest.py's SILVER_AGREE_MIN-derived tier gate: gold/auto_gold/silver
 # segments enter the manifest. tier.assign's "excluded" sentinel (agreement < 0.65 and not
-# human-verified) is deliberately not in this tuple.
-INCLUDED_TIERS = ("gold", "silver")
+# human-verified) is deliberately not in this tuple. auto_gold added 2026-07-10 (DECISIONS.md,
+# docs/FINDINGS_ASR_AGREEMENT_THRESHOLDS.md) -- a statistical-confidence tier, see
+# pipeline/nodes/tier.py's module docstring; NOT equivalent to text_verified.
+INCLUDED_TIERS = ("gold", "auto_gold", "silver")
 
+# min_agreement (added 2026-07-10) lets a caller cut a smaller, higher-confidence subset of
+# the manifest by asr_agreement.agreement -- e.g. --min-agreement 0.95 for a ~100h "cleanest"
+# export, 0.85 for a ~500h export, or omitted (None) for the full ~1000h pool at today's
+# existing silver bar. See docs/FINDINGS_ASR_AGREEMENT_THRESHOLDS.md for the hours-per-threshold
+# data behind these numbers. Implemented as `(? IS NULL OR a.agreement >= ?)` so the same query
+# serves both the default (unfiltered) and cut exports -- no separate SQL string needed.
 MANIFEST_DISCOVER_SQL = """
     SELECT
         s.id, s.audio_path, s.source, s.source_url, s.program, s.domain,
@@ -97,8 +105,9 @@ MANIFEST_DISCOVER_SQL = """
     WHERE
         (f.pass = TRUE OR (f.pass IS NULL AND f.provenance IS NULL))
         AND (g.valid_fraction >= 0.80 OR (g.valid_fraction IS NULL AND g.provenance IS NULL))
-        AND t.tier IN ('gold', 'silver')
+        AND t.tier IN ('gold', 'auto_gold', 'silver')
         AND g.jyutping IS NOT NULL AND g.jyutping != ''
+        AND (? IS NULL OR a.agreement >= ?)
     ORDER BY s.id
 """
 
@@ -161,26 +170,30 @@ def build_entry(row: tuple, asr_candidates: list[dict]) -> dict:
     }
 
 
-def discover(conn) -> list[tuple]:
-    return conn.execute(MANIFEST_DISCOVER_SQL).fetchall()
+def discover(conn, min_agreement: float | None = None) -> list[tuple]:
+    return conn.execute(MANIFEST_DISCOVER_SQL, [min_agreement, min_agreement]).fetchall()
 
 
-def build_manifest(conn) -> list[dict]:
+def build_manifest(conn, min_agreement: float | None = None) -> list[dict]:
     """Runs the full catalog join and returns every eligible manifest entry, sorted by id."""
-    rows = discover(conn)
+    rows = discover(conn, min_agreement)
     candidates_by_id = _fetch_asr_candidates_by_id(conn)
     return [build_entry(row, candidates_by_id.get(row[0], [])) for row in rows]
 
 
-def run_manifest_build(*, limit: int | None = None) -> dict:
+def run_manifest_build(*, limit: int | None = None, min_agreement: float | None = None) -> dict:
     """Synchronous, CLI-style -- builds the manifest in-memory and returns it plus a
     summary; does not write files (see run_manifest_export for that). Kept separate from
-    export so a caller can inspect/validate the built list before committing it to disk."""
+    export so a caller can inspect/validate the built list before committing it to disk.
+
+    min_agreement: optional asr_agreement.agreement cutoff for a smaller, higher-confidence
+    subset (see MANIFEST_DISCOVER_SQL's comment / docs/FINDINGS_ASR_AGREEMENT_THRESHOLDS.md).
+    None (default) = full pool, unchanged behaviour."""
     from pipeline.catalog.catalog import connect_ro
 
     t0 = time.time()
     conn = connect_ro()
-    entries = build_manifest(conn)
+    entries = build_manifest(conn, min_agreement)
     conn.close()
     if limit:
         entries = entries[:limit]
@@ -194,7 +207,9 @@ def run_manifest_build(*, limit: int | None = None) -> dict:
     elapsed = time.time() - t0
     log.info(
         f"manifest.build: {len(entries)} entries ({total_hours:.1f}h, {n_speakers} speakers) "
-        f"in {elapsed:.1f}s -- gold={tier_counts.get('gold', 0)} silver={tier_counts.get('silver', 0)}"
+        f"in {elapsed:.1f}s -- gold={tier_counts.get('gold', 0)} auto_gold={tier_counts.get('auto_gold', 0)} "
+        f"silver={tier_counts.get('silver', 0)}"
+        + (f" [min_agreement={min_agreement}]" if min_agreement is not None else "")
     )
     return {
         "entries": entries,
@@ -275,41 +290,67 @@ def train_val_split(
     return train, val
 
 
-def run_manifest_export(*, limit: int | None = None, dry_run: bool = False) -> dict:
+def _agreement_tag(min_agreement: float) -> str:
+    """0.95 -> 'agree095', 0.855 -> 'agree086' (rounded) -- used to name a cut export's
+    files distinctly from the default manifest.jsonl/train.jsonl/val.jsonl."""
+    return f"agree{round(min_agreement * 100):03d}"
+
+
+def run_manifest_export(
+    *, limit: int | None = None, dry_run: bool = False, min_agreement: float | None = None
+) -> dict:
     """Builds the manifest then writes metadata/manifest.jsonl + train.jsonl + val.jsonl.
     manifest.jsonl is sorted by id; train/val preserve existing split membership (see
     train_val_split) and are also written sorted by id (see module docstring's
     "Output ordering" section for why this is not a byte-identical reorder of the legacy
-    files, only a membership-preserving one)."""
+    files, only a membership-preserving one).
+
+    min_agreement (added 2026-07-10): when None (default), writes the exact same three
+    filenames as always -- CLAUDE.md hard constraint #9 (zero-risk / external interface
+    unchanged) requires this default call to stay byte-compatible with what canto-tts
+    already reads. When set, writes to SEPARATE files (manifest_agreeNNN.jsonl /
+    train_agreeNNN.jsonl / val_agreeNNN.jsonl in the same directory) instead, so a cut
+    export (e.g. --min-agreement 0.95 for a ~100h subset) never overwrites the full-pool
+    manifest. Each cut's train/val split membership is tracked independently against its
+    own prior train_agreeNNN.jsonl/val_agreeNNN.jsonl (same preserve-then-extend logic as
+    the default export, just scoped to that cut's own files)."""
     from pipeline.config import MANIFEST_PATH, TRAIN_PATH, VAL_PATH, VAL_FRAC
 
-    result = run_manifest_build(limit=limit)
+    result = run_manifest_build(limit=limit, min_agreement=min_agreement)
     entries = result["entries"]
 
-    train, val = train_val_split(entries, train_path=TRAIN_PATH, val_path=VAL_PATH, val_frac=VAL_FRAC)
+    if min_agreement is not None:
+        tag = _agreement_tag(min_agreement)
+        manifest_path = MANIFEST_PATH.with_name(f"manifest_{tag}.jsonl")
+        train_path = TRAIN_PATH.with_name(f"train_{tag}.jsonl")
+        val_path = VAL_PATH.with_name(f"val_{tag}.jsonl")
+    else:
+        manifest_path, train_path, val_path = MANIFEST_PATH, TRAIN_PATH, VAL_PATH
+
+    train, val = train_val_split(entries, train_path=train_path, val_path=val_path, val_frac=VAL_FRAC)
     train.sort(key=lambda e: e["id"])
     val.sort(key=lambda e: e["id"])
 
     if dry_run:
         log.info(
             f"[DRY-RUN] would write {len(entries)} entries "
-            f"({result['total_hours']}h) -- train={len(train)} val={len(val)}"
+            f"({result['total_hours']}h) to {manifest_path} -- train={len(train)} val={len(val)}"
         )
         return {**result, "train_count": len(train), "val_count": len(val), "written": False}
 
-    MANIFEST_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(MANIFEST_PATH, "w") as f:
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(manifest_path, "w") as f:
         for e in entries:  # already sorted by id via MANIFEST_DISCOVER_SQL's ORDER BY
             f.write(json.dumps(e, ensure_ascii=False) + "\n")
-    with open(TRAIN_PATH, "w") as f:
+    with open(train_path, "w") as f:
         for e in train:
             f.write(json.dumps(e, ensure_ascii=False) + "\n")
-    with open(VAL_PATH, "w") as f:
+    with open(val_path, "w") as f:
         for e in val:
             f.write(json.dumps(e, ensure_ascii=False) + "\n")
 
     log.info(
-        f"DONE: wrote {len(entries)} entries ({result['total_hours']}h) to {MANIFEST_PATH} "
+        f"DONE: wrote {len(entries)} entries ({result['total_hours']}h) to {manifest_path} "
         f"-- train={len(train)}, val={len(val)}"
     )
     return {**result, "train_count": len(train), "val_count": len(val), "written": True}

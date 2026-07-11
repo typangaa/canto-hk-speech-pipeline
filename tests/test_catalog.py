@@ -260,12 +260,15 @@ def test_tiers_valid_values(catalog_conn):
     above (it grows with the corpus, no longer a fixed count as of the
     2026-07-09 tier.assign resume that took it from 245,500 to all 618,695
     segments) -- this test just checks every row's tier value is one of the
-    three valid verification-confidence tiers (gold/silver/excluded; note
-    'gold' currently has zero rows in the live catalog since no human-
-    calibration node is wired into the DAG yet — see CLAUDE.md's ASR
-    strategy note — this is expected, not a bug)."""
+    four valid verification-confidence tiers (gold/auto_gold/silver/excluded;
+    'gold' now has a small and growing row count since pipeline/nodes/calibrate.py +
+    calibrate_server.py went live 2026-07-10 -- see
+    test_manifest_build_matches_expected_corpus_totals below for the current
+    count and why it drifts). 'auto_gold' added 2026-07-10 (DECISIONS.md) --
+    a statistical-confidence tier, populated by the whisper_v3-retirement
+    backfill, not tier.assign's live discovery alone (see pipeline/nodes/tier.py)."""
     bad_tiers = catalog_conn.execute(
-        "SELECT DISTINCT tier FROM tiers WHERE tier NOT IN ('gold', 'silver', 'excluded')"
+        "SELECT DISTINCT tier FROM tiers WHERE tier NOT IN ('gold', 'auto_gold', 'silver', 'excluded')"
     ).fetchall()
     assert not bad_tiers, f"unexpected tier value(s): {bad_tiers}"
 
@@ -273,20 +276,24 @@ def test_tiers_valid_values(catalog_conn):
 def test_manifest_build_matches_expected_corpus_totals(catalog_conn):
     """P4 gate: manifest.build()'s catalog join must reproduce the exact totals the
     current on-disk metadata/manifest.jsonl was built with. Baseline updated
-    2026-07-09 after the Phase A repair chain (speaker.embed --verify-existing
-    repair of 454,775 orphaned embeddings -> speaker.cluster full recompute ->
-    tier.assign resume -> manifest.export): 369,700 entries / 8,160 speakers /
-    gold=0 / silver=369,700 -- fewer entries than the pre-repair chain's
-    455,299 because manifest.build additionally gates on filters.pass and
-    g2p.valid_fraction (independent eligibility signals), and gold=0 because
-    no human-calibration node is wired into the DAG (see test_tiers_valid_values
-    above). A mismatch here means the eligibility join (filters.pass,
-    g2p.valid_fraction, tier IN (gold,silver)) regressed -- update this baseline
-    only after an intentional, verified manifest.export re-run."""
+    2026-07-11 after the whisper_v3-retirement / auto_gold backfill (DECISIONS.md
+    2026-07-10 entry): 471,299 entries / 8,981 speakers / gold=43 / auto_gold=198,877 /
+    silver=272,379. The jump from the pre-backfill 369,708 is REAL and expected, not a
+    regression: excluding whisper_v3 raises 3-way agreement broadly across the corpus
+    (docs/FINDINGS_ASR_AGREEMENT_THRESHOLDS.md -- 3-way agreement>=0.65 covers 97.6% of
+    the filter-passing pool vs the old 4-way's 94.9%), so segments that previously fell
+    below the 0.65 silver bar (whisper_v3 disagreement dragging their 4-way score down)
+    now clear it. gold continues to drift forward by a few rows per live calibrate_server
+    review session (see record_decision()'s docstring) -- a small +N drift on gold/total
+    is expected; a large or unexplained jump elsewhere is not. A mismatch here means the
+    eligibility join (filters.pass, g2p.valid_fraction, tier IN (gold,auto_gold,silver))
+    or the agreement/tier backfill regressed -- update this baseline only after an
+    intentional, verified manifest.export re-run."""
     from pipeline.nodes.manifest import run_manifest_build
 
     result = run_manifest_build()
-    assert result["count"] == 369700
-    assert result["n_speakers"] == 8160
-    assert result["tier_counts"].get("gold", 0) == 0
-    assert result["tier_counts"].get("silver") == 369700
+    assert result["count"] == 471299
+    assert result["n_speakers"] == 8981
+    assert result["tier_counts"].get("gold", 0) == 43
+    assert result["tier_counts"].get("auto_gold") == 198877
+    assert result["tier_counts"].get("silver") == 272379

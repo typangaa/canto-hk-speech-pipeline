@@ -9,6 +9,17 @@ an id becomes eligible the moment its second model result lands, no stage
 barrier; a third/fourth-model straggler re-triggers and improves the row, never
 blocks it).
 
+whisper_v3 RETIRED (2026-07-10, owner decision — see DECISIONS.md and
+docs/FINDINGS_ASR_AGREEMENT_THRESHOLDS.md): measurably the least accurate of the
+four backends and a disproportionate drag on cross-model agreement (excluding it
+raised the 3-way ≥0.90 agreement coverage from 15.7% to 41.1% of the corpus).
+ASR_MODELS["whisper_v3"]["enabled"] = False — asr.transcribe no longer dispatches
+it (pipeline/cli.py guard rail) and asr.agreement excludes its historical
+asr_results text from both the agreement score and best_text candidacy (see
+EXCLUDED_FROM_AGREEMENT / resolve_model_key() / compute_agreement_row() below).
+Its ~618,695 historical rows are kept for audit only — three ASR backends
+(canto_ft, qwen3_asr, sense_voice) are now the active set.
+
 Both/all models run under ONE supervisor process (run_asr_transcribe), never as
 separate `pipe run` invocations — DuckDB is single-writer (P2 backlog finding,
 2026-07-03): a second concurrent process's RW connect() would just block on the
@@ -108,12 +119,20 @@ ASR_MODELS = {
         "backend": "faster_whisper",
         "description": "Cantonese fine-tuned Whisper large-v2 (local ct2)",
     },
+    # RETIRED 2026-07-10 (owner decision, DECISIONS.md): measurably the least accurate of
+    # the four backends and a drag on cross-model agreement -- see
+    # docs/FINDINGS_ASR_AGREEMENT_THRESHOLDS.md. "enabled": False means (a) asr.transcribe
+    # refuses to dispatch it (pipeline/cli.py guard rail) and (b) asr.agreement excludes its
+    # asr_results text from both the agreement score and best_text candidacy (see
+    # EXCLUDED_FROM_AGREEMENT below). Its historical asr_results rows are NOT deleted --
+    # kept for audit/reference only, never read by any live node going forward.
     "whisper_v3": {
         "id": "Systran/faster-whisper-large-v3",
         "lang": "zh",
         "prompt": CANTO_PROMPT,
         "backend": "faster_whisper",
         "description": "Whisper large-v3 with zh + Cantonese prompt",
+        "enabled": False,
     },
     # Apache-2.0.  1.7B transformer model with native 52-language support including
     # Cantonese (yue) as a distinct dialect from Mandarin (zh), with HK/Guangdong
@@ -154,6 +173,39 @@ def model_field(model_key: str) -> str:
     returns just id (no '+' suffix)."""
     cfg = ASR_MODELS[model_key]
     return cfg["id"] + (f"+{cfg['lang']}" if cfg["lang"] else "")
+
+
+def is_model_enabled(model_key: str) -> bool:
+    return ASR_MODELS[model_key].get("enabled", True)
+
+
+# canto_ft's cfg["id"] is REPO_ROOT-derived (see _LOCAL_CANTO above), and this repo has
+# moved directories twice historically -- asr_results therefore has canto_ft rows under
+# three distinct absolute-path model strings for the same logical model (measured
+# 2026-07-10: 618,695 current-path + 29,341 + 4,730 legacy-path rows). These aliases let
+# resolve_model_key() recognise the two stale paths as "canto_ft" too, so agreement
+# computation can dedupe them instead of double-counting canto_ft's opinion.
+_LEGACY_MODEL_ALIASES = {
+    "/mnt/Drive3/Development/AI-ML/canto-corpus/data/ct2_models/whisper-large-v2-cantonese+zh": "canto_ft",
+    "/home/typangaa/Documents/canto-corpus/data/ct2_models/whisper-large-v2-cantonese+zh": "canto_ft",
+}
+
+
+def resolve_model_key(model_field_value: str) -> str | None:
+    """Map a raw asr_results.model string back to its ASR_MODELS key. Returns None for
+    unrecognised strings (fail-closed: a future 5th model is silently excluded from
+    agreement/best_text until explicitly added to ASR_MODELS, never silently included)."""
+    for key in ASR_MODELS:
+        if model_field_value == model_field(key):
+            return key
+    return _LEGACY_MODEL_ALIASES.get(model_field_value)
+
+
+# Models whose asr_results text is excluded from both the agreement score AND best_text
+# candidacy (owner decision 2026-07-10 -- see ASR_MODELS["whisper_v3"]'s comment and
+# docs/FINDINGS_ASR_AGREEMENT_THRESHOLDS.md). Historical rows are kept, just never read
+# by compute_agreement_row() below.
+EXCLUDED_FROM_AGREEMENT = {"whisper_v3"}
 
 
 # ---------------------------------------------------------------------------
@@ -222,12 +274,17 @@ def shard_rows_round_robin(rows: list[tuple], devices: list[str]) -> dict[str, l
 # them.  This preserves the ~910k existing rows untouched, as required.
 #
 # Each result row has shape:
-#   (id, list_of_texts, list_of_confidences, result_count)
-# where list_of_texts[i] and list_of_confidences[i] correspond to the same model.
+#   (id, list_of_models, list_of_texts, list_of_confidences, result_count)
+# where list_of_models[i]/list_of_texts[i]/list_of_confidences[i] all correspond to the
+# same underlying asr_results row (all three list()s share the same ORDER BY key, which
+# DuckDB guarantees keeps them aligned).  models is needed so compute_agreement_row() can
+# resolve each entry to a canonical model key -- to dedupe canto_ft's legacy-path
+# duplicates and exclude EXCLUDED_FROM_AGREEMENT models (see resolve_model_key() above).
 AGREEMENT_DISCOVER_SQL = """
     WITH ranked AS (
         SELECT
             r.id,
+            list(r.model ORDER BY r.model) AS models,
             list(r.text ORDER BY r.model) AS texts,
             list(r.confidence ORDER BY r.model) AS confidences,
             count(*) AS result_count
@@ -235,7 +292,7 @@ AGREEMENT_DISCOVER_SQL = """
         GROUP BY r.id
         HAVING count(*) >= 2
     )
-    SELECT ranked.id, ranked.texts, ranked.confidences, ranked.result_count
+    SELECT ranked.id, ranked.models, ranked.texts, ranked.confidences, ranked.result_count
     FROM ranked
     LEFT JOIN asr_agreement ag ON ranked.id = ag.id
     WHERE ag.id IS NULL
@@ -264,40 +321,72 @@ def char_agreement(texts: list[str]) -> float:
 
 def compute_agreement_row(
     seg_id: str,
+    models: list[str],
     texts: list[str],
     confidences: list[float],
     result_count: int,
 ) -> dict:
     """N-way generalisation of the 2-model write_transcripts() logic.
 
-    texts and confidences are parallel lists from asr_results, one entry per
-    model (any order).  result_count is the number of model results that exist
-    for this id, stored as model_count so future re-discover can detect when a
-    later model's result arrives.
+    models/texts/confidences are parallel lists from asr_results, one entry per
+    asr_results row (any order). result_count is the raw asr_results row count for
+    this id (INCLUDING excluded/legacy-path rows), stored as model_count so future
+    re-discover can detect when a later model's result arrives -- unrelated to how
+    many entries actually contribute to agreement below.
 
-    Agreement is 0.0 unless ≥2 non-empty candidate texts exist.
-    best_text is the non-empty candidate with the highest confidence; an empty-
-    text candidate always loses regardless of its raw confidence value (matching
-    the original 2-model behaviour).
+    Resolution + dedup (owner decision 2026-07-10, see EXCLUDED_FROM_AGREEMENT and
+    ASR_MODELS["whisper_v3"]'s comment; docs/FINDINGS_ASR_AGREEMENT_THRESHOLDS.md
+    for the evidence):
+      1. Each (model, text, confidence) is resolved to a canonical ASR_MODELS key via
+         resolve_model_key(). Unrecognised model strings are dropped.
+      2. canto_ft has legacy-path duplicate rows for ~5.5% of segments (see
+         _LEGACY_MODEL_ALIASES) -- only the row whose raw model string matches the
+         CURRENT model_field("canto_ft") is kept; stale-path rows for the same id are
+         dropped (never averaged/maxed with the current one).
+      3. Models in EXCLUDED_FROM_AGREEMENT (whisper_v3) are resolved (so their row isn't
+         silently mistaken for "unrecognised"/dropped-with-a-warning) but excluded from
+         the `active` set used for both the agreement ratio AND best_text candidacy --
+         i.e. an excluded model's transcript can never win best_text either.
 
-    This function is backward-compatible with 2-model input: passing two texts
-    and confidences produces identical results to the old positional-argument
-    version, since char_agreement() uses itertools.combinations (already N-way)
-    and the max-confidence selection is unchanged.
+    Agreement is 0.0 unless ≥2 non-empty ACTIVE candidate texts exist. best_text is the
+    non-empty active candidate with the highest confidence; an empty-text candidate
+    always loses regardless of its raw confidence value (matching the original
+    2-model behaviour). canto_ft_confidence is the active canto_ft candidate's raw
+    confidence (or None if canto_ft has no active row for this id), used by
+    tier.assign's auto_gold gate -- NOT included in the agreement/best_text logic
+    itself, just carried through as its own field.
     """
-    candidates = [
-        {"text": t or "", "confidence": c or 0.0}
-        for t, c in zip(texts, confidences)
-    ]
-    non_empty_texts = [c["text"] for c in candidates if c["text"]]
+    current_canto_ft = model_field("canto_ft")
+    by_key: dict[str, dict] = {}
+    for m, t, c in zip(models, texts, confidences):
+        key = resolve_model_key(m)
+        if key is None:
+            continue
+        if key == "canto_ft" and m != current_canto_ft:
+            continue  # stale-path duplicate (pre-move REPO_ROOT) -- never authoritative,
+                      # regardless of encounter order; only the current-path row is kept
+        by_key[key] = {"text": t or "", "confidence": c or 0.0}
+
+    canto_ft_confidence = by_key.get("canto_ft", {}).get("confidence")
+
+    active = {k: v for k, v in by_key.items() if k not in EXCLUDED_FROM_AGREEMENT}
+    non_empty_texts = [v["text"] for v in active.values() if v["text"]]
     agreement = char_agreement(non_empty_texts) if len(non_empty_texts) >= 2 else 0.0
-    best = max(candidates, key=lambda c: c["confidence"] if c["text"] else -1)
+
+    active_candidates = list(active.values())
+    if active_candidates:
+        best = max(active_candidates, key=lambda c: c["confidence"] if c["text"] else -1)
+        best_text = best["text"]
+    else:
+        best_text = ""
+
     return {
         "id": seg_id,
         "agreement": agreement,
-        "best_text": best["text"],
+        "best_text": best_text,
         "text_verified": False,
         "model_count": result_count,
+        "canto_ft_confidence": canto_ft_confidence,
     }
 
 
@@ -501,10 +590,14 @@ async def run_asr_agreement(*, conn=None, batch_size: int = 2000, limit: int | N
 
     conn = conn or connect()
 
-    # Ensure the model_count column exists (added post-P0; safe no-op if already present).
-    # Legacy rows imported by P0 will have model_count = NULL, preventing re-trigger.
+    # Ensure the model_count/canto_ft_confidence columns exist (added post-P0; safe no-op
+    # if already present). Legacy rows imported by P0 will have model_count = NULL,
+    # preventing re-trigger.
     conn.execute(
         "ALTER TABLE asr_agreement ADD COLUMN IF NOT EXISTS model_count INTEGER"
+    )
+    conn.execute(
+        "ALTER TABLE asr_agreement ADD COLUMN IF NOT EXISTS canto_ft_confidence DOUBLE"
     )
 
     rows = discover_agreement(conn)
@@ -521,8 +614,8 @@ async def run_asr_agreement(*, conn=None, batch_size: int = 2000, limit: int | N
     for i in range(0, len(rows), batch_size):
         batch = rows[i : i + batch_size]
         out_rows = [
-            compute_agreement_row(seg_id, texts, confidences, result_count)
-            for seg_id, texts, confidences, result_count in batch
+            compute_agreement_row(seg_id, models, texts, confidences, result_count)
+            for seg_id, models, texts, confidences, result_count in batch
         ]
         upsert_rows(conn, "asr_agreement", out_rows, ["id"])
         record_batch(conn, run_id, "asr.agreement", [r["id"] for r in out_rows], "ok")
@@ -608,6 +701,16 @@ class Qwen3ASRWorker(GPUWorkerBase):
     output only when both have the same placeholder confidence — users relying
     on the raw confidence field for downstream filtering should treat Qwen3-ASR
     confidence as nominal, not calibrated.
+
+    Output script: despite being prompted with language="Cantonese", Qwen3-ASR
+    intermittently emits Simplified Chinese characters — measured 2026-07-10 at
+    ~15.3% of segments corpus-wide (94,783/618,695), often mixed within an
+    otherwise-Traditional sentence (e.g. "讲话佢又识法文" — 讲/识 simplified,
+    the rest Traditional/Cantonese). Same class of issue as SenseVoiceWorker's
+    known Simplified output (see that class's docstring); fixed the same way —
+    OpenCC s2hk conversion applied to every non-empty result before it's
+    returned, so stored text matches the Traditional HK convention of the
+    other three models.
     """
 
     def __init__(self, device: str, model_key: str, *, mem_fraction: float | None = None,
@@ -615,10 +718,23 @@ class Qwen3ASRWorker(GPUWorkerBase):
         self.model_key = model_key
         self.cfg = ASR_MODELS[model_key]
         super().__init__(device, mem_fraction=mem_fraction, fp16=fp16)
+        # OpenCC converter: Simplified → Traditional HK (initialised in subprocess).
+        self._cc = None
 
     def load_model(self):
         import torch
         from qwen_asr import Qwen3ASRModel
+
+        try:
+            from opencc import OpenCC
+            self._cc = OpenCC("s2hk")   # Simplified → Traditional HK
+        except ImportError:
+            log.warning(
+                "opencc-python-reimplemented not installed — Qwen3-ASR output may "
+                "remain in Simplified Chinese. Install: uv pip install opencc-python-reimplemented"
+            )
+            self._cc = None
+
         log.info(f"Loading ASR model: {self.cfg['description']} on {self.device} [bfloat16]")
         return Qwen3ASRModel.from_pretrained(
             self.cfg["id"],
@@ -647,13 +763,13 @@ class Qwen3ASRWorker(GPUWorkerBase):
         # Qwen3-ASR result object has .text (str) and .language (str).
         # No logprob/confidence field — default to 1.0 for non-empty text.
         # (See class docstring for the implication on best_text selection.)
-        return [
-            {
-                "text": (r.text or "").strip(),
-                "confidence": 1.0 if (r.text or "").strip() else 0.0,
-            }
-            for r in results
-        ]
+        out = []
+        for r in results:
+            text = (r.text or "").strip()
+            if self._cc and text:
+                text = self._cc.convert(text)   # Simplified → Traditional HK
+            out.append({"text": text, "confidence": 1.0 if text else 0.0})
+        return out
 
 
 class SenseVoiceWorker(GPUWorkerBase):

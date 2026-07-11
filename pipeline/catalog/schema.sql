@@ -73,6 +73,12 @@ CREATE TABLE IF NOT EXISTS asr_agreement (
     best_text     TEXT,
     text_verified BOOLEAN
 );
+ALTER TABLE asr_agreement ADD COLUMN IF NOT EXISTS model_count INTEGER;
+-- canto_ft's own (real, logprob-derived) confidence for this id -- NULL if canto_ft has no
+-- active row (see pipeline/nodes/asr.py's compute_agreement_row()). Added 2026-07-10 to gate
+-- tier.assign's auto_gold tier (agreement >= 0.90 AND canto_ft_confidence > 0.8); populated
+-- going forward by asr.agreement, backfilled for existing rows -- see DECISIONS.md 2026-07-10.
+ALTER TABLE asr_agreement ADD COLUMN IF NOT EXISTS canto_ft_confidence DOUBLE;
 
 -- From manifest.jsonl quality fields; one row per segment with acoustic quality filter scores.
 -- P3 session 2 (filter.decide node) added mandarin_ratio/dnsmos_ovrl/detected_language/
@@ -149,15 +155,20 @@ ALTER TABLE g2p ADD COLUMN IF NOT EXISTS valid_fraction DOUBLE;
 -- processed by this node" apart from "row exists" (which is otherwise always true).
 ALTER TABLE g2p ADD COLUMN IF NOT EXISTS provenance TEXT;
 
--- From manifest.jsonl tier field; one row per segment recording quality tier ('gold'/'silver').
+-- From manifest.jsonl tier field; one row per segment recording quality tier.
 -- P4 (pipeline/nodes/tier.py): same legacy-row-collision fix as filters.provenance/g2p.provenance —
 -- all 455,299 P0 legacy-imported rows have provenance IS NULL (manifest.jsonl only ever contained
 -- gold/silver segments, never a "pending" one, so a bare row-existence anti-join finds zero
 -- undone work forever). tier.assign tags its own writes provenance = 'tier_assign' and anti-joins
--- on that exact value. NOTE: this 'gold'/'silver' verification-confidence tier is a DIFFERENT axis
--- from LABEL_FRAMEWORK_SPEC.md §10's proposed 'A'/'B' (pretrain/clean) TTS-quality tier — that is a
+-- on that exact value. NOTE: this verification-confidence tier is a DIFFERENT axis from
+-- LABEL_FRAMEWORK_SPEC.md §10's proposed 'A'/'B' (pretrain/clean) TTS-quality tier — that is a
 -- separate, not-yet-built consumer of the full label store (needs calibrate+build finished first,
 -- plus emotion which is gated on an owner spot-check). Do not conflate the two when extending this.
+-- Four values as of 2026-07-10 (DECISIONS.md): 'gold' (text_verified=True, human-reviewed via
+-- calibrate_server), 'auto_gold' (agreement>=0.90 AND canto_ft_confidence>0.8, NOT human-reviewed
+-- -- a statistical-confidence tier, sample-QA'd via calibrate.sample(tier='auto_gold'), never
+-- claims to BE human-verified), 'silver' (agreement>=0.65), 'excluded'. Precedence gold > auto_gold
+-- > silver > excluded -- see pipeline/nodes/tier.py's assign_tier().
 CREATE TABLE IF NOT EXISTS tiers (
     id   TEXT PRIMARY KEY,
     tier TEXT

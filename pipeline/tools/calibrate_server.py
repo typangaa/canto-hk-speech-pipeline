@@ -16,10 +16,19 @@ Then open http://localhost:8420/ in a browser on the same machine.
 browser UI can switch batch/source/order filters live via query params, it
 is not fixed at server startup.
 
-Single-writer note: this process holds ONE read-write DuckDB connection for
-its whole lifetime (same rule as every other node -- see catalog.py's
-module docstring). Stop the server before running any other `pipe run`
-node, and vice versa.
+Connection lifetime note (2026-07-10 -- see DECISIONS.md): unlike every other
+node, this process does NOT hold a DuckDB connection for its whole lifetime.
+DuckDB's write lock is per-process and held for a connection's full life, so
+a long-running interactive server that kept one open (the original design)
+would block every other `pipe run` node / one-off maintenance script for the
+entire review session -- hours at a time. Instead each HTTP request opens
+its own short-lived connection (read-only for GETs, read-write for the two
+writing endpoints) and closes it before the response is sent, so the write
+lock is held for single-digit milliseconds per click, not the whole session.
+Concurrent batch jobs can now interleave freely between clicks; the only
+remaining conflict window is the rare case of a write landing at the exact
+moment another process's own writer connection is open, which surfaces as a
+normal, retryable `duckdb.IOException`, not a session-long block.
 """
 
 import argparse
@@ -27,11 +36,14 @@ import asyncio
 import json
 import logging
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from pipeline.catalog.catalog import connect
+import duckdb
+
+from pipeline.catalog.catalog import CATALOG_PATH, connect, connect_ro
 from pipeline.nodes.calibrate import (
     get_item,
     jyutping_preview,
@@ -59,10 +71,72 @@ _AUDIO_CONTENT_TYPES = {
     ".wav": "audio/wav",
 }
 
+# Serializes this process's own writers across ThreadingHTTPServer's request
+# threads (so two browser tabs clicking at once can't race each other's
+# connect()/close() cycle) -- it is NOT a substitute for DuckDB's own
+# cross-process file lock, which still applies underneath this.
 _write_lock = threading.Lock()
 
+# A per-request connection removes the "server blocks everyone else for its
+# whole session" problem, but the reverse still holds: DuckDB is
+# single-writer, so while a `pipe run` / `pipe run-many` batch job has ITS
+# OWN connection open (which can legitimately be minutes to hours for a big
+# backlog node), this server's connect()/connect_ro() calls will hit
+# duckdb.IOException just like any other process would. Retry with a short
+# backoff instead of failing the click outright -- most overlaps are brief,
+# and if a genuinely long batch job is running, surface a clear "busy"
+# message instead of a raw traceback.
+_LOCK_RETRY_DELAY_S = 1.0
+_LOCK_RETRY_TIMEOUT_S = 30.0
 
-def _build_app(conn, default_batch: str | None):
+
+class CatalogBusyError(RuntimeError):
+    """The DuckDB write lock stayed held by another process for longer than
+    _LOCK_RETRY_TIMEOUT_S -- surfaced to the browser as a 503, not a 500."""
+
+
+def _open_with_retry(open_fn):
+    deadline = time.monotonic() + _LOCK_RETRY_TIMEOUT_S
+    last_err = None
+    while time.monotonic() < deadline:
+        try:
+            return open_fn()
+        except duckdb.IOException as exc:
+            last_err = exc
+            time.sleep(_LOCK_RETRY_DELAY_S)
+    raise CatalogBusyError(
+        f"catalog locked by another process (a batch pipeline job?) for over "
+        f"{_LOCK_RETRY_TIMEOUT_S:.0f}s -- try again shortly"
+    ) from last_err
+
+
+def _read(fn, *args, **kwargs):
+    """Open a read-only connection for exactly one query, then close it.
+    Read-only connections are safe alongside other processes' read-only
+    connections, but still block a concurrent writer while open -- scoping
+    it to a single request (instead of the server's whole lifetime) is what
+    lets batch DAG nodes / one-off scripts run in the gaps between clicks."""
+    conn = _open_with_retry(lambda: connect_ro(CATALOG_PATH))
+    try:
+        return fn(conn, *args, **kwargs)
+    finally:
+        conn.close()
+
+
+def _write(fn, *args, **kwargs):
+    """Open a read-write connection for exactly one write (plus any reads
+    the same handler needs afterward, e.g. refreshed stats), then close it
+    immediately. The write lock is held for one request's duration, not the
+    whole server session."""
+    with _write_lock:
+        conn = _open_with_retry(lambda: connect(CATALOG_PATH))
+        try:
+            return fn(conn, *args, **kwargs)
+        finally:
+            conn.close()
+
+
+def _build_app(default_batch: str | None):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):  # noqa: A002 - stdlib signature
             log.info("%s - %s", self.address_string(), fmt % args)
@@ -76,6 +150,12 @@ def _build_app(conn, default_batch: str | None):
             self.wfile.write(body)
 
         def do_GET(self):  # noqa: N802 - stdlib method name
+            try:
+                self._do_GET()
+            except CatalogBusyError as exc:
+                self._send_json({"error": str(exc)}, status=503)
+
+        def _do_GET(self):
             parsed = urlparse(self.path)
             qs = parse_qs(parsed.query)
 
@@ -94,14 +174,15 @@ def _build_app(conn, default_batch: str | None):
                 batch = qs.get("batch", [None])[0] or None
                 source = qs.get("source", [None])[0] or None
                 order = qs.get("order", ["queued"])[0]
-                with _write_lock:
-                    item = next_pending(conn, batch, source, order)
-                    refilled = None
-                    if item is None and not batch:
-                        result = asyncio.run(run_calibrate_sample(conn=conn, n=_AUTO_REFILL_N))
-                        if result["queued"]:
-                            refilled = result
-                            item = next_pending(conn, batch, source, order)
+                item = _read(next_pending, batch, source, order)
+                refilled = None
+                if item is None and not batch:
+                    result = _write(
+                        lambda conn: asyncio.run(run_calibrate_sample(conn=conn, n=_AUTO_REFILL_N))
+                    )
+                    if result["queued"]:
+                        refilled = result
+                        item = _read(next_pending, batch, source, order)
                 self._send_json({"item": item, "refilled": refilled})
                 return
 
@@ -110,43 +191,37 @@ def _build_app(conn, default_batch: str | None):
                 if not seg_id:
                     self.send_error(400, "missing id")
                     return
-                with _write_lock:
-                    item = get_item(conn, seg_id)
+                item = _read(get_item, seg_id)
                 self._send_json({"item": item})
                 return
 
             if parsed.path == "/api/history":
                 batch = qs.get("batch", [None])[0] or None
                 limit = int(qs.get("limit", ["20"])[0])
-                with _write_lock:
-                    items = list_history(conn, batch, limit)
+                items = _read(list_history, batch, limit)
                 self._send_json({"items": items})
                 return
 
             if parsed.path == "/api/batches":
-                with _write_lock:
-                    batches = list_batches(conn)
+                batches = _read(list_batches)
                 self._send_json({"batches": batches})
                 return
 
             if parsed.path == "/api/sources":
-                with _write_lock:
-                    sources = list_sources(conn)
+                sources = _read(list_sources)
                 self._send_json({"sources": sources})
                 return
 
             if parsed.path == "/api/stats":
                 batch = qs.get("batch", [None])[0] or None
                 source = qs.get("source", [None])[0] or None
-                with _write_lock:
-                    stats = queue_stats(conn, batch, source)
+                stats = _read(queue_stats, batch, source)
                 self._send_json(stats)
                 return
 
             if parsed.path == "/api/summary":
                 batch = qs.get("batch", [None])[0] or None
-                with _write_lock:
-                    summary = summary_stats(conn, batch)
+                summary = _read(summary_stats, batch)
                 self._send_json(summary)
                 return
 
@@ -161,12 +236,13 @@ def _build_app(conn, default_batch: str | None):
                 if not seg_id:
                     self.send_error(400, "missing id")
                     return
-                with _write_lock:
-                    row = conn.execute(
+                row = _read(
+                    lambda conn: conn.execute(
                         "SELECT s.audio_path FROM calibration_review c "
                         "JOIN segments s ON c.id = s.id WHERE c.id = ?",
                         [seg_id],
                     ).fetchone()
+                )
                 if row is None:
                     self.send_error(404, "unknown id")
                     return
@@ -188,6 +264,12 @@ def _build_app(conn, default_batch: str | None):
             self.send_error(404)
 
         def do_POST(self):  # noqa: N802 - stdlib method name
+            try:
+                self._do_POST()
+            except CatalogBusyError as exc:
+                self._send_json({"error": str(exc)}, status=503)
+
+        def _do_POST(self):
             if self.path == "/api/refill":
                 length = int(self.headers.get("Content-Length", 0))
                 try:
@@ -196,8 +278,9 @@ def _build_app(conn, default_batch: str | None):
                 except json.JSONDecodeError:
                     self.send_error(400, "malformed request body")
                     return
-                with _write_lock:
-                    result = asyncio.run(run_calibrate_sample(conn=conn, n=n))
+                result = _write(
+                    lambda conn: asyncio.run(run_calibrate_sample(conn=conn, n=n))
+                )
                 self._send_json(result)
                 return
 
@@ -215,10 +298,12 @@ def _build_app(conn, default_batch: str | None):
                 self.send_error(400, "malformed request body")
                 return
 
+            def _submit(conn):
+                record_decision(conn, seg_id, decision, text, flag_reason)
+                return queue_stats(conn)
+
             try:
-                with _write_lock:
-                    record_decision(conn, seg_id, decision, text, flag_reason)
-                    stats = queue_stats(conn)
+                stats = _write(_submit)
             except ValueError as exc:
                 self._send_json({"error": str(exc)}, status=400)
                 return
@@ -1013,8 +1098,11 @@ def main() -> int:
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-    conn = connect()
-    handler = _build_app(conn, args.batch)
+    # Fail fast if the catalog doesn't exist yet -- this connection is opened
+    # and closed immediately, never held (see module docstring).
+    connect_ro(CATALOG_PATH).close()
+
+    handler = _build_app(args.batch)
     server = ThreadingHTTPServer(("127.0.0.1", args.port), handler)
     log.info(f"calibrate_server: listening on http://127.0.0.1:{args.port}/ (default batch={args.batch or 'all'})")
     try:
@@ -1023,7 +1111,6 @@ def main() -> int:
         pass
     finally:
         server.server_close()
-        conn.close()
     return 0
 
 

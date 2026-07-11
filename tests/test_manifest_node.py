@@ -66,7 +66,7 @@ def test_build_entry_missing_created_at_falls_back_to_today():
 
 def test_included_tiers_excludes_the_excluded_sentinel():
     assert "excluded" not in INCLUDED_TIERS
-    assert set(INCLUDED_TIERS) == {"gold", "silver"}
+    assert set(INCLUDED_TIERS) == {"gold", "auto_gold", "silver"}
 
 
 # ---------------------------------------------------------------------------

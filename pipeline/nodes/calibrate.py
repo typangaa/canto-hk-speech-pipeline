@@ -20,6 +20,22 @@ instead of human review is NOT viable -- only 26 filter-passing segments
 clear agreement >= 0.95 corpus-wide (median agreement is 0.71), nowhere near
 enough to matter.
 
+CORRECTION (same day, later): that check included whisper_v3 (Systran/faster-
+whisper-large-v3+zh) in the 4-way agreement score. The owner separately flagged
+whisper_v3 as measurably inaccurate and asked for it to be retired from the
+pipeline (see ASR_MODELS["whisper_v3"] in pipeline/nodes/asr.py and
+DECISIONS.md). Re-measured with whisper_v3 excluded (3-way: canto_ft/qwen3_asr/
+sense_voice), agreement >= 0.90 clears **41.1%** of the corpus (~446h), not
+~0% -- the earlier "not viable" conclusion was an artifact of whisper_v3
+dragging down the whole distribution, not a property of the corpus. Full
+numbers: docs/FINDINGS_ASR_AGREEMENT_THRESHOLDS.md. This is why tiers.tier now
+has a 4th value, 'auto_gold' (pipeline/nodes/tier.py), for segments clearing
+that bar WITHOUT human review -- a statistical-confidence tier, sample-QA'd via
+this node's tier/min_agreement-scoped sampling below, not exhaustively
+reviewed. Random sampling (this node's original purpose) remains how auto_gold
+itself gets spot-checked, and remains the only path for segments below the
+auto_gold bar to reach true human-verified 'gold'.
+
 This node only SELECTS the sample and reserves it (writes 'pending' rows) --
 it never touches audio or text itself. The actual review happens
 interactively in the browser tool; see calibrate_server.py / record_decision
@@ -37,27 +53,53 @@ SAMPLE_DISCOVER_SQL = """
     SELECT a.id, a.best_text
     FROM asr_agreement a
     JOIN filters f ON a.id = f.id AND f.pass = TRUE
+    {tier_join}
     LEFT JOIN calibration_review c ON a.id = c.id
     WHERE c.id IS NULL
+      {min_agreement_cond}
     ORDER BY random()
     LIMIT ?
 """
 
 
-def discover(conn, n: int) -> list[tuple[str, str]]:
-    return conn.execute(SAMPLE_DISCOVER_SQL, [n]).fetchall()
+def discover(
+    conn, n: int, tier: str | None = None, min_agreement: float | None = None
+) -> list[tuple[str, str]]:
+    """tier/min_agreement (added 2026-07-10) narrow the sample population for scoped QA:
+      - tier='auto_gold' -- QA the statistical-confidence tier specifically
+        (pipeline/nodes/tier.py's auto_gold, agreement>=0.90 AND canto_ft_confidence>0.8).
+      - min_agreement=0.95/0.85/etc -- QA a specific --min-agreement export cut
+        (pipeline/nodes/manifest.py), independent of tier labels.
+    Both default to None, reproducing the original unscoped behaviour exactly (random
+    sample of all filter-passing, not-yet-reviewed segments)."""
+    params: list = []
+    tier_join = ""
+    if tier is not None:
+        tier_join = "JOIN tiers t2 ON a.id = t2.id AND t2.tier = ?"
+        params.append(tier)
+    min_agreement_cond = ""
+    if min_agreement is not None:
+        min_agreement_cond = "AND a.agreement >= ?"
+        params.append(min_agreement)
+    params.append(n)
+    sql = SAMPLE_DISCOVER_SQL.format(tier_join=tier_join, min_agreement_cond=min_agreement_cond)
+    return conn.execute(sql, params).fetchall()
 
 
-async def run_calibrate_sample(*, conn=None, n: int = 300) -> dict:
+async def run_calibrate_sample(
+    *, conn=None, n: int = 300, tier: str | None = None, min_agreement: float | None = None
+) -> dict:
     """conn: optional pre-opened DuckDB connection (or cursor) -- pass one when
     running alongside other nodes under `pipe run-many` (see filter.py's
     run_filter_acoustic docstring for the rationale). Defaults to a fresh
-    self-managed connect() for standalone `pipe run calibrate.sample` usage."""
+    self-managed connect() for standalone `pipe run calibrate.sample` usage.
+
+    tier/min_agreement: see discover()'s docstring -- scoped QA sampling, added 2026-07-10."""
     from pipeline.catalog.catalog import connect, upsert_rows
     from pipeline.orchestrator.journal import new_run_id, record_batch
 
     conn = conn or connect()
-    picked = discover(conn, n)
+    picked = discover(conn, n, tier=tier, min_agreement=min_agreement)
     log.info(f"calibrate.sample: queuing {len(picked)} segments for human review")
     if not picked:
         return {"queued": 0, "run_id": None}

@@ -1,10 +1,13 @@
 from pipeline.nodes.asr import (
     ASR_MODELS,
+    EXCLUDED_FROM_AGREEMENT,
     WORKER_CLASSES,
     Qwen3ASRWorker,
     SenseVoiceWorker,
     TranscribeWorker,
+    is_model_enabled,
     model_field,
+    resolve_model_key,
     char_agreement,
     compute_agreement_row,
     discover_agreement,
@@ -12,6 +15,11 @@ from pipeline.nodes.asr import (
     shard_rows_round_robin,
     _load_and_resample,
 )
+
+CANTO_FT = model_field("canto_ft")
+WHISPER_V3 = model_field("whisper_v3")
+QWEN3_ASR = model_field("qwen3_asr")
+SENSE_VOICE = model_field("sense_voice")
 
 import asyncio
 
@@ -86,19 +94,47 @@ def test_char_agreement_empty_list():
     assert char_agreement([]) == 1.0
 
 
+def test_resolve_model_key_recognises_active_models():
+    assert resolve_model_key(CANTO_FT) == "canto_ft"
+    assert resolve_model_key(QWEN3_ASR) == "qwen3_asr"
+    assert resolve_model_key(SENSE_VOICE) == "sense_voice"
+    assert resolve_model_key(WHISPER_V3) == "whisper_v3"  # resolved, just excluded downstream
+
+
+def test_resolve_model_key_recognises_legacy_canto_ft_paths():
+    assert resolve_model_key(
+        "/mnt/Drive3/Development/AI-ML/canto-corpus/data/ct2_models/whisper-large-v2-cantonese+zh"
+    ) == "canto_ft"
+    assert resolve_model_key(
+        "/home/typangaa/Documents/canto-corpus/data/ct2_models/whisper-large-v2-cantonese+zh"
+    ) == "canto_ft"
+
+
+def test_resolve_model_key_unrecognised_returns_none():
+    assert resolve_model_key("some/unregistered-model+zh") is None
+
+
+def test_whisper_v3_disabled_and_excluded_from_agreement():
+    assert is_model_enabled("whisper_v3") is False
+    assert is_model_enabled("canto_ft") is True
+    assert "whisper_v3" in EXCLUDED_FROM_AGREEMENT
+    assert "canto_ft" not in EXCLUDED_FROM_AGREEMENT
+
+
 def test_compute_agreement_row_both_present_agree():
     """Identical texts produce agreement==1.0, best_text is that text, text_verified is False."""
-    row = compute_agreement_row('id1', ['abc', 'abc'], [0.9, 0.5], 2)
+    row = compute_agreement_row('id1', [CANTO_FT, QWEN3_ASR], ['abc', 'abc'], [0.9, 0.5], 2)
     assert row['id'] == 'id1'
     assert row['agreement'] == 1.0
     assert row['best_text'] == 'abc'
     assert row['text_verified'] is False
     assert row['model_count'] == 2
+    assert row['canto_ft_confidence'] == 0.9
 
 
 def test_compute_agreement_row_both_empty():
     """Both empty texts produce agreement==0.0 and best_text==''."""
-    row = compute_agreement_row('id2', ['', ''], [0.0, 0.0], 2)
+    row = compute_agreement_row('id2', [CANTO_FT, QWEN3_ASR], ['', ''], [0.0, 0.0], 2)
     assert row['id'] == 'id2'
     assert row['agreement'] == 0.0
     assert row['best_text'] == ''
@@ -107,13 +143,13 @@ def test_compute_agreement_row_both_empty():
 
 def test_compute_agreement_row_one_empty_one_present():
     """One empty and one non-empty text: agreement==0.0, best_text is the non-empty one."""
-    row = compute_agreement_row('id3', ['', 'hello'], [0.0, 0.7], 2)
+    row = compute_agreement_row('id3', [CANTO_FT, QWEN3_ASR], ['', 'hello'], [0.0, 0.7], 2)
     assert row['agreement'] == 0.0
     assert row['best_text'] == 'hello'
     assert row['text_verified'] is False
 
     # Empty candidate has a higher raw confidence number — must still lose.
-    row2 = compute_agreement_row('id4', ['', 'hello'], [0.99, 0.1], 2)
+    row2 = compute_agreement_row('id4', [CANTO_FT, QWEN3_ASR], ['', 'hello'], [0.99, 0.1], 2)
     assert row2['best_text'] == 'hello', (
         "Empty-text candidate must never be selected even when its raw confidence is higher."
     )
@@ -122,14 +158,16 @@ def test_compute_agreement_row_one_empty_one_present():
 
 def test_compute_agreement_row_picks_higher_confidence():
     """When both texts are non-empty, the one with higher confidence wins."""
-    row = compute_agreement_row('id5', ['foo', 'bar'], [0.9, 0.3], 2)
+    row = compute_agreement_row('id5', [CANTO_FT, QWEN3_ASR], ['foo', 'bar'], [0.9, 0.3], 2)
     assert row['best_text'] == 'foo'
     assert row['text_verified'] is False
 
 
 def test_compute_agreement_row_three_way():
     """A 3rd model's candidate is folded into agreement/best_text like the other two."""
-    row = compute_agreement_row('id6', ['abc', 'abd', 'abc'], [0.5, 0.4, 0.95], 3)
+    row = compute_agreement_row(
+        'id6', [CANTO_FT, QWEN3_ASR, SENSE_VOICE], ['abc', 'abd', 'abc'], [0.5, 0.4, 0.95], 3
+    )
     assert row['id'] == 'id6'
     assert 0.0 < row['agreement'] < 1.0
     assert row['best_text'] == 'abc'  # highest confidence (0.95) among non-empty texts
@@ -138,10 +176,65 @@ def test_compute_agreement_row_three_way():
 
 def test_compute_agreement_row_three_way_one_empty():
     """With 3 candidates and one empty, agreement is computed over the 2 non-empty texts only."""
-    row = compute_agreement_row('id7', ['hello', '', 'hello'], [0.6, 0.9, 0.5], 3)
+    row = compute_agreement_row(
+        'id7', [CANTO_FT, QWEN3_ASR, SENSE_VOICE], ['hello', '', 'hello'], [0.6, 0.9, 0.5], 3
+    )
     assert row['agreement'] == 1.0  # the two non-empty texts are identical
     assert row['best_text'] == 'hello'
     assert row['model_count'] == 3
+
+
+def test_compute_agreement_row_excludes_whisper_v3_from_agreement_and_best_text():
+    """whisper_v3 is resolved (not silently dropped as unrecognised) but must never
+    contribute to the agreement ratio or win best_text, even with the highest confidence."""
+    row = compute_agreement_row(
+        'id8', [CANTO_FT, WHISPER_V3, QWEN3_ASR],
+        ['agree text', 'totally different', 'agree text'],
+        [0.5, 0.99, 0.6], 3,
+    )
+    assert row['best_text'] == 'agree text', "whisper_v3's higher confidence must not win best_text"
+    assert row['agreement'] == 1.0, "agreement must be computed over canto_ft/qwen3_asr only"
+
+
+def test_compute_agreement_row_whisper_v3_only_two_others_empty():
+    """If only whisper_v3 has non-empty text, best_text is '' (excluded model never wins by default)."""
+    row = compute_agreement_row(
+        'id9', [CANTO_FT, WHISPER_V3, QWEN3_ASR], ['', 'only whisper_v3 text', ''], [0.0, 0.9, 0.0], 3
+    )
+    assert row['best_text'] == ''
+    assert row['agreement'] == 0.0
+
+
+def test_compute_agreement_row_dedupes_canto_ft_legacy_path():
+    """A stale-path canto_ft duplicate row must not double-count canto_ft's opinion --
+    only the current-path row is used, regardless of list order."""
+    legacy_path = "/mnt/Drive3/Development/AI-ML/canto-corpus/data/ct2_models/whisper-large-v2-cantonese+zh"
+    row = compute_agreement_row(
+        'id10',
+        [legacy_path, CANTO_FT, QWEN3_ASR],
+        ['stale legacy text', 'current text', 'current text'],
+        [0.99, 0.5, 0.5],
+        3,
+    )
+    assert row['agreement'] == 1.0, "stale-path canto_ft text must be dropped, not compared"
+    assert row['best_text'] == 'current text'
+    assert row['canto_ft_confidence'] == 0.5, "canto_ft_confidence must come from the current-path row"
+
+
+def test_compute_agreement_row_unresolvable_model_dropped():
+    """An unrecognised model string contributes nothing (fail-closed), not an error."""
+    row = compute_agreement_row(
+        'id11', [CANTO_FT, 'some/unregistered-model+zh', QWEN3_ASR],
+        ['abc', 'abc', 'abc'], [0.9, 0.9, 0.9], 3,
+    )
+    assert row['agreement'] == 1.0
+    assert row['best_text'] == 'abc'
+
+
+def test_compute_agreement_row_canto_ft_confidence_none_when_absent():
+    """canto_ft_confidence is None when canto_ft has no active row for this id."""
+    row = compute_agreement_row('id12', [QWEN3_ASR, SENSE_VOICE], ['abc', 'abc'], [0.9, 0.9], 2)
+    assert row['canto_ft_confidence'] is None
 
 
 def test_load_and_resample_missing_file_returns_none():
@@ -253,11 +346,12 @@ class _FakeQwenModel:
         return [_FakeQwenResult(t) for t in self._texts]
 
 
-def _make_bare_qwen_worker(cfg_lang='Cantonese'):
+def _make_bare_qwen_worker(cfg_lang='Cantonese', cc=None):
     worker = object.__new__(Qwen3ASRWorker)
     worker.model_key = 'qwen3_asr'
     worker.cfg = {**ASR_MODELS['qwen3_asr'], 'lang': cfg_lang}
     worker.device = 'cpu'
+    worker._cc = cc
     return worker
 
 
@@ -281,6 +375,23 @@ def test_qwen3asr_worker_preserves_item_order():
     rows = worker.forward_batch([np.zeros(1600, dtype=np.float32) for _ in range(3)])
     assert [r['text'] for r in rows] == ['first', 'second', '']
     assert [r['confidence'] for r in rows] == [1.0, 1.0, 0.0]
+
+
+def test_qwen3asr_worker_applies_opencc_conversion_when_cc_present():
+    # Qwen3-ASR intermittently emits Simplified Chinese despite language="Cantonese"
+    # (measured 2026-07-10: 15.32% of segments corpus-wide) -- same class of issue
+    # as SenseVoiceWorker, fixed the same way with an s2hk pass in forward_batch().
+    worker = _make_bare_qwen_worker(cc=_FakeOpenCC())
+    worker.model = _FakeQwenModel(['我系讲广东话'])
+    rows = worker.forward_batch([np.zeros(16000, dtype=np.float32)])
+    assert rows == [{'text': '我係讲廣東話', 'confidence': 1.0}]
+
+
+def test_qwen3asr_worker_skips_conversion_when_cc_absent():
+    worker = _make_bare_qwen_worker(cc=None)
+    worker.model = _FakeQwenModel(['我系讲广东话'])
+    rows = worker.forward_batch([np.zeros(16000, dtype=np.float32)])
+    assert rows == [{'text': '我系讲广东话', 'confidence': 1.0}]
 
 
 # ---------------------------------------------------------------------------
@@ -400,20 +511,21 @@ def _insert_asr_result(conn, seg_id, model, text, confidence):
 
 
 def test_discover_agreement_surfaces_2_model_id(scratch_conn):
-    _insert_asr_result(scratch_conn, 'seg1', 'model_a', 'hello world', 0.9)
-    _insert_asr_result(scratch_conn, 'seg1', 'model_b', 'hello world', 0.8)
+    _insert_asr_result(scratch_conn, 'seg1', CANTO_FT, 'hello world', 0.9)
+    _insert_asr_result(scratch_conn, 'seg1', QWEN3_ASR, 'hello world', 0.8)
     conn = scratch_conn
     conn.execute("ALTER TABLE asr_agreement ADD COLUMN IF NOT EXISTS model_count INTEGER")
     rows = discover_agreement(conn)
     assert len(rows) == 1
-    seg_id, texts, confidences, result_count = rows[0]
+    seg_id, models, texts, confidences, result_count = rows[0]
     assert seg_id == 'seg1'
     assert result_count == 2
+    assert sorted(models) == sorted([CANTO_FT, QWEN3_ASR])
     assert sorted(texts) == ['hello world', 'hello world']
 
 
 def test_discover_agreement_does_not_surface_single_model_id(scratch_conn):
-    _insert_asr_result(scratch_conn, 'seg2', 'model_a', 'only one model', 0.9)
+    _insert_asr_result(scratch_conn, 'seg2', CANTO_FT, 'only one model', 0.9)
     conn = scratch_conn
     conn.execute("ALTER TABLE asr_agreement ADD COLUMN IF NOT EXISTS model_count INTEGER")
     rows = discover_agreement(conn)
@@ -425,10 +537,10 @@ def test_run_asr_agreement_end_to_end_2_then_3_models(scratch_conn):
     (model_count-based re-discovery), while a 2-model-only id is computed once and
     does not spuriously re-surface on the next run."""
     conn = scratch_conn
-    _insert_asr_result(conn, 'seg_a', 'model_1', 'foo bar', 0.9)
-    _insert_asr_result(conn, 'seg_a', 'model_2', 'foo bar', 0.8)
-    _insert_asr_result(conn, 'seg_b', 'model_1', 'baz qux', 0.9)
-    _insert_asr_result(conn, 'seg_b', 'model_2', 'baz qux', 0.8)
+    _insert_asr_result(conn, 'seg_a', CANTO_FT, 'foo bar', 0.9)
+    _insert_asr_result(conn, 'seg_a', QWEN3_ASR, 'foo bar', 0.8)
+    _insert_asr_result(conn, 'seg_b', CANTO_FT, 'baz qux', 0.9)
+    _insert_asr_result(conn, 'seg_b', QWEN3_ASR, 'baz qux', 0.8)
 
     result1 = asyncio.run(run_asr_agreement(conn=conn))
     assert result1['processed'] == 2
@@ -438,7 +550,7 @@ def test_run_asr_agreement_end_to_end_2_then_3_models(scratch_conn):
     assert result_noop == {'processed': 0, 'errors': 0}
 
     # A 3rd model arrives for seg_a only.
-    _insert_asr_result(conn, 'seg_a', 'model_3', 'foo bar', 0.95)
+    _insert_asr_result(conn, 'seg_a', SENSE_VOICE, 'foo bar', 0.95)
     result2 = asyncio.run(run_asr_agreement(conn=conn))
     assert result2['processed'] == 1, "Only seg_a's straggler should re-trigger, not seg_b."
 
@@ -453,8 +565,8 @@ def test_run_asr_agreement_preserves_legacy_2_model_row(scratch_conn):
     """A legacy P0-imported row (model_count IS NULL, predates this column) must never
     be resurfaced/recomputed even if its underlying asr_results rows still total exactly 2."""
     conn = scratch_conn
-    _insert_asr_result(conn, 'legacy1', 'model_1', 'legacy text', 0.5)
-    _insert_asr_result(conn, 'legacy1', 'model_2', 'legacy text', 0.5)
+    _insert_asr_result(conn, 'legacy1', CANTO_FT, 'legacy text', 0.5)
+    _insert_asr_result(conn, 'legacy1', QWEN3_ASR, 'legacy text', 0.5)
     # Simulate the P0 legacy import: an asr_agreement row already exists, with no
     # model_count column populated (NULL).
     conn.execute("ALTER TABLE asr_agreement ADD COLUMN IF NOT EXISTS model_count INTEGER")
