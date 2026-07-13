@@ -24,6 +24,13 @@ Source: round-2 post-execution review of `docs/PIPELINE_REVIEW_2026-07-11.md` §
 - **Effort**: manual, ~900 segments, a few hours (can split across sessions).
 - **Depends on**: nothing. `calibrate serve` is already running (PID 971786 at review time).
 - **Owner**: human (not delegable to Claude).
+- **Update 2026-07-13**: `calibrate serve` no longer blocks while a long batch node (T15's
+  `asr.transcribe`) holds the DuckDB writer lock — it falls back to a JSON snapshot for reads
+  and buffers every decision to a local JSONL, replayed via `pipe calibrate flush-pending` once
+  the writer frees up (see DECISIONS.md 2026-07-13). To review DURING a long batch run: first
+  run `pipe calibrate export-snapshot` while the catalog is free (or use whatever snapshot is
+  already on disk), then `pipe calibrate serve` works throughout the run; run
+  `pipe calibrate flush-pending` afterward to land the decisions.
 
 ---
 
@@ -303,6 +310,34 @@ Source: round-2 post-execution review of `docs/PIPELINE_REVIEW_2026-07-11.md` §
   several sessions (472,167 vs. baseline 458,843 + 5000 tolerance) — pre-existing drift,
   explicitly not to be "fixed" by guessing a new baseline until T15 fully lands and a
   deliberate re-export + verification pass is done (per the test's own docstring).
+  15. **A fourth throughput bug, found while investigating why `sense_voice` ran at
+      about the same speed as pre-fix `qwen3_asr` (~36/s) despite its documented ~105×
+      RTF**: `SenseVoiceWorker.forward_batch()` passed `batch_size_s=300` to funasr's
+      `AutoModel.generate()` — a parameter that is a **complete no-op** on the code path
+      we actually take (`generate()` routes to plain `inference()` since no `vad_model`
+      is configured; `inference()` only reads a literal `batch_size` kwarg, default 1;
+      `batch_size_s` is exclusively consumed inside `inference_with_vad()`, never
+      reached). Confirmed via log grep: 100% of ~38k logged steps showed
+      `'batch_size': '1'` — every item decoded one at a time regardless of the 64-item
+      chunks dispatched. **Fixed** (`pipeline/nodes/asr.py`): pass `batch_size=len(items)`
+      instead. 53/53 tests in `tests/test_asr_node.py` pass (fixture updated to assert
+      the real batch_size is passed). Full root-cause trace: DECISIONS.md 2026-07-13
+      "`sense_voice` throughput bug" entry.
+      **Applied 2026-07-13, owner confirmed kill+restart**: killed the pre-fix run (PID
+      1753479/1617642, 94,720/578,849 done at kill time — that work is preserved, the
+      restart resumed via the normal idempotent discovery anti-join, not from zero).
+      Restarted `run_t15_asr_sequential.sh` (new PID 1772752); `qwen3_asr` correctly
+      re-discovered 0 remaining rows and no-opped in ~1s (confirms its earlier pass was
+      already complete), `sense_voice` picked up the remaining 479,264 segments. Log
+      confirms the fix took: every `forward_batch()` call now shows `'batch_size': '64'`
+      (was `'1'`), `rtf` dropped to ~0.001 (was ~0.010-0.017). Measured steady throughput
+      **~87.8/s combined — 2.4× the pre-fix ~36/s**. Note: `nvidia-smi` showed low GPU
+      utilization (0-4%) right after restart despite this throughput — the bottleneck
+      may have shifted from GPU compute (now near-instant per 64-batch) to CPU-side
+      audio load/feature-extraction between batches; not investigated further this
+      session, worth a look if sense_voice throughput needs to go even higher later.
+      Phase C auto-runner relaunched pointed at the new PID (background task `bbdphc24e`,
+      confirmed waiting on 1772752) — will fire Phase C1+C2 once this pass finishes.
   **Future work worth doing** (not attempted, out of scope for tonight): batch
   `run_speaker_cluster`'s per-source `upsert_rows()` call into chunks (e.g. 5,000 rows,
   matching the `batch_size` convention every other node in this codebase already follows)
@@ -329,9 +364,13 @@ Source: round-2 post-execution review of `docs/PIPELINE_REVIEW_2026-07-11.md` §
   targeted external research (agy-gemini, 2026-07-13).
 - **How** (order matters — the normalization fix must precede the distribution analysis,
   or the analysis itself is biased):
-  1. Add text normalization (strip punctuation, normalize digits) inside the agreement
-     computation — compute overlap on the normalized strings, store original texts
-     unchanged. Update tests.
+  1. ✅ **DONE 2026-07-13**: text normalization (strip all Unicode punctuation, fold
+     Arabic/full-width digits to CJK numerals) added inside `char_agreement()`
+     (`pipeline/nodes/asr.py`, new `_normalize_for_agreement()` helper) — agreement is
+     computed on the normalized strings, `best_text`/stored text unchanged (verbatim).
+     5 new/extended tests in `tests/test_asr_node.py`, all passing (53/53 in that file).
+     Not yet run against the DB (T15 holds the writer lock) — step 2 below will exercise
+     it for real once T15 drains.
   2. Full-corpus `asr_agreement` backfill excluding canto_ft (mirror the 2026-07-10
      whisper_v3 backfill).
   3. FINDINGS-doc-style distribution analysis (agreement histogram × existing gold/QA
@@ -346,8 +385,8 @@ Source: round-2 post-execution review of `docs/PIPELINE_REVIEW_2026-07-11.md` §
   5. Re-derive `tiers` for affected rows (pure SQL CASE backfill like 2026-07-11's
      threshold change — remember the T5 gap means tier.assign will NOT re-evaluate
      existing rows by itself).
-- **Effort**: medium (normalization + tests ~1h; backfill is one long DB pass; analysis
-  ~1h; the tier re-derivation is quick).
+- **Effort**: medium (normalization + tests ~1h — done; backfill is one long DB pass;
+  analysis ~1h; the tier re-derivation is quick).
 - **Depends on**: T15's ASR drain finished (DuckDB writer free + agreement rows complete);
   T1's pilot QA ground truth for step 4's validation.
 - **Owner decision required**: the final threshold (step 4) — do NOT guess a number.
