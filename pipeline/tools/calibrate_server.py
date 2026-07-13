@@ -25,10 +25,37 @@ entire review session -- hours at a time. Instead each HTTP request opens
 its own short-lived connection (read-only for GETs, read-write for the two
 writing endpoints) and closes it before the response is sent, so the write
 lock is held for single-digit milliseconds per click, not the whole session.
-Concurrent batch jobs can now interleave freely between clicks; the only
-remaining conflict window is the rare case of a write landing at the exact
-moment another process's own writer connection is open, which surfaces as a
-normal, retryable `duckdb.IOException`, not a session-long block.
+Concurrent batch jobs can now interleave freely between clicks; the remaining
+conflict window is a write landing at the exact moment another process's own
+writer connection is open -- fine for a *brief* overlap (retried with a short
+backoff below), but not for a long batch node (asr.transcribe, segment.diarize,
+etc.) that holds the writer lock for its ENTIRE multi-hour run -- during that
+window even connect_ro() is refused, so this per-request design alone doesn't
+help; see the offline-mode note below.
+
+Offline-mode note (2026-07-13 -- see DECISIONS.md): while the catalog is
+unreachable this server falls back to two on-disk artifacts instead of
+blocking or erroring out:
+  - Reads (`/api/next`, `/api/item`, `/api/history`, `/api/batches`,
+    `/api/sources`, `/api/stats`, `/api/summary`, `/api/audio`) fall back to
+    the JSON snapshot written by `pipe calibrate export-snapshot`
+    (pipeline/nodes/calibrate.py's SNAPSHOT_PATH) -- a point-in-time dump of
+    the pending review queue (candidates, audio paths, everything the UI
+    needs) taken while the catalog was free. It's necessarily stale relative
+    to the live DB (new calibrate.sample batches queued after the snapshot
+    won't appear), which the UI surfaces via each response's `mode` field.
+  - Writes ALWAYS go to a local JSONL buffer (append_pending_decision(),
+    PENDING_DECISIONS_PATH) rather than calling record_decision() inline --
+    not just as an offline fallback, but unconditionally, so a click never
+    depends on DB availability at all and the online/offline code paths stay
+    the same. `pipe calibrate flush-pending` replays the buffer into the
+    catalog once the writer is free (safe to run anytime, safe to re-run).
+  - `_local_decisions` (loaded from the buffer at server startup, updated
+    live as submissions come in) is overlaid on top of BOTH the live-DB and
+    the offline-snapshot read paths: a segment just decided locally still
+    reads 'pending' in the DB until the next flush, so every read endpoint
+    needs this overlay to avoid re-serving it, and to keep the stats/history
+    panels accurate for the reviewer's own session.
 """
 
 import argparse
@@ -45,14 +72,18 @@ import duckdb
 
 from pipeline.catalog.catalog import CATALOG_PATH, connect, connect_ro
 from pipeline.nodes.calibrate import (
+    PENDING_DECISIONS_PATH,
+    SNAPSHOT_PATH,
+    _levenshtein,
+    append_pending_decision,
     get_item,
     jyutping_preview,
     list_batches,
     list_history,
     list_sources,
+    load_pending_decisions,
     next_pending,
     queue_stats,
-    record_decision,
     run_calibrate_sample,
     summary_stats,
 )
@@ -83,16 +114,20 @@ _write_lock = threading.Lock()
 # OWN connection open (which can legitimately be minutes to hours for a big
 # backlog node), this server's connect()/connect_ro() calls will hit
 # duckdb.IOException just like any other process would. Retry with a short
-# backoff instead of failing the click outright -- most overlaps are brief,
-# and if a genuinely long batch job is running, surface a clear "busy"
-# message instead of a raw traceback.
-_LOCK_RETRY_DELAY_S = 1.0
-_LOCK_RETRY_TIMEOUT_S = 30.0
+# backoff instead of failing the click outright -- most overlaps are brief.
+# Shortened from 30s to 4s (2026-07-13): a long batch node holds the lock for
+# its ENTIRE run, so waiting longer just delays falling back to the offline
+# snapshot/buffer for no benefit -- see the module docstring's offline-mode note.
+_LOCK_RETRY_DELAY_S = 0.5
+_LOCK_RETRY_TIMEOUT_S = 4.0
 
 
 class CatalogBusyError(RuntimeError):
     """The DuckDB write lock stayed held by another process for longer than
-    _LOCK_RETRY_TIMEOUT_S -- surfaced to the browser as a 503, not a 500."""
+    _LOCK_RETRY_TIMEOUT_S. Read paths catch this and fall back to the offline
+    snapshot; only a caller with no offline fallback (e.g. calibrate.sample's
+    /api/refill, which needs a live DB query to discover genuinely new
+    segments) lets it surface to the browser as a 503."""
 
 
 def _open_with_retry(open_fn):
@@ -112,7 +147,7 @@ def _open_with_retry(open_fn):
 
 def _read(fn, *args, **kwargs):
     """Open a read-only connection for exactly one query, then close it.
-    Read-only connections are safe alongside other processes' read-only
+    Read-only connections are safe alongside other processes' own read-only
     connections, but still block a concurrent writer while open -- scoping
     it to a single request (instead of the server's whole lifetime) is what
     lets batch DAG nodes / one-off scripts run in the gaps between clicks."""
@@ -127,13 +162,212 @@ def _write(fn, *args, **kwargs):
     """Open a read-write connection for exactly one write (plus any reads
     the same handler needs afterward, e.g. refreshed stats), then close it
     immediately. The write lock is held for one request's duration, not the
-    whole server session."""
+    whole server session. Only calibrate.sample's /api/refill still uses
+    this -- decision writes go through append_pending_decision() instead
+    (see module docstring's offline-mode note)."""
     with _write_lock:
         conn = _open_with_retry(lambda: connect(CATALOG_PATH))
         try:
             return fn(conn, *args, **kwargs)
         finally:
             conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Offline mode: local decision buffer + JSON snapshot fallback (2026-07-13)
+# ---------------------------------------------------------------------------
+
+_local_decisions: dict = load_pending_decisions()
+_local_decisions_lock = threading.Lock()
+_snapshot: dict | None = None
+
+
+def _load_snapshot() -> None:
+    global _snapshot
+    if not SNAPSHOT_PATH.exists():
+        _snapshot = None
+        return
+    try:
+        _snapshot = json.loads(SNAPSHOT_PATH.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        log.warning(f"failed to load offline snapshot {SNAPSHOT_PATH}: {exc}")
+        _snapshot = None
+
+
+_load_snapshot()  # best-effort at import time; harmless if the file doesn't exist yet
+
+
+def _overlay_item(item: dict | None) -> dict | None:
+    """Apply a pending-but-not-yet-flushed local decision on top of an item
+    fetched from the live DB or the offline snapshot -- both sources still
+    read 'pending' for it until the next `pipe calibrate flush-pending`."""
+    if item is None:
+        return None
+    local = _local_decisions.get(item["id"])
+    if not local:
+        return item
+    merged = dict(item)
+    merged["decision"] = local["decision"]
+    merged["reviewed_text"] = local.get("text")
+    merged["flag_reason"] = local.get("flag_reason")
+    return merged
+
+
+def _stats_with_overlay(base_stats: dict, sample_batch: str | None, source: str | None) -> dict:
+    stats = dict(base_stats)
+    for entry in _local_decisions.values():
+        if sample_batch and entry.get("sample_batch") != sample_batch:
+            continue
+        if source and entry.get("source") != source:
+            continue
+        # base_stats counted this id as 'pending' (its DB/snapshot state is
+        # unchanged until flush) -- move it to its real, locally-decided bucket.
+        stats["pending"] = max(0, stats.get("pending", 0) - 1)
+        stats[entry["decision"]] = stats.get(entry["decision"], 0) + 1
+    stats["total"] = sum(v for k, v in stats.items() if k != "total")
+    return stats
+
+
+def _offline_items(sample_batch: str | None = None, source: str | None = None) -> list[dict]:
+    if not _snapshot:
+        return []
+    items = _snapshot.get("items", [])
+    if sample_batch:
+        items = [i for i in items if i.get("sample_batch") == sample_batch]
+    if source:
+        items = [i for i in items if i.get("source") == source]
+    return items
+
+
+def _offline_next_pending(sample_batch, source, order) -> dict | None:
+    items = [i for i in _offline_items(sample_batch, source) if i["id"] not in _local_decisions]
+    if not items:
+        return None
+    if order == "agreement_asc":
+        items.sort(key=lambda i: (i.get("agreement") is None, i.get("agreement")))
+    elif order == "agreement_desc":
+        items.sort(key=lambda i: (i.get("agreement") is None, -(i.get("agreement") or 0)))
+    else:
+        items.sort(key=lambda i: i.get("queued_at") or "")
+    return items[0]
+
+
+def _offline_get_item(seg_id: str) -> dict | None:
+    if not _snapshot:
+        return None
+    for item in _snapshot.get("items", []):
+        if item["id"] == seg_id:
+            return _overlay_item(item)
+    return None
+
+
+def _offline_list_history(sample_batch: str | None, limit: int) -> list[dict]:
+    entries = [
+        {
+            "id": e["id"], "decision": e["decision"], "reviewed_text": e.get("text"),
+            "reviewed_at": e.get("ts"), "source": e.get("source"), "flag_reason": e.get("flag_reason"),
+        }
+        for e in _local_decisions.values()
+        if not sample_batch or e.get("sample_batch") == sample_batch
+    ]
+    entries.sort(key=lambda e: e.get("reviewed_at") or "", reverse=True)
+    return entries[:limit]
+
+
+def _offline_base_stats(sample_batch: str | None, source: str | None) -> dict:
+    n = len(_offline_items(sample_batch, source))
+    return {"pending": n, "verified": 0, "skipped": 0, "rejected": 0, "flagged": 0, "total": n}
+
+
+def _offline_queue_stats(sample_batch: str | None = None, source: str | None = None) -> dict:
+    return _stats_with_overlay(_offline_base_stats(sample_batch, source), sample_batch, source)
+
+
+def _offline_list_batches() -> list[dict]:
+    if not _snapshot:
+        return []
+    batches = sorted({i["sample_batch"] for i in _snapshot.get("items", []) if i.get("sample_batch")})
+    return [{"sample_batch": b, **_offline_queue_stats(b, None)} for b in batches]
+
+
+def _offline_list_sources() -> list[str]:
+    if not _snapshot:
+        return []
+    return sorted({i["source"] for i in _snapshot.get("items", []) if i.get("source")})
+
+
+def _offline_summary_stats(sample_batch: str | None) -> dict:
+    """Necessarily partial vs. the live version: only reflects decisions made
+    during THIS offline session (no DB access to past review history)."""
+    items_by_id = {i["id"]: i for i in _offline_items(sample_batch, None)}
+    by_source: dict[str, dict[str, int]] = {}
+    agreements_by_decision: dict[str, list[float]] = {}
+    edits = []
+    flag_counter: dict[str, int] = {}
+    for e in _local_decisions.values():
+        if sample_batch and e.get("sample_batch") != sample_batch:
+            continue
+        item = items_by_id.get(e["id"])
+        src = e.get("source") or (item or {}).get("source") or "unknown"
+        by_source.setdefault(src, {})[e["decision"]] = by_source.setdefault(src, {}).get(e["decision"], 0) + 1
+        if item and item.get("agreement") is not None:
+            agreements_by_decision.setdefault(e["decision"], []).append(item["agreement"])
+        if e["decision"] == "verified" and item and e.get("text") is not None:
+            edits.append(_levenshtein(item.get("best_text") or "", e["text"]))
+        if e["decision"] == "flagged" and e.get("flag_reason"):
+            flag_counter[e["flag_reason"]] = flag_counter.get(e["flag_reason"], 0) + 1
+    return {
+        "decision_counts": _offline_queue_stats(sample_batch, None),
+        "by_source": by_source,
+        "avg_agreement_by_decision": {
+            d: round(sum(vs) / len(vs), 3) for d, vs in agreements_by_decision.items()
+        },
+        "avg_edit_distance_verified": round(sum(edits) / len(edits), 2) if edits else None,
+        "verified_edit_sample_size": len(edits),
+        "top_flag_reasons": sorted(
+            ({"reason": r, "count": n} for r, n in flag_counter.items()), key=lambda x: -x["count"]
+        )[:10],
+    }
+
+
+def _read_or_offline(live_fn, offline_fn):
+    """Try a live-DB read; on CatalogBusyError fall back to the offline
+    snapshot/buffer instead of surfacing a 503. Returns (result, mode)."""
+    try:
+        return _read(live_fn), "live"
+    except CatalogBusyError:
+        return offline_fn(), "offline"
+
+
+def _merge_history(db_history: list[dict], sample_batch: str | None, limit: int) -> list[dict]:
+    """DB history only contains decision != 'pending' rows, so it never
+    includes an id that's only been decided locally (still 'pending' in the
+    DB until flush) -- merge in the local buffer's own entries so a just-
+    submitted decision shows up in the panel immediately."""
+    local_entries = _offline_list_history(sample_batch, limit)
+    seen = {h["id"] for h in db_history}
+    merged = list(db_history) + [e for e in local_entries if e["id"] not in seen]
+    merged.sort(key=lambda h: h.get("reviewed_at") or "", reverse=True)
+    return merged[:limit]
+
+
+def _live_list_batches(conn) -> list[dict]:
+    out = []
+    for b in list_batches(conn):
+        sb = b["sample_batch"]
+        base = {k: v for k, v in b.items() if k != "sample_batch"}
+        out.append({"sample_batch": sb, **_stats_with_overlay(base, sb, None)})
+    return out
+
+
+def _live_summary_stats(conn, sample_batch: str | None) -> dict:
+    """Only decision_counts (the progress bar) gets the local-buffer overlay
+    here -- by_source/avg_agreement/edit-distance for decisions made since
+    the last flush are a nice-to-have this doesn't chase; they self-correct
+    once `pipe calibrate flush-pending` lands."""
+    summary = summary_stats(conn, sample_batch)
+    summary["decision_counts"] = _stats_with_overlay(summary["decision_counts"], sample_batch, None)
+    return summary
 
 
 def _build_app(default_batch: str | None):
@@ -174,16 +408,28 @@ def _build_app(default_batch: str | None):
                 batch = qs.get("batch", [None])[0] or None
                 source = qs.get("source", [None])[0] or None
                 order = qs.get("order", ["queued"])[0]
-                item = _read(next_pending, batch, source, order)
+                item, mode = _read_or_offline(
+                    lambda conn: _overlay_item(next_pending(conn, batch, source, order, exclude_ids=set(_local_decisions))),
+                    lambda: _offline_next_pending(batch, source, order),
+                )
                 refilled = None
-                if item is None and not batch:
-                    result = _write(
-                        lambda conn: asyncio.run(run_calibrate_sample(conn=conn, n=_AUTO_REFILL_N))
-                    )
-                    if result["queued"]:
-                        refilled = result
-                        item = _read(next_pending, batch, source, order)
-                self._send_json({"item": item, "refilled": refilled})
+                if item is None and not batch and mode == "live":
+                    # calibrate.sample needs a live DB query to discover genuinely
+                    # new segments -- no offline equivalent, so this step is
+                    # simply skipped while offline (the reviewer works through
+                    # whatever the snapshot already has).
+                    try:
+                        result = _write(
+                            lambda conn: asyncio.run(run_calibrate_sample(conn=conn, n=_AUTO_REFILL_N))
+                        )
+                        if result["queued"]:
+                            refilled = result
+                            item = _read(lambda conn: _overlay_item(
+                                next_pending(conn, batch, source, order, exclude_ids=set(_local_decisions))
+                            ))
+                    except CatalogBusyError:
+                        pass
+                self._send_json({"item": item, "refilled": refilled, "mode": mode})
                 return
 
             if parsed.path == "/api/item":
@@ -191,37 +437,54 @@ def _build_app(default_batch: str | None):
                 if not seg_id:
                     self.send_error(400, "missing id")
                     return
-                item = _read(get_item, seg_id)
-                self._send_json({"item": item})
+                item, mode = _read_or_offline(
+                    lambda conn: _overlay_item(get_item(conn, seg_id)),
+                    lambda: _offline_get_item(seg_id),
+                )
+                self._send_json({"item": item, "mode": mode})
                 return
 
             if parsed.path == "/api/history":
                 batch = qs.get("batch", [None])[0] or None
                 limit = int(qs.get("limit", ["20"])[0])
-                items = _read(list_history, batch, limit)
-                self._send_json({"items": items})
+                items, mode = _read_or_offline(
+                    lambda conn: _merge_history(list_history(conn, batch, limit), batch, limit),
+                    lambda: _offline_list_history(batch, limit),
+                )
+                self._send_json({"items": items, "mode": mode})
                 return
 
             if parsed.path == "/api/batches":
-                batches = _read(list_batches)
-                self._send_json({"batches": batches})
+                batches, mode = _read_or_offline(
+                    lambda conn: _live_list_batches(conn),
+                    _offline_list_batches,
+                )
+                self._send_json({"batches": batches, "mode": mode})
                 return
 
             if parsed.path == "/api/sources":
-                sources = _read(list_sources)
-                self._send_json({"sources": sources})
+                sources, mode = _read_or_offline(list_sources, _offline_list_sources)
+                self._send_json({"sources": sources, "mode": mode})
                 return
 
             if parsed.path == "/api/stats":
                 batch = qs.get("batch", [None])[0] or None
                 source = qs.get("source", [None])[0] or None
-                stats = _read(queue_stats, batch, source)
+                stats, mode = _read_or_offline(
+                    lambda conn: _stats_with_overlay(queue_stats(conn, batch, source), batch, source),
+                    lambda: _offline_queue_stats(batch, source),
+                )
+                stats["mode"] = mode
                 self._send_json(stats)
                 return
 
             if parsed.path == "/api/summary":
                 batch = qs.get("batch", [None])[0] or None
-                summary = _read(summary_stats, batch)
+                summary, mode = _read_or_offline(
+                    lambda conn: _live_summary_stats(conn, batch),
+                    lambda: _offline_summary_stats(batch),
+                )
+                summary["mode"] = mode
                 self._send_json(summary)
                 return
 
@@ -236,17 +499,18 @@ def _build_app(default_batch: str | None):
                 if not seg_id:
                     self.send_error(400, "missing id")
                     return
-                row = _read(
+                audio_path_str, _mode = _read_or_offline(
                     lambda conn: conn.execute(
                         "SELECT s.audio_path FROM calibration_review c "
                         "JOIN segments s ON c.id = s.id WHERE c.id = ?",
                         [seg_id],
-                    ).fetchone()
+                    ).fetchone(),
+                    lambda: ((_offline_get_item(seg_id) or {}).get("audio_path"),),
                 )
-                if row is None:
+                if not audio_path_str or not audio_path_str[0]:
                     self.send_error(404, "unknown id")
                     return
-                audio_path = Path(row[0])
+                audio_path = Path(audio_path_str[0])
                 if not audio_path.exists():
                     self.send_error(404, f"file missing on disk: {audio_path}")
                     return
@@ -294,20 +558,32 @@ def _build_app(default_batch: str | None):
                 decision = payload["decision"]
                 text = payload.get("text")
                 flag_reason = payload.get("flag_reason")
+                sample_batch = payload.get("sample_batch")
+                source = payload.get("source")
             except (KeyError, json.JSONDecodeError):
                 self.send_error(400, "malformed request body")
                 return
 
-            def _submit(conn):
-                record_decision(conn, seg_id, decision, text, flag_reason)
-                return queue_stats(conn)
-
+            # Always buffer to the local JSONL (2026-07-13) -- never call
+            # record_decision() inline here. `pipe calibrate flush-pending`
+            # replays it into the catalog whenever the writer is free; see
+            # the module docstring's offline-mode note for why this is
+            # unconditional rather than a busy-catalog-only fallback.
             try:
-                stats = _write(_submit)
+                with _local_decisions_lock:
+                    entry = append_pending_decision(
+                        seg_id, decision, text, flag_reason,
+                        sample_batch=sample_batch, source=source,
+                    )
+                    _local_decisions[seg_id] = entry
             except ValueError as exc:
                 self._send_json({"error": str(exc)}, status=400)
                 return
-            self._send_json({"ok": True, "stats": stats})
+            stats, mode = _read_or_offline(
+                lambda conn: _stats_with_overlay(queue_stats(conn), None, None),
+                lambda: _offline_queue_stats(None, None),
+            )
+            self._send_json({"ok": True, "stats": stats, "mode": mode})
 
     return Handler
 
@@ -478,10 +754,13 @@ _PAGE_HTML = r"""<!doctype html>
   .bar-row .bar-track span { display: block; height: 100%; }
   .bar-row .bar-value { width: 32px; text-align: right; color: var(--dim); font-variant-numeric: tabular-nums; }
   #summary-empty { color: var(--dim); font-size: 0.82rem; }
+  #offline-banner { display: none; background: var(--warn); color: #1c1300; font-size: 0.8rem;
+                     font-weight: 600; padding: 0.5rem 0.9rem; border-radius: 8px; margin-bottom: 0.8rem; }
 </style>
 </head>
 <body>
 <h1>CANTO CORPUS &mdash; TEXT CALIBRATION</h1>
+<div id="offline-banner"></div>
 
 <div id="topbar">
   <div class="stat-group">
@@ -642,11 +921,25 @@ function rerenderCandidateDiffs() {
   });
 }
 
+// ---- offline-mode banner: any API response can carry mode:'offline' when
+// the catalog is unreachable and we're serving from the last snapshot +
+// local decision buffer (see calibrate_server.py's module docstring) ----
+function updateOfflineBanner(mode) {
+  const el = document.getElementById('offline-banner');
+  if (mode === 'offline') {
+    el.textContent = '⚠ Catalog busy (a batch pipeline job is running) — showing the last exported snapshot. Your decisions are saved locally and will sync once the catalog frees up (pipe calibrate flush-pending).';
+    el.style.display = 'block';
+  } else {
+    el.style.display = 'none';
+  }
+}
+
 // ---- stats / progress bar ----
 async function refreshStats() {
   const { batch, source } = currentFilters();
   const r = await fetch('/api/stats?' + qs({ batch, source }));
   const s = await r.json();
+  updateOfflineBanner(s.mode);
   document.getElementById('s-verified').textContent = s.verified;
   document.getElementById('s-skipped').textContent = s.skipped;
   document.getElementById('s-rejected').textContent = s.rejected;
@@ -909,7 +1202,10 @@ async function submit(decision, flagReason) {
   await fetch('/api/submit', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ id: current.id, decision, text, flag_reason: flagReason || null }),
+    body: JSON.stringify({
+      id: current.id, decision, text, flag_reason: flagReason || null,
+      sample_batch: current.sample_batch || null, source: current.source || null,
+    }),
   });
   await Promise.all([refreshStats(), refreshHistory()]);
   if (reviewingFromHistory) {

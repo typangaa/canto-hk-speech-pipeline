@@ -52,10 +52,35 @@ a 'verified' decision propagates into asr_agreement.text_verified and
 tiers.tier='gold'.
 """
 
+import json
 import logging
+import threading
 import time
+from pathlib import Path
 
 log = logging.getLogger(__name__)
+
+# Offline-review support (added 2026-07-13, see DECISIONS.md): DuckDB's writer
+# lock is held for a long batch node's ENTIRE runtime (hours for something like
+# asr.transcribe), which blocks even connect_ro() -- the per-request short-lived
+# connections calibrate_server.py already uses (2026-07-10 redesign) only help
+# with brief overlaps, not a multi-hour hold. Two pieces close that gap:
+#   1. run_calibrate_export_snapshot() -- dump the pending review queue (audio
+#      paths + ASR candidates, everything the browser UI needs) to a JSON file
+#      while the catalog is free, so calibrate_server can fall back to reading
+#      it when the live DB is unreachable.
+#   2. append_pending_decision() / run_calibrate_flush_pending() -- every
+#      review decision is appended to a local JSONL buffer instead of calling
+#      record_decision() inline from the HTTP handler (removes the write path's
+#      dependency on DB availability entirely); run_calibrate_flush_pending()
+#      replays the buffer into record_decision() once the writer is free again
+#      (idempotent -- record_decision is a plain UPDATE, safe to replay).
+from pipeline.config import REPO_ROOT
+
+SNAPSHOT_PATH = REPO_ROOT / "metadata" / "calibration_offline_queue.json"
+PENDING_DECISIONS_PATH = REPO_ROOT / "metadata" / "calibration_pending_decisions.jsonl"
+
+_pending_write_lock = threading.Lock()
 
 # Risk-scaled QA sample rate per tier (owner decision, 2026-07-11): the noisier the tier's
 # a-priori confidence, the higher the fraction of it that gets human review. auto_gold clears
@@ -214,6 +239,200 @@ def record_decision(
         )
 
 
+def pending_queue_rows(
+    conn,
+    sample_batch: str | None = None,
+    source: str | None = None,
+    limit: int | None = None,
+) -> list[dict]:
+    """All 'pending' review items (segment + ASR context), for
+    run_calibrate_export_snapshot() -- like next_pending() but returns every
+    match instead of just the first one, and includes sample_batch/queued_at
+    (needed offline for the batch-jump dropdown, absent from _row_to_item's
+    online shape since the live UI gets those via /api/batches instead)."""
+    where = ["c.decision = 'pending'"]
+    params: list = []
+    if sample_batch:
+        where.append("c.sample_batch = ?")
+        params.append(sample_batch)
+    if source:
+        where.append("s.source = ?")
+        params.append(source)
+    limit_sql = ""
+    if limit:
+        limit_sql = "LIMIT ?"
+        params.append(limit)
+    rows = conn.execute(
+        f"""
+        SELECT c.id, a.best_text, a.agreement, s.source, s.audio_path,
+               s.duration_sec, s.program, c.decision, c.reviewed_text, c.flag_reason,
+               c.sample_batch, c.queued_at
+        FROM calibration_review c
+        JOIN asr_agreement a ON c.id = a.id
+        JOIN segments s ON c.id = s.id
+        WHERE {' AND '.join(where)}
+        ORDER BY c.queued_at ASC
+        {limit_sql}
+        """,
+        params,
+    ).fetchall()
+    items = []
+    for row in rows:
+        (seg_id, best_text, agreement, source_, audio_path, duration_sec, program,
+         decision, reviewed_text, flag_reason, sample_batch_, queued_at) = row
+        items.append({
+            "id": seg_id,
+            "best_text": best_text,
+            "agreement": agreement,
+            "source": source_,
+            "audio_path": audio_path,
+            "duration_sec": duration_sec,
+            "program": program,
+            "decision": decision,
+            "reviewed_text": reviewed_text,
+            "flag_reason": flag_reason,
+            "sample_batch": sample_batch_,
+            "queued_at": str(queued_at) if queued_at else None,
+            "candidates": _fetch_candidates(conn, seg_id),
+        })
+    return items
+
+
+async def run_calibrate_export_snapshot(
+    *, conn=None, out_path: Path | None = None,
+    limit: int | None = None, sample_batch: str | None = None, source: str | None = None,
+) -> dict:
+    """Dump the current pending review queue to a JSON file (default
+    SNAPSHOT_PATH) so calibrate_server.py can serve reads from it when the
+    live catalog is unreachable (a long batch node holding the writer lock --
+    see module docstring). Read-only: uses connect_ro() by default, not
+    connect(), since this never writes anything and read-only connections
+    don't contend with other processes' own read-only connections."""
+    from pipeline.catalog.catalog import CATALOG_PATH, connect_ro
+
+    out_path = out_path or SNAPSHOT_PATH
+    owns_conn = conn is None
+    conn = conn or connect_ro(CATALOG_PATH)
+    try:
+        items = pending_queue_rows(conn, sample_batch=sample_batch, source=source, limit=limit)
+    finally:
+        if owns_conn:
+            conn.close()
+
+    snapshot = {
+        "snapshot_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "items": items,
+    }
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(snapshot, ensure_ascii=False))
+    log.info(f"calibrate.export_snapshot: wrote {len(items)} pending items to {out_path}")
+    return {"exported": len(items), "path": str(out_path)}
+
+
+def append_pending_decision(
+    seg_id: str,
+    decision: str,
+    text: str | None,
+    flag_reason: str | None,
+    *,
+    sample_batch: str | None = None,
+    source: str | None = None,
+    path: Path | None = None,
+) -> dict:
+    """Append one review decision to the local JSONL buffer (default
+    PENDING_DECISIONS_PATH) instead of writing it straight to the catalog.
+    Called by calibrate_server.py's /api/submit for EVERY decision (not just
+    as a busy-catalog fallback -- see module docstring) so a click never
+    blocks on DB availability. run_calibrate_flush_pending() later replays
+    these into record_decision(). Thread-safety: guarded by
+    _pending_write_lock so two browser tabs submitting at once can't
+    interleave partial JSON lines."""
+    if decision not in ("verified", "skipped", "rejected", "flagged"):
+        raise ValueError(f"invalid decision: {decision!r}")
+    path = path or PENDING_DECISIONS_PATH
+    entry = {
+        "id": seg_id,
+        "decision": decision,
+        "text": text,
+        "flag_reason": flag_reason,
+        "sample_batch": sample_batch,
+        "source": source,
+        "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    with _pending_write_lock:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    return entry
+
+
+def load_pending_decisions(path: Path | None = None) -> dict[str, dict]:
+    """Read the JSONL buffer into {id: latest_entry} -- a segment reviewed
+    twice in the same offline session (e.g. changed their mind before flush)
+    keeps only its last decision, matching how record_decision's plain UPDATE
+    would behave once flushed anyway."""
+    path = path or PENDING_DECISIONS_PATH
+    if not path.exists():
+        return {}
+    entries: dict[str, dict] = {}
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            entry = json.loads(line)
+            entries[entry["id"]] = entry
+    return entries
+
+
+async def run_calibrate_flush_pending(*, conn=None, in_path: Path | None = None) -> dict:
+    """Replay the local decision buffer into the catalog via record_decision(),
+    then archive the buffer file so it isn't replayed again. Safe to run
+    anytime the writer lock is free; safe to re-run if interrupted mid-way
+    (record_decision is a plain UPDATE, idempotent per id)."""
+    from pipeline.catalog.catalog import connect
+
+    in_path = in_path or PENDING_DECISIONS_PATH
+    entries = load_pending_decisions(in_path)
+    if not entries:
+        return {"flushed": 0, "errors": 0, "archived_to": None}
+
+    owns_conn = conn is None
+    conn = conn or connect()
+    flushed = 0
+    errors = []
+    try:
+        for seg_id, entry in entries.items():
+            try:
+                record_decision(conn, seg_id, entry["decision"], entry.get("text"), entry.get("flag_reason"))
+                flushed += 1
+            except Exception as exc:  # noqa: BLE001 -- one bad row must not abort the whole flush
+                log.error(f"calibrate.flush_pending: failed to flush {seg_id}: {exc}")
+                errors.append(seg_id)
+    finally:
+        if owns_conn:
+            conn.close()
+
+    archived_to = None
+    if not errors:
+        archived_to = in_path.with_name(f"{in_path.stem}.flushed_{time.strftime('%Y%m%dT%H%M%S')}{in_path.suffix}")
+        in_path.rename(archived_to)
+        archived_to = str(archived_to)
+    else:
+        # Leave failed ids in the buffer (as the only remaining lines) so a
+        # re-run only retries what actually failed, and rewrite the file
+        # atomically instead of leaving successfully-flushed lines mixed in.
+        with _pending_write_lock:
+            tmp_path = in_path.with_suffix(in_path.suffix + ".tmp")
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                for seg_id in errors:
+                    f.write(json.dumps(entries[seg_id], ensure_ascii=False) + "\n")
+            tmp_path.replace(in_path)
+
+    log.info(f"calibrate.flush_pending: flushed {flushed}, errors {len(errors)}, archived_to={archived_to}")
+    return {"flushed": flushed, "errors": len(errors), "archived_to": archived_to}
+
+
 def jyutping_preview(text: str) -> dict:
     """Live Jyutping-validity preview for the browser UI's text box -- reuses
     g2p.py's actual conversion + validation functions (not a reimplementation)
@@ -337,7 +556,7 @@ def _fetch_candidates(conn, seg_id: str) -> list[dict]:
 
 def _row_to_item(row, candidates) -> dict:
     (seg_id, best_text, agreement, source, audio_path, duration_sec, program,
-     decision, reviewed_text, flag_reason) = row
+     decision, reviewed_text, flag_reason, sample_batch) = row
     return {
         "id": seg_id,
         "best_text": best_text,
@@ -349,6 +568,10 @@ def _row_to_item(row, candidates) -> dict:
         "decision": decision,
         "reviewed_text": reviewed_text,
         "flag_reason": flag_reason,
+        # sample_batch (added 2026-07-13): the client echoes this back on
+        # /api/submit so append_pending_decision() can scope the offline
+        # decision buffer by batch (see calibrate_server.py).
+        "sample_batch": sample_batch,
         "candidates": candidates,
     }
 
@@ -358,13 +581,21 @@ def next_pending(
     sample_batch: str | None = None,
     source: str | None = None,
     order: str = "queued",
+    exclude_ids: "set[str] | list[str] | None" = None,
 ) -> dict | None:
     """Return the next 'pending' review item (segment + ASR context) for the
     browser UI, or None if the queue (optionally scoped to sample_batch /
     source) is empty. `order` picks which segment surfaces first: 'queued'
     (FIFO, default), 'agreement_asc' (lowest cross-model agreement first --
     the segments most likely to actually need correction), or
-    'agreement_desc'."""
+    'agreement_desc'.
+
+    exclude_ids (added 2026-07-13): ids already decided in the local
+    calibrate_server offline-decision buffer (see module docstring) but not
+    yet flushed to the catalog -- calibration_review.decision still reads
+    'pending' for them in the DB, so without this exclusion the same segment
+    would be served for review again before its own just-submitted decision
+    lands."""
     where = ["c.decision = 'pending'"]
     params: list = []
     if sample_batch:
@@ -373,12 +604,17 @@ def next_pending(
     if source:
         where.append("s.source = ?")
         params.append(source)
+    if exclude_ids:
+        placeholders = ",".join("?" for _ in exclude_ids)
+        where.append(f"c.id NOT IN ({placeholders})")
+        params.extend(exclude_ids)
     order_sql = _ORDER_SQL.get(order, _ORDER_SQL["queued"])
 
     row = conn.execute(
         f"""
         SELECT c.id, a.best_text, a.agreement, s.source, s.audio_path,
-               s.duration_sec, s.program, c.decision, c.reviewed_text, c.flag_reason
+               s.duration_sec, s.program, c.decision, c.reviewed_text, c.flag_reason,
+               c.sample_batch
         FROM calibration_review c
         JOIN asr_agreement a ON c.id = a.id
         JOIN segments s ON c.id = s.id
@@ -401,7 +637,8 @@ def get_item(conn, seg_id: str) -> dict | None:
     row = conn.execute(
         """
         SELECT c.id, a.best_text, a.agreement, s.source, s.audio_path,
-               s.duration_sec, s.program, c.decision, c.reviewed_text, c.flag_reason
+               s.duration_sec, s.program, c.decision, c.reviewed_text, c.flag_reason,
+               c.sample_batch
         FROM calibration_review c
         JOIN asr_agreement a ON c.id = a.id
         JOIN segments s ON c.id = s.id

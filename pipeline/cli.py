@@ -681,17 +681,29 @@ def cmd_calibrate_serve(args: argparse.Namespace) -> int:
     import logging
     from http.server import ThreadingHTTPServer
 
+    import duckdb
+
     from pipeline.catalog.catalog import CATALOG_PATH, connect_ro
     from pipeline.tools.calibrate_server import _build_app
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     log = logging.getLogger("pipeline.tools.calibrate_server")
 
-    # Fail fast if the catalog doesn't exist yet -- this connection is opened
-    # and closed immediately, never held (see calibrate_server.py's module
-    # docstring: each request now opens its own short-lived connection so
-    # the write lock isn't held for the whole server session).
-    connect_ro(CATALOG_PATH).close()
+    # Soft-check only (2026-07-13, was a hard crash before): a long batch node
+    # (e.g. asr.transcribe) can hold the writer lock for hours, which also
+    # blocks connect_ro() -- that's an expected operating condition now, not
+    # a reason to refuse to start. The server falls back to the offline JSON
+    # snapshot + local decision buffer (pipeline/nodes/calibrate.py) for
+    # reads/writes when the catalog is unreachable; see calibrate_server.py's
+    # module docstring. Only a genuinely missing catalog file is worth
+    # surfacing loudly here, and even that just delays to first-request time.
+    try:
+        connect_ro(CATALOG_PATH).close()
+    except duckdb.IOException as exc:
+        log.warning(
+            f"catalog not reachable at startup ({exc}) -- serving from the offline "
+            f"snapshot/local buffer if available; live data resumes once the writer is free"
+        )
 
     handler = _build_app(args.batch)
     server = ThreadingHTTPServer(("127.0.0.1", args.port), handler)
@@ -702,6 +714,35 @@ def cmd_calibrate_serve(args: argparse.Namespace) -> int:
         pass
     finally:
         server.server_close()
+    return 0
+
+
+def cmd_calibrate_export_snapshot(args: argparse.Namespace) -> int:
+    import asyncio
+    import logging
+    from pathlib import Path
+
+    from pipeline.nodes.calibrate import run_calibrate_export_snapshot
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    result = asyncio.run(run_calibrate_export_snapshot(
+        out_path=Path(args.out) if args.out else None,
+        limit=args.limit, sample_batch=args.batch, source=args.source,
+    ))
+    print(f"\nDone: {result}")
+    return 0
+
+
+def cmd_calibrate_flush_pending(args: argparse.Namespace) -> int:
+    import asyncio
+    import logging
+    from pathlib import Path
+
+    from pipeline.nodes.calibrate import run_calibrate_flush_pending
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    result = asyncio.run(run_calibrate_flush_pending(in_path=Path(args.input) if args.input else None))
+    print(f"\nDone: {result}")
     return 0
 
 
@@ -823,6 +864,23 @@ def main() -> int:
     p_calibrate_serve.add_argument("--port", type=int, default=8420)
     p_calibrate_serve.add_argument("--batch", default=None, help="restrict review to one calibrate.sample run_id")
     p_calibrate_serve.set_defaults(func=cmd_calibrate_serve)
+    p_calibrate_export = calibrate_sub.add_parser(
+        "export-snapshot",
+        help="dump the pending review queue to a JSON file (2026-07-13) so 'serve' can fall back "
+             "to it when the catalog is unreachable (e.g. a long batch node holds the writer lock)",
+    )
+    p_calibrate_export.add_argument("--out", default=None, help="default: metadata/calibration_offline_queue.json")
+    p_calibrate_export.add_argument("--limit", type=int, default=None)
+    p_calibrate_export.add_argument("--batch", default=None, help="scope to one calibrate.sample run_id")
+    p_calibrate_export.add_argument("--source", default=None)
+    p_calibrate_export.set_defaults(func=cmd_calibrate_export_snapshot)
+    p_calibrate_flush = calibrate_sub.add_parser(
+        "flush-pending",
+        help="replay review decisions buffered locally while the catalog was busy (2026-07-13) "
+             "into record_decision() -- run anytime the writer lock is free",
+    )
+    p_calibrate_flush.add_argument("--input", default=None, help="default: metadata/calibration_pending_decisions.jsonl")
+    p_calibrate_flush.set_defaults(func=cmd_calibrate_flush_pending)
 
     p_run = sub.add_parser("run", help="Run a DAG node via the orchestrator")
     run_sub = p_run.add_subparsers(dest="run_command", required=True)

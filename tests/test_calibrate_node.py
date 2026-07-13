@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 import duckdb
 import pytest
@@ -7,16 +8,21 @@ from pipeline.catalog.catalog import init_schema
 from pipeline.nodes.calibrate import (
     QA_SAMPLE_RATE_BY_TIER,
     _levenshtein,
+    append_pending_decision,
     discover,
     get_item,
     jyutping_preview,
     list_batches,
     list_history,
     list_sources,
+    load_pending_decisions,
     next_pending,
+    pending_queue_rows,
     queue_stats,
     record_decision,
     recommended_sample_n,
+    run_calibrate_export_snapshot,
+    run_calibrate_flush_pending,
     run_calibrate_sample,
     summary_stats,
 )
@@ -440,3 +446,131 @@ def test_summary_stats_scoped_by_batch(scratch_conn):
 
     stats = summary_stats(conn, sample_batch="batch1")
     assert stats["decision_counts"]["total"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Offline-review support (2026-07-13): next_pending exclude_ids,
+# pending_queue_rows / export_snapshot, append_pending_decision /
+# load_pending_decisions / flush_pending
+# ---------------------------------------------------------------------------
+
+def test_next_pending_exclude_ids_skips_locally_decided(scratch_conn):
+    conn = scratch_conn
+    _seed_segment(conn, "a")
+    _seed_segment(conn, "b")
+    conn.execute("INSERT INTO calibration_review (id, decision, queued_at) VALUES ('a', 'pending', '2026-07-13 00:00:00')")
+    conn.execute("INSERT INTO calibration_review (id, decision, queued_at) VALUES ('b', 'pending', '2026-07-13 00:00:01')")
+
+    item = next_pending(conn, exclude_ids={"a"})
+    assert item["id"] == "b"
+
+
+def test_next_pending_exclude_ids_empty_queue_returns_none(scratch_conn):
+    conn = scratch_conn
+    _seed_segment(conn, "a")
+    conn.execute("INSERT INTO calibration_review (id, decision) VALUES ('a', 'pending')")
+    assert next_pending(conn, exclude_ids={"a"}) is None
+
+
+def test_pending_queue_rows_returns_all_pending_with_batch(scratch_conn):
+    conn = scratch_conn
+    _seed_segment(conn, "a")
+    _seed_segment(conn, "b")
+    conn.execute("INSERT INTO calibration_review (id, decision, sample_batch, queued_at) VALUES ('a', 'pending', 'batch1', '2026-07-13 00:00:00')")
+    conn.execute("INSERT INTO calibration_review (id, decision, sample_batch, queued_at) VALUES ('b', 'verified', 'batch1', '2026-07-13 00:00:01')")
+
+    rows = pending_queue_rows(conn)
+    assert [r["id"] for r in rows] == ["a"]
+    assert rows[0]["sample_batch"] == "batch1"
+    assert rows[0]["candidates"] == [{"model": "canto_ft", "text": "呢個係測試文字", "confidence": 0.9}]
+
+
+def test_run_calibrate_export_snapshot_writes_json(scratch_conn, tmp_path):
+    conn = scratch_conn
+    _seed_segment(conn, "a")
+    conn.execute("INSERT INTO calibration_review (id, decision, sample_batch, queued_at) VALUES ('a', 'pending', 'batch1', '2026-07-13 00:00:00')")
+    out_path = tmp_path / "snapshot.json"
+
+    result = asyncio.run(run_calibrate_export_snapshot(conn=conn, out_path=out_path))
+
+    assert result["exported"] == 1
+    snapshot = json.loads(out_path.read_text())
+    assert "snapshot_at" in snapshot
+    assert snapshot["items"][0]["id"] == "a"
+
+
+def test_append_pending_decision_rejects_invalid_decision(tmp_path):
+    with pytest.raises(ValueError):
+        append_pending_decision("s1", "bogus", "text", None, path=tmp_path / "pending.jsonl")
+
+
+def test_append_and_load_pending_decisions_roundtrip(tmp_path):
+    path = tmp_path / "pending.jsonl"
+    append_pending_decision("s1", "verified", "校正文字", None, sample_batch="batch1", source="rthk", path=path)
+    append_pending_decision("s2", "rejected", None, None, path=path)
+
+    loaded = load_pending_decisions(path)
+    assert set(loaded) == {"s1", "s2"}
+    assert loaded["s1"]["decision"] == "verified"
+    assert loaded["s1"]["text"] == "校正文字"
+    assert loaded["s1"]["sample_batch"] == "batch1"
+
+
+def test_append_pending_decision_resubmit_keeps_only_latest(tmp_path):
+    path = tmp_path / "pending.jsonl"
+    append_pending_decision("s1", "skipped", None, None, path=path)
+    append_pending_decision("s1", "verified", "改咗主意", None, path=path)
+
+    loaded = load_pending_decisions(path)
+    assert len(loaded) == 1
+    assert loaded["s1"]["decision"] == "verified"
+    assert loaded["s1"]["text"] == "改咗主意"
+
+
+def test_load_pending_decisions_missing_file_returns_empty(tmp_path):
+    assert load_pending_decisions(tmp_path / "does_not_exist.jsonl") == {}
+
+
+def test_run_calibrate_flush_pending_replays_and_archives(scratch_conn, tmp_path):
+    conn = scratch_conn
+    _seed_segment(conn, "a")
+    conn.execute("INSERT INTO calibration_review (id, decision) VALUES ('a', 'pending')")
+    path = tmp_path / "pending.jsonl"
+    append_pending_decision("a", "verified", "人手校正嘅文字", None, path=path)
+
+    result = asyncio.run(run_calibrate_flush_pending(conn=conn, in_path=path))
+
+    assert result == {"flushed": 1, "errors": 0, "archived_to": result["archived_to"]}
+    assert not path.exists()  # renamed away, not left for re-flush
+    row = conn.execute("SELECT decision, reviewed_text FROM calibration_review WHERE id='a'").fetchone()
+    assert row == ("verified", "人手校正嘅文字")
+    tier_row = conn.execute("SELECT tier FROM tiers WHERE id='a'").fetchone()
+    assert tier_row == ("gold",)
+
+
+def test_run_calibrate_flush_pending_empty_buffer_is_noop(scratch_conn, tmp_path):
+    result = asyncio.run(run_calibrate_flush_pending(conn=scratch_conn, in_path=tmp_path / "missing.jsonl"))
+    assert result == {"flushed": 0, "errors": 0, "archived_to": None}
+
+
+def test_run_calibrate_flush_pending_leaves_failed_entries_for_retry(scratch_conn, tmp_path):
+    conn = scratch_conn
+    # 'a' exists in calibration_review, 'ghost' does not -- record_decision's
+    # UPDATE affects 0 rows for it (not an exception), so simulate a real
+    # failure via an invalid decision value smuggled into the buffer file
+    # directly (append_pending_decision itself validates and would refuse).
+    _seed_segment(conn, "a")
+    conn.execute("INSERT INTO calibration_review (id, decision) VALUES ('a', 'pending')")
+    path = tmp_path / "pending.jsonl"
+    append_pending_decision("a", "verified", "good", None, path=path)
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps({"id": "bad1", "decision": "bogus", "text": None, "flag_reason": None}) + "\n")
+
+    result = asyncio.run(run_calibrate_flush_pending(conn=conn, in_path=path))
+
+    assert result["flushed"] == 1
+    assert result["errors"] == 1
+    assert result["archived_to"] is None
+    assert path.exists()  # left in place for retry, not archived
+    remaining = load_pending_decisions(path)
+    assert set(remaining) == {"bad1"}
