@@ -102,7 +102,7 @@ canto-hk-speech-pipeline/
 │
 ├── data/                         ← cleaned up 2026-07-11 (Phase A); real SSOT is config/storage_layout.yaml
 │   ├── raw/       → /mnt/Drive2/canto-corpus/data/raw/{rthk,youtube,podcast}/  (native container, transient, still active)
-│   └── ct2_models/                (2.9GB, canto_ft ctranslate2 model — active, asr.transcribe uses it)
+│   └── ct2_models/                (2.9GB, canto_ft ctranslate2 model — DEAD since canto_ft retired 2026-07-13; deletion candidate, see docs/PIPELINE_REVIEW_2026-07-13.md)
 │   (the misleading `data/segments/*`-→-Drive4-only symlinks and dead `data/filtered`/`data/final`
 │   have been removed — segments are 3-way sharded across Drive2/3/4, never read via a symlink)
 │
@@ -137,8 +137,8 @@ duplicating output.
 | `segment.diarize` | `raw_files` | `diarization_turns`, `raw_segments` | pyannote 3.1, sidecar-reuse-first, GPU fallback for genuine misses |
 | `segment.vad_cut` | `diarization_turns` | `segments` | Silero VAD *within* each turn → single-speaker 3–20s clips, written as **48kHz FLAC** (since 2026-07-05, P5-A) |
 | `pregate.snr` | `segments` | `pregate` | fast SNR/DNSMOS pre-gate before spending ASR GPU time |
-| `asr.transcribe` | `segments` | `asr_results` | 3 **active** models across 3 backends (faster-whisper `canto_ft`, `qwen3_asr` added 2026-07-07, `sense_voice` added 2026-07-08) — never `language="yue"` for the Whisper model. A 4th model, `whisper_v3`, is **retired** (disabled 2026-07-10, DECISIONS.md — measurably inaccurate; historical rows kept, never dispatched or read) |
-| `asr.agreement` | `asr_results` | `asr_agreement` | cross-model char-overlap agreement score, computed over the 3 active models only (`canto_ft` deduped to its current install path — see `pipeline/nodes/asr.py`); also writes `canto_ft_confidence` (gates `tier.assign`'s `auto_gold`) |
+| `asr.transcribe` | `segments` | `asr_results` | 2 **active** models (`qwen3_asr` added 2026-07-07, `sense_voice` added 2026-07-08). Two models are **retired**: `whisper_v3` (2026-07-10) and `canto_ft` (2026-07-13) — both measurably inaccurate (DECISIONS.md); historical rows kept, never dispatched or read. Run each model sequentially-exclusive across both GPUs with `--batch 64` (see DECISIONS.md 2026-07-13) |
+| `asr.agreement` | `asr_results` | `asr_agreement` | cross-model char-overlap agreement score, computed over the 2 active models only; still captures `canto_ft_confidence` from historical rows where present (always `NULL` for new segments since canto_ft's 2026-07-13 retirement — so `tier.assign`'s `auto_gold` gate fails closed on new data, see the tier note below) |
 | `filter.text` | `asr_agreement` | `filters_text` | length/English-ratio/Mandarin-ratio gates — no audio decode |
 | `filter.acoustic` | `filters_text` (pass=true only) | `filters_acoustic` | SNR + DNSMOS — CPU worker-subprocess pool |
 | `filter.decide` | `filters_text` + `filters_acoustic` | `filters` | merges both into the final `pass`/`fail_reason` |
@@ -166,9 +166,15 @@ per-transaction, so two separate `pipe run X` invocations can never hold the wri
 the same time. `python -m pipeline.cli run-many <node> -- <node> ...` opens **one**
 shared connection and gives each node its own `conn.cursor()`, running them concurrently
 via `asyncio.gather` — e.g. a GPU node (`asr.transcribe`) and a CPU node (`filter.acoustic`)
-now run side-by-side instead of serializing on the lock. As of this writing **10 of 22**
-node functions accept the `conn=` injection needed to join a `run-many` group (see
-`docs/ORCHESTRATOR_PLAN.md` for the exact list and what's still mechanical follow-up).
+now run side-by-side instead of serializing on the lock. **All 23/23 node call sites**
+accept the `conn=` injection needed to join a `run-many` group (completed 2026-07-07, see
+`docs/ORCHESTRATOR_PLAN.md`). Two known `run-many` caveats (both measured live): don't pair
+nodes with a very large discovery anti-join or a very large single `upsert_rows()` call
+(e.g. `speaker.cluster`'s per-source 500k-row `executemany`) with anything else — the long
+synchronous call blocks the shared event loop and starves the sibling's worker spawn; and
+don't interleave two *different* GPU models on the same device (`target=1` semaphore per
+device is not fair-shared — measured full starvation of one model, 2026-07-13). Run those
+sequentially-exclusive instead.
 A background sampler polls `nvidia-smi` and yields GPU resource-pool targets when a
 *foreign* (non-orchestrator) process is using a GPU, so this coexists with other jobs
 on the same machine rather than assuming exclusive access.
@@ -190,7 +196,7 @@ CPU. The pre-2026-07-04 raw WAV backlog (decompressed from lossy AAC/opus/MP3 so
 being losslessly transcoded to FLAC by the `raw.flac` node (bit-exact-verified before the
 original WAV is ever deleted).
 
-**ASR strategy**: run ASR models per segment across three **active** backends — `canto_ft` (Cantonese fine-tuned Whisper large-v2, faster-whisper/ctranslate2, `language="zh"` + prompt), `qwen3_asr` (Qwen3-ASR-1.7B, transformers backend, native `language="Cantonese"` support — a distinct architecture, not Whisper-derived, added 2026-07-07), and `sense_voice` (SenseVoice-Small, funasr backend, CTC non-autoregressive, native `language="yue"` support, ~105× RTF, added 2026-07-08 — emits Simplified Chinese converted to Traditional HK via OpenCC s2hk, plus emotion/audio-event tags stored in `asr_results.metadata`, stripped from `text`). A 4th model, `whisper_v3` (base `large-v3`), was **retired 2026-07-10** (DECISIONS.md) after measurement showed it was the least accurate of the four and disproportionately dragged down cross-model agreement — its historical `asr_results` rows are kept for audit but never dispatched (`ASR_MODELS["whisper_v3"]["enabled"] = False`, `pipeline/cli.py` guard rail) or read by `asr.agreement`. Store every candidate transcript in `asr_results`; `asr.agreement` computes N-way cross-model agreement over the 3 active models (an id becomes eligible once ≥2 active models have landed; a later straggler re-triggers recompute rather than being ignored; `canto_ft`'s legacy path-string duplicates are deduped to its current install path). Empirical CER on human-verified calibration samples: `qwen3_asr` ~0.4% vs 17–36% for the others — confirmed the best-performing backend. `filter.decide`/`tier.assign` decide what's automatically trustworthy, and `calibrate.sample` + `pipe calibrate serve` (a local browser UI, live since 2026-07-10) queue a random sample of segments for human text-verification — `record_decision('verified', ...)` flips `asr_agreement.text_verified` + `tiers.tier='gold'` for that id. Never auto-trust a single ASR output, and **never use `language="yue"`** for the Whisper model — it triggers decoder collapse on large-v3 (see `docs/KNOWN_ISSUES.md §9`); Qwen3-ASR and SenseVoice are architecturally distinct from Whisper and unaffected by this bug, using `language="Cantonese"`/`"yue"` directly. Known limitation: `filter.text`/`filter.decide`/`tier.assign` discovery is a bare row-existence anti-join (not provenance-tagged like `asr_agreement.model_count`), so segments already filtered/tiered before a later model (e.g. sense_voice) improved their `asr_agreement.best_text` are **not** automatically re-evaluated — only newly-discovered segments benefit from the improved agreement.
+**ASR strategy**: run ASR models per segment across two **active** backends — `qwen3_asr` (Qwen3-ASR-1.7B, transformers backend, native `language="Cantonese"` support — a distinct architecture, not Whisper-derived, added 2026-07-07), and `sense_voice` (SenseVoice-Small, funasr backend, CTC non-autoregressive, native `language="yue"` support, ~105× RTF, added 2026-07-08 — emits Simplified Chinese converted to Traditional HK via OpenCC s2hk, plus emotion/audio-event tags stored in `asr_results.metadata`, stripped from `text`). Two models are **retired**, both via the same mechanism (`ASR_MODELS[key]["enabled"] = False` + `EXCLUDED_FROM_AGREEMENT`, `pipeline/cli.py` guard rail; historical `asr_results` rows kept for audit but never dispatched or read by `asr.agreement`): `whisper_v3` (base `large-v3`, retired 2026-07-10 — least accurate of the four, dragged down cross-model agreement) and `canto_ft` (Cantonese fine-tuned Whisper large-v2, faster-whisper/ctranslate2, retired 2026-07-13 — same 17–36% CER band as whisper_v3 AND an inherent ~4.45/s/GPU sequential-decode throughput ceiling; see DECISIONS.md). Empirical CER on human-verified calibration samples: `qwen3_asr` ~0.4% vs 17–36% for both retired Whisper-family models. Store every candidate transcript in `asr_results`; `asr.agreement` computes cross-model agreement over the 2 active models (an id becomes eligible once ≥2 active models have landed; a later straggler re-triggers recompute rather than being ignored). **Throughput conventions (measured 2026-07-13)**: run each GPU model sequentially-exclusive across both GPUs — interleaving two different models on one device starves one of them completely (per-device `target=1` semaphore is not fair-shared); and pass `--batch 64` for `qwen3_asr` (the CLI `--batch` default of 8 under-feeds its `max_inference_batch_size=64`, costing ~2.4× throughput — 17.4/s vs 42.6/s combined). `filter.decide`/`tier.assign` decide what's automatically trustworthy, and `calibrate.sample` + `pipe calibrate serve` (a local browser UI, live since 2026-07-10) queue a random sample of segments for human text-verification — `record_decision('verified', ...)` flips `asr_agreement.text_verified` + `tiers.tier='gold'` for that id. Never auto-trust a single ASR output, and **never use `language="yue"`** for any Whisper-family model — it triggers decoder collapse on large-v3 (see `docs/KNOWN_ISSUES.md §9`); Qwen3-ASR and SenseVoice are architecturally distinct from Whisper and unaffected by this bug, using `language="Cantonese"`/`"yue"` directly. Known limitation: `filter.text`/`filter.decide`/`tier.assign` discovery is a bare row-existence anti-join (not provenance-tagged like `asr_agreement.model_count`), so segments already filtered/tiered before a later model improved their `asr_agreement.best_text` are **not** automatically re-evaluated — only newly-discovered segments benefit from the improved agreement.
 
 ---
 
@@ -412,9 +418,12 @@ Full schema with validation rules: `docs/MANIFEST_SCHEMA.md`
 table / `tier.assign` node produces a **verification-confidence** tier with 5 values
 (added `auto_gold` 2026-07-10, thresholds raised + `bronze` added 2026-07-11, DECISIONS.md):
 `gold` (human text-verified via `pipe calibrate serve`), `auto_gold` (**not** human-verified
-— a statistical-confidence tier: 3-way ASR agreement ≥ 0.95 AND `canto_ft`'s own confidence
-> 0.8, sample-QA'd rather than exhaustively reviewed — never treat as equivalent to
-`text_verified`), `silver` (ASR agreement ≥ 0.85), `bronze` (ASR agreement ≥ 0.70 — the
+— a statistical-confidence tier: ASR agreement ≥ 0.95 AND `canto_ft_confidence` > 0.8,
+sample-QA'd rather than exhaustively reviewed — never treat as equivalent to
+`text_verified`. ⚠️ Since `canto_ft`'s 2026-07-13 retirement, `canto_ft_confidence` is
+always `NULL` for new segments, so the gate **fails closed** — new segments cap at
+silver/bronze until a data-driven 2-model-agreement-only threshold is adopted; see
+`pending_task.md` T16 and DECISIONS.md 2026-07-13), `silver` (ASR agreement ≥ 0.85), `bronze` (ASR agreement ≥ 0.70 — the
 lowest manifest-eligible bar, QA'd at the highest sample rate of the three statistical
 tiers, see `pipeline/nodes/calibrate.py`'s `QA_SAMPLE_RATE_BY_TIER`), `excluded` (< 0.70).
 `docs/LABEL_FRAMEWORK_SPEC.md` §10 separately proposes an **A/B TTS-quality** tier
@@ -462,7 +471,7 @@ tiers, not human-reviewed; see the QA backlog in `pending_task.md`).
 |------|--------|---------|
 | DuckDB | PyPI | The catalog (`metadata/corpus.duckdb`) — single source of truth for all node state |
 | canto-hk-g2p | [github.com/typangaa/canto-hk-g2p](https://github.com/typangaa/canto-hk-g2p) | `g2p` node (Rust+PyO3) |
-| faster-whisper | PyPI | `asr.transcribe` (`canto_ft`; `whisper_v3` retired 2026-07-10, dependency kept only for `canto_ft`'s ctranslate2 backend) |
+| faster-whisper | PyPI | **no longer used at runtime** — both Whisper-family models retired (`whisper_v3` 2026-07-10, `canto_ft` 2026-07-13); dependency kept in `pyproject.toml` for now so historical code paths import cleanly (removal candidate, see docs/PIPELINE_REVIEW_2026-07-13.md; remember: `uv pip`, never `uv sync`) |
 | qwen-asr | PyPI | `asr.transcribe` (qwen3_asr, transformers backend) |
 | funasr + modelscope | PyPI (ModelScope model license, non-OSI, commercial use permitted) | `asr.transcribe` (sense_voice, SenseVoice-Small) |
 | opencc-python-reimplemented | PyPI | `asr.transcribe` (sense_voice's Simplified→Traditional HK s2hk conversion) |

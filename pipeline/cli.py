@@ -114,8 +114,9 @@ def cmd_run_label_suite(args: argparse.Namespace) -> int:
 
 def _check_asr_models_enabled(model_keys: list[str]) -> None:
     """Guard rail (added 2026-07-10, DECISIONS.md): refuse to dispatch any ASR model
-    ASR_MODELS marks disabled (currently just whisper_v3, retired for measured
-    inaccuracy -- see pipeline/nodes/asr.py's module docstring). Without this, someone
+    ASR_MODELS marks disabled (currently whisper_v3 and canto_ft, both retired for
+    measured inaccuracy/throughput -- see pipeline/nodes/asr.py's module docstring).
+    Without this, someone
     could still pass --models with the old 4-model list from habit/an old script and
     silently burn GPU time on a model whose output is never read by asr.agreement/
     manifest.build anymore."""
@@ -469,6 +470,16 @@ async def _run_many_adapt_recover_orphans(args: argparse.Namespace, conn) -> dic
     return await run_recover_orphans(conn=conn, limit=args.limit)
 
 
+async def _run_many_adapt_reingest_pending(args: argparse.Namespace, conn) -> dict:
+    from pipeline.nodes.recover_orphans import run_reingest_pending
+    return await run_reingest_pending(conn=conn, limit=args.limit)
+
+
+async def _run_many_adapt_embed_backfill(args: argparse.Namespace, conn) -> dict:
+    from pipeline.nodes.speaker import run_embed_backfill
+    return await run_embed_backfill(conn=conn, limit=args.limit)
+
+
 async def _run_many_adapt_rebalance_segments(args: argparse.Namespace, conn) -> dict:
     if args.delete_verified:
         from pipeline.nodes.rebalance import run_rebalance_delete_verified
@@ -516,6 +527,8 @@ RUN_MANY_ADAPTERS = {
     "label.suite": _run_many_adapt_label_suite,
     "label.prosody": _run_many_adapt_label_prosody,
     "recover.orphans": _run_many_adapt_recover_orphans,
+    "recover.reingest_pending": _run_many_adapt_reingest_pending,
+    "embed.backfill": _run_many_adapt_embed_backfill,
     "rebalance.segments": _run_many_adapt_rebalance_segments,
     "raw.flac": _run_many_adapt_raw_flac,
 }
@@ -603,6 +616,18 @@ def cmd_run_recover_orphans(args: argparse.Namespace) -> int:
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     result = asyncio.run(run_recover_orphans(limit=args.limit))
+    print(f"\nDone: {result}")
+    return 0
+
+
+def cmd_run_reingest_pending(args: argparse.Namespace) -> int:
+    import asyncio
+    import logging
+
+    from pipeline.nodes.recover_orphans import run_reingest_pending
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    result = asyncio.run(run_reingest_pending(limit=args.limit))
     print(f"\nDone: {result}")
     return 0
 
@@ -757,6 +782,18 @@ def cmd_run_speaker_cluster(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_run_embed_backfill(args: argparse.Namespace) -> int:
+    import asyncio
+    import logging
+
+    from pipeline.nodes.speaker import run_embed_backfill
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    result = asyncio.run(run_embed_backfill(limit=args.limit))
+    print(f"\nDone: {result}")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="pipe")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -860,6 +897,9 @@ def main() -> int:
     p_run_recover = run_sub.add_parser("recover.orphans", help="one-time: classify legacy VAD-cut WAVs missing from the catalog, backfill promising ones, queue the rest as pending_delete")
     p_run_recover.add_argument("--limit", type=int, default=None)
     p_run_recover.set_defaults(func=cmd_run_recover_orphans)
+    p_run_reingest = run_sub.add_parser("recover.reingest_pending", help="one-time (2026-07-12): re-admit orphan_segments pending_delete rows into segments for a fresh pass through the current 3-model ASR pipeline, instead of deleting")
+    p_run_reingest.add_argument("--limit", type=int, default=None)
+    p_run_reingest.set_defaults(func=cmd_run_reingest_pending)
     p_run_rebalance = run_sub.add_parser("rebalance.segments", help="P5-C: spread segments across the 3-way Drive2/3/4 shard (CPU+IO); --delete-verified reclaims space for already-verified migrations")
     p_run_rebalance.add_argument("--workers", type=int, default=8)
     p_run_rebalance.add_argument("--batch", type=int, default=200, help="items per catalog-commit batch")
@@ -871,13 +911,15 @@ def main() -> int:
     p_run_rebalance.set_defaults(func=cmd_run_rebalance_segments)
     p_run_asr = run_sub.add_parser(
         "asr.transcribe",
-        help="P3: multi-model ASR across GPUs (canto_ft, whisper_v3, qwen3_asr, sense_voice)",
+        help="P3: multi-model ASR across GPUs (active: qwen3_asr, sense_voice; canto_ft/whisper_v3 retired)",
     )
     p_run_asr.add_argument(
-        "--models", default="canto_ft,whisper_v3",
+        "--models", default="qwen3_asr,sense_voice",
         help=(
             "comma-separated model keys, paired positionally with --devices. "
-            "Valid keys: canto_ft, whisper_v3, qwen3_asr, sense_voice. "
+            "Active keys: qwen3_asr, sense_voice. canto_ft and whisper_v3 are retired "
+            "(ASR_MODELS[...]['enabled'] = False, see pipeline/nodes/asr.py) and refused "
+            "by the guard rail below. "
             "Example: --models sense_voice,sense_voice --devices cuda:0,cuda:1 "
             "(splits sense_voice across both GPUs round-robin)."
         ),
@@ -940,6 +982,9 @@ def main() -> int:
     p_run_spk_cluster.add_argument("--limit", type=int, default=None,
                                     help="cap segments loaded per source (testing)")
     p_run_spk_cluster.set_defaults(func=cmd_run_speaker_cluster)
+    p_run_embed_backfill = run_sub.add_parser("embed.backfill", help="one-time (2026-07-12): migrate existing .embed.npy sidecar contents into speaker_embeddings.embedding (I/O optimization Phase 3)")
+    p_run_embed_backfill.add_argument("--limit", type=int, default=None)
+    p_run_embed_backfill.set_defaults(func=cmd_run_embed_backfill)
     p_run_tier = run_sub.add_parser("tier.assign", help="P4: verification-confidence tier (gold/auto_gold/silver/bronze/excluded), CPU in-supervisor")
     p_run_tier.add_argument("--batch", type=int, default=5000)
     p_run_tier.add_argument("--limit", type=int, default=None)

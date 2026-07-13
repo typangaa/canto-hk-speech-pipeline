@@ -1,5 +1,8 @@
 # Pipeline Comprehensive Review + Cleanup Plan — 2026-07-11
 
+> **➡️ 後繼版本:`docs/PIPELINE_REVIEW_2026-07-13.md`**(canto_ft 退役後嘅新一輪 review;
+> issue 編號 #17 起接續本 doc 嘅 #1–16;本 doc 唔再更新,只作歷史記錄)。
+>
 > **Status**: **EXECUTED + PUSHED 2026-07-11**。全部四個 phase(A/B/C/D)已完成並逐一驗證
 > (`pytest tests/` + `pipeline.cli catalog verify`)。Phase A/B/D 純磁碟操作,已生效。
 > Phase C 產生兩個 commit(`420981f`+`c68c5f2`),連同 DECISIONS.md 措辭修正(`16bdd96`)

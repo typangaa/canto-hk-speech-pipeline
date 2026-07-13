@@ -114,22 +114,24 @@ def test_resolve_model_key_unrecognised_returns_none():
     assert resolve_model_key("some/unregistered-model+zh") is None
 
 
-def test_whisper_v3_disabled_and_excluded_from_agreement():
+def test_whisper_v3_and_canto_ft_disabled_and_excluded_from_agreement():
     assert is_model_enabled("whisper_v3") is False
-    assert is_model_enabled("canto_ft") is True
+    assert is_model_enabled("canto_ft") is False
+    assert is_model_enabled("qwen3_asr") is True
+    assert is_model_enabled("sense_voice") is True
     assert "whisper_v3" in EXCLUDED_FROM_AGREEMENT
-    assert "canto_ft" not in EXCLUDED_FROM_AGREEMENT
+    assert "canto_ft" in EXCLUDED_FROM_AGREEMENT
 
 
 def test_compute_agreement_row_both_present_agree():
     """Identical texts produce agreement==1.0, best_text is that text, text_verified is False."""
-    row = compute_agreement_row('id1', [CANTO_FT, QWEN3_ASR], ['abc', 'abc'], [0.9, 0.5], 2)
+    row = compute_agreement_row('id1', [QWEN3_ASR, SENSE_VOICE], ['abc', 'abc'], [0.9, 0.5], 2)
     assert row['id'] == 'id1'
     assert row['agreement'] == 1.0
     assert row['best_text'] == 'abc'
     assert row['text_verified'] is False
     assert row['model_count'] == 2
-    assert row['canto_ft_confidence'] == 0.9
+    assert row['canto_ft_confidence'] is None, "canto_ft has no row for this id"
 
 
 def test_compute_agreement_row_both_empty():
@@ -158,7 +160,7 @@ def test_compute_agreement_row_one_empty_one_present():
 
 def test_compute_agreement_row_picks_higher_confidence():
     """When both texts are non-empty, the one with higher confidence wins."""
-    row = compute_agreement_row('id5', [CANTO_FT, QWEN3_ASR], ['foo', 'bar'], [0.9, 0.3], 2)
+    row = compute_agreement_row('id5', [QWEN3_ASR, SENSE_VOICE], ['foo', 'bar'], [0.9, 0.3], 2)
     assert row['best_text'] == 'foo'
     assert row['text_verified'] is False
 
@@ -175,25 +177,28 @@ def test_compute_agreement_row_three_way():
 
 
 def test_compute_agreement_row_three_way_one_empty():
-    """With 3 candidates and one empty, agreement is computed over the 2 non-empty texts only."""
+    """A 3rd row (canto_ft, retired/excluded) doesn't count toward agreement even though
+    its text matches -- with only 2 active candidates (qwen3_asr, sense_voice) and one of
+    them empty, fewer than 2 non-empty ACTIVE texts remain, so agreement collapses to 0.0."""
     row = compute_agreement_row(
         'id7', [CANTO_FT, QWEN3_ASR, SENSE_VOICE], ['hello', '', 'hello'], [0.6, 0.9, 0.5], 3
     )
-    assert row['agreement'] == 1.0  # the two non-empty texts are identical
-    assert row['best_text'] == 'hello'
+    assert row['agreement'] == 0.0, "canto_ft's matching 'hello' must not count -- it's excluded"
+    assert row['best_text'] == 'hello'  # sense_voice's non-empty text wins over qwen3_asr's empty one
     assert row['model_count'] == 3
+    assert row['canto_ft_confidence'] == 0.6, "still captured for the auto_gold gate even though excluded from agreement"
 
 
 def test_compute_agreement_row_excludes_whisper_v3_from_agreement_and_best_text():
     """whisper_v3 is resolved (not silently dropped as unrecognised) but must never
     contribute to the agreement ratio or win best_text, even with the highest confidence."""
     row = compute_agreement_row(
-        'id8', [CANTO_FT, WHISPER_V3, QWEN3_ASR],
+        'id8', [SENSE_VOICE, WHISPER_V3, QWEN3_ASR],
         ['agree text', 'totally different', 'agree text'],
         [0.5, 0.99, 0.6], 3,
     )
     assert row['best_text'] == 'agree text', "whisper_v3's higher confidence must not win best_text"
-    assert row['agreement'] == 1.0, "agreement must be computed over canto_ft/qwen3_asr only"
+    assert row['agreement'] == 1.0, "agreement must be computed over sense_voice/qwen3_asr only"
 
 
 def test_compute_agreement_row_whisper_v3_only_two_others_empty():
@@ -206,25 +211,26 @@ def test_compute_agreement_row_whisper_v3_only_two_others_empty():
 
 
 def test_compute_agreement_row_dedupes_canto_ft_legacy_path():
-    """A stale-path canto_ft duplicate row must not double-count canto_ft's opinion --
-    only the current-path row is used, regardless of list order."""
+    """A stale-path canto_ft duplicate row must not double-count canto_ft's opinion in
+    canto_ft_confidence -- the only channel canto_ft still feeds now that it's excluded
+    from agreement/best_text -- only the current-path row is used, regardless of list order."""
     legacy_path = "/mnt/Drive3/Development/AI-ML/canto-corpus/data/ct2_models/whisper-large-v2-cantonese+zh"
     row = compute_agreement_row(
         'id10',
-        [legacy_path, CANTO_FT, QWEN3_ASR],
-        ['stale legacy text', 'current text', 'current text'],
-        [0.99, 0.5, 0.5],
-        3,
+        [legacy_path, CANTO_FT, QWEN3_ASR, SENSE_VOICE],
+        ['stale legacy text', 'current text', 'agree text', 'agree text'],
+        [0.99, 0.5, 0.5, 0.5],
+        4,
     )
-    assert row['agreement'] == 1.0, "stale-path canto_ft text must be dropped, not compared"
-    assert row['best_text'] == 'current text'
-    assert row['canto_ft_confidence'] == 0.5, "canto_ft_confidence must come from the current-path row"
+    assert row['agreement'] == 1.0, "agreement over the 2 active models (qwen3_asr/sense_voice) only"
+    assert row['best_text'] == 'agree text'
+    assert row['canto_ft_confidence'] == 0.5, "canto_ft_confidence must come from the current-path row, not the stale legacy-path duplicate"
 
 
 def test_compute_agreement_row_unresolvable_model_dropped():
     """An unrecognised model string contributes nothing (fail-closed), not an error."""
     row = compute_agreement_row(
-        'id11', [CANTO_FT, 'some/unregistered-model+zh', QWEN3_ASR],
+        'id11', [SENSE_VOICE, 'some/unregistered-model+zh', QWEN3_ASR],
         ['abc', 'abc', 'abc'], [0.9, 0.9, 0.9], 3,
     )
     assert row['agreement'] == 1.0

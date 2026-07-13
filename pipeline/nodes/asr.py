@@ -13,12 +13,32 @@ whisper_v3 RETIRED (2026-07-10, owner decision — see DECISIONS.md and
 docs/FINDINGS_ASR_AGREEMENT_THRESHOLDS.md): measurably the least accurate of the
 four backends and a disproportionate drag on cross-model agreement (excluding it
 raised the 3-way ≥0.90 agreement coverage from 15.7% to 41.1% of the corpus).
-ASR_MODELS["whisper_v3"]["enabled"] = False — asr.transcribe no longer dispatches
-it (pipeline/cli.py guard rail) and asr.agreement excludes its historical
-asr_results text from both the agreement score and best_text candidacy (see
-EXCLUDED_FROM_AGREEMENT / resolve_model_key() / compute_agreement_row() below).
-Its ~618,695 historical rows are kept for audit only — three ASR backends
-(canto_ft, qwen3_asr, sense_voice) are now the active set.
+
+canto_ft RETIRED (2026-07-13, owner decision — see DECISIONS.md): faster-whisper's
+per-item sequential decode (no batched-tensor path — see TranscribeWorker.forward_batch()
+below) hard-ceilings at ~4.45/s/GPU regardless of batching/sharding strategy, making
+it the throughput bottleneck for any large backlog (T15's 578,889-segment reingest
+was projected at ~18-24h for canto_ft's share alone vs ~4.4h for qwen3_asr on the
+same two GPUs). Calibration-review CER also measured canto_ft in the same poor
+17-36% band as the already-retired whisper_v3, vs qwen3_asr's ~0.4% (DECISIONS.md
+2026-07-10 entry) — same "slow AND inaccurate" profile that justified whisper_v3's
+retirement. ASR_MODELS["canto_ft"]["enabled"] = False — asr.transcribe no longer
+dispatches it and asr.agreement excludes its historical asr_results text from both
+the agreement score and best_text candidacy (EXCLUDED_FROM_AGREEMENT below). Its
+historical rows are kept for audit only, never read by any live node going forward.
+
+Known consequence (accepted, not yet re-solved — see DECISIONS.md 2026-07-13):
+tier.assign's `auto_gold` gate requires `canto_ft_confidence > 0.8` because canto_ft
+was the only active model with a real logprob-derived confidence (qwen3_asr/sense_voice
+both report a nominal 1.0 placeholder — see their Worker docstrings below). With
+canto_ft retired, `canto_ft_confidence` is always None for new segments, which
+assign_tier() already treats as failing the auto_gold gate (see pipeline/nodes/tier.py) —
+so new segments cap at silver/bronze until a 2-model-agreement-only auto_gold
+threshold is data-driven and adopted (owner wants agreement-distribution stats
+checked first, e.g. via a fresh FINDINGS_ASR_AGREEMENT_THRESHOLDS.md-style pass,
+before picking a number — do not hardcode a guess).
+
+Two ASR backends (qwen3_asr, sense_voice) are now the active set.
 
 Both/all models run under ONE supervisor process (run_asr_transcribe), never as
 separate `pipe run` invocations — DuckDB is single-writer (P2 backlog finding,
@@ -112,12 +132,27 @@ _LOCAL_CANTO = str(REPO_ROOT / "data" / "ct2_models" / "whisper-large-v2-cantone
 # model_field() = "Qwen/Qwen3-ASR-1.7B+Cantonese", a distinct string that never
 # collides with the two faster-whisper model fields already in asr_results.
 ASR_MODELS = {
+    # RETIRED 2026-07-13 (owner decision, DECISIONS.md): faster-whisper's per-item
+    # sequential decode (TranscribeWorker.forward_batch() below has no batched-tensor
+    # path) hard-ceilings at ~4.45/s/GPU no matter how work is sharded -- made it the
+    # throughput bottleneck for the T15 578,889-segment backlog (~18-24h projected for
+    # canto_ft's share alone). CER also measured in the same poor 17-36% band as the
+    # already-retired whisper_v3, vs qwen3_asr's ~0.4% -- same "slow AND inaccurate"
+    # profile. "enabled": False means (a) asr.transcribe refuses to dispatch it and
+    # (b) asr.agreement excludes its asr_results text from both the agreement score
+    # and best_text candidacy (EXCLUDED_FROM_AGREEMENT below). Historical rows are
+    # NOT deleted -- kept for audit/reference only, never read by any live node going
+    # forward. Known consequence: tier.assign's auto_gold gate needs canto_ft_confidence
+    # (the only active model with a real, non-nominal confidence) -- new segments now
+    # cap at silver/bronze until a 2-model-agreement-only auto_gold threshold is
+    # data-driven and adopted (see module docstring above; do not hardcode a guess).
     "canto_ft": {
         "id": _LOCAL_CANTO,
         "lang": "zh",
         "prompt": CANTO_PROMPT,
         "backend": "faster_whisper",
         "description": "Cantonese fine-tuned Whisper large-v2 (local ct2)",
+        "enabled": False,
     },
     # RETIRED 2026-07-10 (owner decision, DECISIONS.md): measurably the least accurate of
     # the four backends and a drag on cross-model agreement -- see
@@ -202,10 +237,10 @@ def resolve_model_key(model_field_value: str) -> str | None:
 
 
 # Models whose asr_results text is excluded from both the agreement score AND best_text
-# candidacy (owner decision 2026-07-10 -- see ASR_MODELS["whisper_v3"]'s comment and
-# docs/FINDINGS_ASR_AGREEMENT_THRESHOLDS.md). Historical rows are kept, just never read
-# by compute_agreement_row() below.
-EXCLUDED_FROM_AGREEMENT = {"whisper_v3"}
+# candidacy (owner decision 2026-07-10 for whisper_v3, 2026-07-13 for canto_ft -- see
+# their ASR_MODELS comments and docs/FINDINGS_ASR_AGREEMENT_THRESHOLDS.md). Historical
+# rows are kept, just never read by compute_agreement_row() below.
+EXCLUDED_FROM_AGREEMENT = {"whisper_v3", "canto_ft"}
 
 
 # ---------------------------------------------------------------------------
