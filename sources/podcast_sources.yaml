@@ -1465,6 +1465,105 @@ sources:
     status: "active"
     notes: "FOUND 2026-06-12. HK court and legal news podcast. Formal legal Cantonese, high clarity."
 
+  - name: "廣告風涼話 (Adman's Rants)"
+    rss_url: "https://rudileung.com/feed/"
+    source: "podcast"
+    language: "yue"
+    domain: "other"
+    style: "conversational"
+    priority: "medium"
+    estimated_hours: 40
+    status: "active"
+    notes: "FOUND 2026-07-12. Technology, AI, and marketing discussion podcast. Modern business Cantonese, clean home-studio audio."
+
+  - name: "點點粵：廣東話讀書會 (Dim Dim Yuet)"
+    rss_url: "https://feed.firstory.me/rss/user/ckg255q4o2y620875s11j5276"
+    source: "podcast"
+    language: "yue"
+    domain: "educational"
+    style: "narration"
+    priority: "high"
+    estimated_hours: 40
+    status: "active"
+    notes: "FOUND 2026-07-13. Weekly book summaries and knowledge sharing. Clean HK Cantonese, low/no BGM."
+
+  - name: "人約黃昏後 (Yat Yeuk Wong Fuan Hau)"
+    rss_url: "https://feed.firstory.me/rss/user/cl1w00n1l006n0h090885e34u"
+    source: "podcast"
+    language: "yue"
+    domain: "other"
+    style: "conversational"
+    priority: "medium"
+    estimated_hours: 50
+    status: "active"
+    notes: "FOUND 2026-07-13. Lifestyle, movies, philosophy. Two HK hosts, natural conversational dialogue, clean audio."
+
+  - name: "夠鐘瞓覺 (Gau Zung Fan Gaau)"
+    rss_url: "https://feed.firstory.me/rss/user/ckm6v197k344z0807b53x637m"
+    source: "podcast"
+    language: "yue"
+    domain: "educational"
+    style: "narration"
+    priority: "high"
+    estimated_hours: 25
+    status: "active"
+    notes: "FOUND 2026-07-13. Bedtime stories, very slow and clear pacing, excellent for prosody training, minimal BGM."
+
+  - name: "渣女揸男同鄉會 (Jar Jar Society)"
+    rss_url: "https://feeds.soundon.fm/podcasts/4f2d3731-0ea5-4122-8785-61266e855734.xml"
+    source: "podcast"
+    language: "yue"
+    domain: "other"
+    style: "conversational"
+    priority: "high"
+    estimated_hours: 80
+    status: "active"
+    notes: "FOUND 2026-07-13. Relationship and society talk. Studio lapel mics, high voice clarity, low BGM."
+
+  - name: "Vivian's story time 廣東話故事"
+    rss_url: "https://feeds.soundon.fm/podcasts/1742848089/feed.xml"
+    source: "podcast"
+    language: "yue"
+    domain: "educational"
+    style: "narration"
+    priority: "medium"
+    estimated_hours: 8
+    status: "active"
+    notes: "FOUND 2026-07-13. Waldorf preschool story time, slow reading, quiet room acoustics, very clean speech."
+
+  - name: "文哥說書:廣東話分享知識 (Man Gor Book Club)"
+    rss_url: "https://anchor.fm/s/e78559e8/podcast/rss"
+    source: "podcast"
+    language: "yue"
+    domain: "educational"
+    style: "narration"
+    priority: "high"
+    estimated_hours: 60
+    status: "active"
+    notes: "FOUND 2026-07-13. Book summaries and wisdom. Single narrator, home studio setup, dry voice with no BGM."
+
+  - name: "GameBoyz 爛玩仔"
+    rss_url: "https://anchor.fm/s/10acef508/podcast/rss"
+    source: "podcast"
+    language: "yue"
+    domain: "other"
+    style: "conversational"
+    priority: "medium"
+    estimated_hours: 60
+    status: "active"
+    notes: "FOUND 2026-07-13. Anime, retro culture and gaming discussion. Two HK hosts, casual fast-paced Cantonese, no BGM."
+
+  - name: "KITWA 播客室 (廣東話)"
+    rss_url: "https://rss.buzzsprout.com/2389701.rss"
+    source: "podcast"
+    language: "yue"
+    domain: "educational"
+    style: "narration"
+    priority: "high"
+    estimated_hours: 25
+    status: "active"
+    notes: "FOUND 2026-07-13. Book reviews and personal growth. Clear narration by standard Cantonese speaker, no BGM."
+
 # ──────────────────────────────────────────────
 # Download Configuration
 # ──────────────────────────────────────────────

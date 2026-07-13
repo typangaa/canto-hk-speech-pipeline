@@ -55,11 +55,12 @@
   priority: "high"
   estimated_hours: 500
   max_age_days: 365
-  status: "active"
+  status: "paused"
   notes: >
     CONFIRMED 2026-06-10. ~15k videos. TVB news clips channel, separate from @tvbnewshk.
     Professional news anchors, studio quality, formal HK broadcast Cantonese.
     Time-bounded clips (5-30 min) are easier to process than full broadcasts.
+    PAUSED 2026-07-13: YouTube rate-limiting IP. Re-enable after cooldown.
 
 - name: "HOY 78 x 有線新聞"
   url: "https://www.youtube.com/@hoy78cablenews"
@@ -2891,6 +2892,110 @@
   max_age_days: 3650
   status: "evaluate"
   notes: "FOUND 2026-07-08. Self-help and psychology audiobooks. Clean readings, quiet background music track."
+
+- name: "香港公共圖書館"
+  url: "https://www.youtube.com/@HongKongPublicLibraries"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 120
+  max_age_days: 3650
+  status: "active"
+  notes: "FOUND 2026-07-12. Academic lectures on history and humanities. Clean podium speech, zero background music."
+
+- name: "香港人文學會 HKSHP"
+  url: "https://www.youtube.com/@HKSHP"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 150
+  max_age_days: 3650
+  status: "active"
+  notes: "FOUND 2026-07-12. Lectures and panels on philosophy and ethics. Room acoustics, no background music."
+
+- name: "香港亞太研究所社會與政治發展研究中心 HKIAPS-CSPDS"
+  url: "https://www.youtube.com/@hkiaps-cspds"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "medium"
+  estimated_hours: 35
+  max_age_days: 3650
+  status: "active"
+  notes: "FOUND 2026-07-12. Seminars on sociology and public policy. Direct podium mic speech, clean audio."
+
+- name: "香港特別行政區立法會 Legislative Council of HKSAR"
+  url: "https://www.youtube.com/@legcogovhk"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "other"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 1000
+  max_age_days: 365
+  status: "active"
+  notes: "FOUND 2026-07-12. LegCo chamber debates and hearings. Direct soundboard feed from chamber microphones, pristine speech, no ambient noise or music."
+
+- name: "香港電影資料館 Hong Kong Film Archive"
+  url: "https://www.youtube.com/@hongkongfilmarchive8798"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "documentary"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 25
+  max_age_days: 3650
+  status: "active"
+  notes: "FOUND 2026-07-12. Oral history interviews with HK filmmakers. Studio-grade speech quality, no BGM."
+
+- name: "香港文學生活館 The House of Hong Kong Literature"
+  url: "https://www.youtube.com/@house.of.hk.literature"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "documentary"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 30
+  max_age_days: 3650
+  status: "active"
+  notes: "FOUND 2026-07-12. Literary panels and writer interviews. Natural room speech, quiet background."
+
+- name: "Finance730"
+  url: "https://www.youtube.com/@Finance730hk"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "news"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 200
+  max_age_days: 365
+  status: "active"
+  notes: "FOUND 2026-07-12. Financial news and property market updates. Crisp studio lapel mic inputs, zero BGM, dense with finance jargon."
+
+- name: "經濟通 etnet"
+  url: "https://www.youtube.com/@etnethk"
+  type: "channel"
+  source: "youtube"
+  language: "yue"
+  domain: "news"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 300
+  max_age_days: 365
+  status: "active"
+  notes: "FOUND 2026-07-12. Economical panel discussions and stock commentary. Clean broadcast audio, highly intelligible speech."
 
 # ──────────────────────────────────────────────
 # Download Configuration

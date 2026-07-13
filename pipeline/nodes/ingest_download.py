@@ -367,6 +367,7 @@ def _download_youtube_source(
         "--no-playlist" if entry.get("type") not in ("playlist", "channel") else "--yes-playlist",
         "--format", "bestaudio/best",   # native container, NO --extract-audio/--audio-format
         "--restrict-filenames",
+        "--socket-timeout", "30",
         "--sleep-interval", "3", "--max-sleep-interval", "8",
         "--sleep-requests", "2",
         "--retries", "5",
