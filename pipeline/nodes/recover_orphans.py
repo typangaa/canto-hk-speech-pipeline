@@ -285,6 +285,117 @@ async def run_recover_orphans(*, conn=None, limit: int | None = None) -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# recover.reingest_pending -- one-time, 2026-07-12. Owner decision: the
+# pending_delete bucket was classified using LEGACY ASR/pregate evidence
+# (the old single/dual-model ASR and the old scripts/03b_acoustic_pregate.py
+# SNR formula). The current 3-model ASR ensemble (canto_ft/qwen3_asr/
+# sense_voice) measurably outperforms the legacy ASR (qwen3_asr ~0.4% CER on
+# calibration samples vs 17-36% for the others -- see CLAUDE.md's "ASR
+# strategy"), so a segment the legacy pipeline rejected for low ASR agreement
+# may well pass under the current models. Rather than delete this bucket,
+# re-admit it into `segments` (NO pre-seeded ASR text -- the whole point is a
+# clean re-transcription, not reuse of the old candidates) so it flows
+# through the CURRENT pregate.snr/asr.transcribe/asr.agreement/filter.*/
+# tier.assign nodes exactly like a fresh cut, and let those nodes make the
+# real call. `orphan_segments.status` moves pending_delete -> re_admitted
+# (a third status value, deliberately distinct from `recovered`, so the
+# original one-time classification's audit trail stays intact).
+# ---------------------------------------------------------------------------
+
+REINGEST_BATCH_SIZE = 5000
+
+
+def discover_reingest(conn) -> list[tuple[str, str]]:
+    """Return (source, wav_path) for every orphan_segments row still queued
+    pending_delete. Idempotent: once reingested a row's status flips to
+    're_admitted', dropping it out of this WHERE clause."""
+    return conn.execute(
+        "SELECT source, audio_path FROM orphan_segments WHERE status = 'pending_delete'"
+    ).fetchall()
+
+
+async def run_reingest_pending(*, conn=None, limit: int | None = None,
+                                batch_size: int = REINGEST_BATCH_SIZE) -> dict:
+    """conn: optional pre-opened DuckDB connection (or cursor) — see other
+    nodes' docstrings for the `pipe run-many` rationale. Defaults to a fresh
+    self-managed connect() for standalone `pipe run recover.reingest_pending`
+    usage."""
+    import soundfile as sf
+
+    from pipeline.catalog.catalog import connect, upsert_rows
+    from pipeline.orchestrator.journal import new_run_id, record_batch
+
+    conn = conn or connect()
+    log.info("recover.reingest_pending: scanning orphan_segments for pending_delete rows...")
+    rows = discover_reingest(conn)
+    if limit:
+        rows = rows[:limit]
+    log.info(f"recover.reingest_pending: {len(rows)} orphan(s) to re-admit for a fresh pipeline pass")
+    if not rows:
+        return {"scanned": 0, "admitted": 0, "unreadable": 0}
+
+    run_id = new_run_id("recover.reingest_pending")
+    today = datetime.now(timezone.utc).date().isoformat()
+
+    scanned = 0
+    admitted = 0
+    unreadable = 0
+    t0 = time.time()
+
+    seg_batch: list[dict] = []
+    orphan_paths: list[str] = []
+
+    def flush():
+        nonlocal seg_batch, orphan_paths
+        if seg_batch:
+            upsert_rows(conn, "segments", seg_batch, ["id"])
+        if orphan_paths:
+            placeholders = ",".join(["?"] * len(orphan_paths))
+            conn.execute(
+                f"UPDATE orphan_segments SET status = 're_admitted' WHERE audio_path IN ({placeholders})",
+                orphan_paths,
+            )
+        seg_batch, orphan_paths = [], []
+
+    for source, wav_path in rows:
+        scanned += 1
+        try:
+            info = sf.info(wav_path)
+        except Exception as exc:
+            log.warning(f"recover.reingest_pending: unreadable, left queued {wav_path}: {exc}")
+            unreadable += 1
+            continue
+
+        seg_id = _segment_id(Path(wav_path))
+        seg_batch.append({
+            "id": seg_id, "audio_path": wav_path, "source": source,
+            "source_url": None, "program": None, "domain": None,
+            "duration_sec": round(info.frames / info.samplerate, 3),
+            "sample_rate": info.samplerate,
+            "speaker_id": None, "gender": None, "style": None,
+            "created_at": today, "raw_id": None,
+        })
+        orphan_paths.append(wav_path)
+        admitted += 1
+
+        if len(orphan_paths) >= batch_size:
+            flush()
+            record_batch(conn, run_id, "recover.reingest_pending", [], "ok")
+            rate = scanned / (time.time() - t0) if time.time() > t0 else 0.0
+            log.info(f"recover.reingest_pending: {scanned}/{len(rows)} ({rate:.1f}/s) -- "
+                     f"admitted={admitted}, unreadable={unreadable}")
+
+    flush()
+
+    elapsed = time.time() - t0
+    log.info(
+        f"recover.reingest_pending DONE: {scanned} scanned, {admitted} admitted, "
+        f"{unreadable} unreadable (left queued), {elapsed:.0f}s, run_id={run_id}"
+    )
+    return {"scanned": scanned, "admitted": admitted, "unreadable": unreadable, "run_id": run_id}
+
+
 def main() -> int:
     import asyncio
 

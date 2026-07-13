@@ -24,7 +24,7 @@ from pipeline.nodes.rebalance import run_rebalance_copy, run_rebalance_delete_ve
 from pipeline.nodes import recover_orphans
 from pipeline.nodes.recover_orphans import run_recover_orphans
 from pipeline.nodes.segment import run_pregate_snr, run_segment_diarize, run_segment_vad_cut
-from pipeline.nodes.speaker import run_speaker_cluster, run_speaker_embed
+from pipeline.nodes.speaker import run_embed_backfill, run_speaker_cluster, run_speaker_embed
 from pipeline.nodes.calibrate import run_calibrate_sample
 from pipeline.nodes.tier import run_tier_assign
 
@@ -299,6 +299,28 @@ def test_run_recover_orphans_uses_injected_conn(scratch_conn, monkeypatch, tmp_p
     result = asyncio.run(run_recover_orphans(conn=scratch_conn))
 
     assert result == {"scanned": 0, "recovered": 0, "pending_delete": 0, "errors": 0}
+
+
+def test_run_reingest_pending_uses_injected_conn(scratch_conn, monkeypatch):
+    def _boom(*a, **kw):
+        raise AssertionError("run_reingest_pending must not call connect() when conn is given")
+
+    monkeypatch.setattr("pipeline.catalog.catalog.connect", _boom)
+
+    result = asyncio.run(recover_orphans.run_reingest_pending(conn=scratch_conn))
+
+    assert result == {"scanned": 0, "admitted": 0, "unreadable": 0}
+
+
+def test_run_embed_backfill_uses_injected_conn(scratch_conn, monkeypatch):
+    def _boom(*a, **kw):
+        raise AssertionError("run_embed_backfill must not call connect() when conn is given")
+
+    monkeypatch.setattr("pipeline.catalog.catalog.connect", _boom)
+
+    result = asyncio.run(run_embed_backfill(conn=scratch_conn))
+
+    assert result == {"scanned": 0, "backfilled": 0, "errors": 0}
 
 
 def test_run_rebalance_copy_uses_injected_conn(scratch_conn, monkeypatch):

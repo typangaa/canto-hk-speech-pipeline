@@ -348,6 +348,13 @@ CREATE TABLE IF NOT EXISTS speaker_embeddings (
     embedding_ref TEXT,
     provenance    TEXT   -- 'legacy_reused' (sidecar .npy found) | 'speaker_embed_node' (freshly computed on GPU)
 );
+-- 2026-07-12 (I/O optimization, docs/IO_OPTIMIZATION_PLAN.md Phase 3): the embedding
+-- vector itself, stored in-table instead of read via embedding_ref's per-file .npy
+-- sidecar -- speaker.cluster's dominant cost was opening hundreds of thousands of tiny
+-- sidecar files (ext4 dentry-cache thrashing on the giant flat segments/{source}/ dirs),
+-- not the clustering compute itself. embedding_ref is kept during the transition (rollback
+-- safety) and is speaker.cluster's fallback for any row where embedding IS NULL.
+ALTER TABLE speaker_embeddings ADD COLUMN IF NOT EXISTS embedding FLOAT[192];
 
 -- Per-segment final speaker identity. segments.speaker_id already carries the legacy
 -- manifest-derived value for all 455,299 P0 rows (a plain column, not this table — this

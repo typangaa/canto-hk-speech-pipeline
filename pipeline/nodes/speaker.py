@@ -357,6 +357,7 @@ async def run_speaker_embed(
                         "id": r["id"],
                         "source": meta[r["id"]],
                         "embedding_ref": r["embedding_ref"],
+                        "embedding": r["embedding"],
                         "provenance": "speaker_embed_node",
                     }
                     for r in result["rows"]
@@ -368,6 +369,7 @@ async def run_speaker_embed(
                         "id": sid,
                         "source": meta[sid],
                         "embedding_ref": None,
+                        "embedding": None,
                         "provenance": "read_failed",
                     }
                     for sid in result.get("skipped_ids", [])
@@ -504,9 +506,13 @@ class EmbedWorker(GPUWorkerBase):
             try:
                 with torch.no_grad():
                     emb = self.model.encode_batch(wav)  # (1, 1, D)
-                emb_np = emb.squeeze().cpu().numpy()
+                emb_np = emb.squeeze().cpu().numpy().astype(np.float32)
                 np.save(sidecar, emb_np)
-                results.append({"id": seg_id, "embedding_ref": sidecar})
+                results.append({
+                    "id": seg_id,
+                    "embedding_ref": sidecar,
+                    "embedding": emb_np.tolist(),
+                })
             except Exception as e:
                 log.error(f"EmbedWorker: encode failed for {seg_id}: {e}")
                 # Signal skip — supervisor will write a read_failed row.
@@ -753,13 +759,20 @@ async def run_speaker_cluster(
     io_workers = min(32, (os.cpu_count() or 4) * 4)
 
     for source in all_sources:
-        # Load (id, embedding_ref) pairs for this source, skipping read_failed
-        # placeholders (embedding_ref IS NULL).
+        # Load (id, embedding, embedding_ref) rows for this source, skipping
+        # read_failed placeholders (both embedding and embedding_ref NULL).
+        # Phase 3 (2026-07-12, docs/IO_OPTIMIZATION_PLAN.md): prefer the
+        # in-table `embedding` column -- a single columnar SQL scan instead of
+        # opening one .npy sidecar file per segment, which was speaker.cluster's
+        # dominant cost (ext4 dentry-cache thrashing, not clustering compute).
+        # Rows with embedding IS NULL (not yet backfilled, or legacy-reused
+        # sidecar hits that speaker.embed never re-reads at discovery time)
+        # fall back to the old per-file _load_npy() path.
         source_rows = conn.execute(
             """
-            SELECT id, embedding_ref
+            SELECT id, embedding, embedding_ref
             FROM speaker_embeddings
-            WHERE source = ? AND embedding_ref IS NOT NULL
+            WHERE source = ? AND (embedding IS NOT NULL OR embedding_ref IS NOT NULL)
             ORDER BY id
             """,
             [source],
@@ -772,20 +785,44 @@ async def run_speaker_cluster(
             log.info(f"{source}: 0 embeddings, skipping")
             continue
 
-        # Load .npy files with a thread pool (I/O-bound)
-        with ThreadPoolExecutor(max_workers=io_workers) as pool:
-            loaded = list(pool.map(_load_npy, source_rows))
+        in_table = [(seg_id, ref, np.array(emb, dtype=np.float32))
+                    for seg_id, emb, ref in source_rows if emb is not None]
+        needs_npy = [(seg_id, ref) for seg_id, emb, ref in source_rows
+                     if emb is None and ref is not None]
+
+        loaded_npy: list[tuple[str, str, np.ndarray | None]] = []
+        if needs_npy:
+            with ThreadPoolExecutor(max_workers=io_workers) as pool:
+                loaded_npy = list(pool.map(_load_npy, needs_npy))
+
+        log.info(
+            f"{source}: {len(in_table)} from catalog column, "
+            f"{len(needs_npy)} fell back to .npy sidecar"
+        )
 
         # Filter out load failures
-        valid = [(seg_id, ref, arr) for seg_id, ref, arr in loaded if arr is not None]
+        valid = in_table + [(seg_id, ref, arr) for seg_id, ref, arr in loaded_npy if arr is not None]
         if not valid:
-            log.warning(f"{source}: all {len(source_rows)} embedding files failed to load, skipping")
+            log.warning(f"{source}: all {len(source_rows)} embeddings failed to load, skipping")
             continue
 
         seg_ids = [v[0] for v in valid]
         refs = [v[1] for v in valid]
         embeddings = np.stack([v[2] for v in valid])
 
+        # NOTE (2026-07-12): tried wrapping this call in
+        # `loop.run_in_executor(None, cluster_embeddings, ...)` to keep the
+        # event loop responsive when this coroutine shares a loop with
+        # another node under `pipe run-many` (speaker.cluster's synchronous
+        # clustering on a large source was observed starving asr.transcribe's
+        # worker-spawn sequence for 30+ minutes). That made things worse, not
+        # better: moving the call off the main thread pushed sklearn's joblib
+        # backend into a single-threaded fallback (joblib's default backends
+        # generally require the main thread to fork/spawn worker processes),
+        # making a solo run take 20x+ longer (5+ min vs ~13s for the same
+        # source). Reverted -- run speaker.cluster and asr.transcribe as
+        # separate solo `pipe run` invocations instead of pairing them under
+        # `run-many`; see pending_task.md's T15 entry for the full story.
         labels = cluster_embeddings(embeddings, source, threshold)
         n_clusters = int(len(set(labels.tolist())))
 
@@ -827,6 +864,103 @@ async def run_speaker_cluster(
         "total_speakers": total_speakers,
         "run_id": run_id,
     }
+
+
+# ===========================================================================
+# embed.backfill -- one-time (2026-07-12, docs/IO_OPTIMIZATION_PLAN.md Phase 3)
+# ===========================================================================
+
+BACKFILL_DISCOVER_SQL = """
+    SELECT id, embedding_ref
+    FROM speaker_embeddings
+    WHERE embedding_ref IS NOT NULL AND embedding IS NULL
+    ORDER BY source, id
+"""
+
+
+def discover_backfill(conn) -> list[tuple[str, str]]:
+    """Return (id, embedding_ref) for every speaker_embeddings row that has a
+    sidecar .npy reference but no in-table embedding value yet. Naturally
+    idempotent: a row drops out of this WHERE clause the moment it's
+    backfilled, so a killed/resumed run never redoes work."""
+    return conn.execute(BACKFILL_DISCOVER_SQL).fetchall()
+
+
+async def run_embed_backfill(*, conn=None, limit: int | None = None,
+                              batch_size: int = 5000) -> dict:
+    """One-time migration: stream every existing .embed.npy sidecar's content
+    into speaker_embeddings.embedding, so speaker.cluster (and any future
+    reader) never has to touch the per-file sidecar again for these rows.
+
+    This is the LAST time these particular files are read the slow way (one
+    open() per segment on the flat segments/{source}/ directories) -- after
+    this, speaker.cluster's discovery query reads the `embedding` column
+    directly. embedding_ref is left untouched (not cleared) so the mapping to
+    the physical file survives for the owner-approved sidecar-deletion step
+    that follows, once this backfill is verified.
+
+    Uses a raw parameterised UPDATE (not upsert_rows' INSERT OR REPLACE,
+    which would require re-supplying source/embedding_ref/provenance to avoid
+    nulling them out -- see catalog.py's upsert_rows docstring) so only the
+    `embedding` column is touched per row.
+
+    conn: optional pre-opened DuckDB connection (or cursor) — pass one when
+    running alongside other nodes under `pipe run-many`. Defaults to a fresh
+    self-managed connect() for standalone `pipe run embed.backfill` usage.
+    """
+    from pipeline.catalog.catalog import connect
+    from pipeline.orchestrator.journal import new_run_id, record_batch
+
+    conn = conn or connect()
+    log.info("embed.backfill: scanning speaker_embeddings for un-backfilled rows...")
+    rows = discover_backfill(conn)
+    if limit:
+        rows = rows[:limit]
+    log.info(f"embed.backfill: {len(rows)} embedding(s) to migrate into the catalog column")
+    if not rows:
+        return {"scanned": 0, "backfilled": 0, "errors": 0}
+
+    run_id = new_run_id("embed.backfill")
+    io_workers = min(32, (os.cpu_count() or 4) * 4)
+
+    scanned = 0
+    backfilled = 0
+    errors = 0
+    t0 = time.time()
+
+    with ThreadPoolExecutor(max_workers=io_workers) as pool:
+        for batch in _batches(rows, batch_size):
+            loaded = list(pool.map(_load_npy, batch))
+            update_batch = [
+                (arr.astype(np.float32).tolist(), seg_id)
+                for seg_id, _ref, arr in loaded if arr is not None
+            ]
+            failed_ids = [seg_id for seg_id, _ref, arr in loaded if arr is None]
+            scanned += len(batch)
+            if update_batch:
+                conn.executemany(
+                    "UPDATE speaker_embeddings SET embedding = ? WHERE id = ?",
+                    update_batch,
+                )
+                backfilled += len(update_batch)
+                record_batch(conn, run_id, "embed.backfill",
+                              [pair[1] for pair in update_batch], "ok")
+            if failed_ids:
+                errors += len(failed_ids)
+                log.warning(f"embed.backfill: {len(failed_ids)} sidecar(s) failed to load "
+                            f"(left for the existing .npy fallback path): {failed_ids[:5]}")
+                record_batch(conn, run_id, "embed.backfill", failed_ids,
+                              "error", error="npy load failed")
+            rate = scanned / (time.time() - t0) if time.time() > t0 else 0.0
+            log.info(f"embed.backfill: {scanned}/{len(rows)} ({rate:.1f}/s) -- "
+                     f"backfilled={backfilled}, errors={errors}")
+
+    elapsed = time.time() - t0
+    log.info(
+        f"embed.backfill DONE: {scanned} scanned, {backfilled} backfilled, "
+        f"{errors} errors, {elapsed:.0f}s, run_id={run_id}"
+    )
+    return {"scanned": scanned, "backfilled": backfilled, "errors": errors, "run_id": run_id}
 
 
 # ---------------------------------------------------------------------------
