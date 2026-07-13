@@ -94,6 +94,33 @@ def test_char_agreement_empty_list():
     assert char_agreement([]) == 1.0
 
 
+def test_char_agreement_ignores_punctuation_mismatch():
+    """Issue #20 (docs/PIPELINE_REVIEW_2026-07-13.md §2 row 20): an AR model's
+    inferred punctuation must not deflate agreement against a CTC model that
+    never emits punctuation for the identical underlying text."""
+    ar_style = "你好,今日天氣點呀?"
+    ctc_style = "你好今日天氣點呀"
+    assert char_agreement([ar_style, ctc_style]) == 1.0
+
+
+def test_char_agreement_folds_arabic_and_fullwidth_digits_to_cjk():
+    """Arabic and full-width digits normalize to the same CJK numeral before
+    comparison, so a model emitting '3' agrees with one emitting '三' or the
+    full-width '3'."""
+    assert char_agreement(["有3個人", "有三個人"]) == 1.0
+    assert char_agreement(["有3個人", "有３個人"]) == 1.0
+
+
+def test_char_agreement_normalization_is_comparison_only():
+    """Normalization must not be visible in char_agreement's own inputs being
+    mutated -- compute_agreement_row (tested separately) still stores the
+    original, unnormalized best_text."""
+    texts = ["你好,3位。", "你好三位"]
+    original = list(texts)
+    char_agreement(texts)
+    assert texts == original
+
+
 def test_resolve_model_key_recognises_active_models():
     assert resolve_model_key(CANTO_FT) == "canto_ft"
     assert resolve_model_key(QWEN3_ASR) == "qwen3_asr"
@@ -132,6 +159,20 @@ def test_compute_agreement_row_both_present_agree():
     assert row['text_verified'] is False
     assert row['model_count'] == 2
     assert row['canto_ft_confidence'] is None, "canto_ft has no row for this id"
+
+
+def test_compute_agreement_row_agreement_normalized_but_best_text_verbatim():
+    """Issue #20: agreement is computed on punctuation-stripped/digit-normalized
+    text (so an AR model's inferred comma doesn't deflate the score against a
+    CTC model's punctuation-free output), but best_text keeps the winning
+    candidate's original, unnormalized text verbatim -- normalization is
+    comparison-only, never stored."""
+    row = compute_agreement_row(
+        'id_norm', [QWEN3_ASR, SENSE_VOICE],
+        ['你好,3位。', '你好三位'], [0.9, 0.5], 2,
+    )
+    assert row['agreement'] == 1.0
+    assert row['best_text'] == '你好,3位。', "best_text must keep original punctuation/digits"
 
 
 def test_compute_agreement_row_both_empty():
@@ -415,10 +456,11 @@ class _FakeSenseVoiceModel:
         self._raw_texts = raw_texts
         self._raise = raise_on_generate
 
-    def generate(self, input, language=None, use_itn=None, batch_size_s=None):
+    def generate(self, input, language=None, use_itn=None, batch_size=None):
         if self._raise:
             raise RuntimeError("simulated funasr inference failure")
         assert len(input) == len(self._raw_texts)
+        assert batch_size == len(input), "must pass a real item-count batch_size, not batch_size_s"
         return [{"text": t} for t in self._raw_texts]
 
 

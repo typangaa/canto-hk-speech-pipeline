@@ -95,6 +95,7 @@ import logging
 import math
 import sys
 import time
+import unicodedata
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
@@ -344,12 +345,32 @@ def discover_agreement(conn) -> list[tuple]:
 # port from scripts/04_transcribe.py's char_agreement() + write_transcripts())
 # ---------------------------------------------------------------------------
 
+_DIGIT_TO_CJK = str.maketrans({
+    **{str(d): cjk for d, cjk in zip(range(10), "〇一二三四五六七八九")},
+    **{chr(0xFF10 + d): cjk for d, cjk in zip(range(10), "〇一二三四五六七八九")},
+})
+
+
+def _normalize_for_agreement(text: str) -> str:
+    """Comparison-only normalization for char_agreement() (Issue #20, see
+    docs/PIPELINE_REVIEW_2026-07-13.md §2 row 20 and §5 Q3-1): qwen3_asr (AR)
+    infers punctuation from LM context while sense_voice (CTC) never emits it,
+    so raw-text SequenceMatcher.ratio() systematically deflates cross-model
+    agreement on punctuation alone. Strip all Unicode punctuation (category
+    "P*", covers both ASCII and CJK marks) and fold Arabic/full-width digits to
+    CJK numerals before comparing. Never mutates stored text/best_text -- those
+    keep the original, unnormalized strings."""
+    text = text.translate(_DIGIT_TO_CJK)
+    return "".join(ch for ch in text if not unicodedata.category(ch).startswith("P"))
+
+
 def char_agreement(texts: list[str]) -> float:
     if len(texts) < 2:
         return 1.0
+    normalized = [_normalize_for_agreement(t) for t in texts]
     ratios = [
         difflib.SequenceMatcher(None, a, b).ratio()
-        for a, b in itertools.combinations(texts, 2)
+        for a, b in itertools.combinations(normalized, 2)
     ]
     return round(sum(ratios) / len(ratios), 3)
 
@@ -904,9 +925,18 @@ class SenseVoiceWorker(GPUWorkerBase):
     def forward_batch(self, items: list[np.ndarray]) -> list[dict]:
         """Run SenseVoice inference on a batch of 16 kHz float32 arrays.
 
-        funasr's AutoModel.generate() accepts a list of numpy arrays with
-        batch_size_s controlling the internal batching budget.  We pass the
-        full items list and let funasr handle sub-batching.
+        funasr's AutoModel.generate(**cfg) routes to inference() whenever no
+        vad_model is configured (our case) -- and inference() only reads a
+        literal item-count `batch_size` kwarg (default 1), NOT `batch_size_s`
+        (that duration-based param is exclusively consumed by
+        inference_with_vad(), a different code path we never take; see
+        funasr/auto/auto_model.py generate()/inference()/inference_with_vad()).
+        Passing batch_size_s here was a no-op -- every item silently decoded
+        one at a time regardless of how many we dispatched (confirmed live,
+        2026-07-13: 100% of ~38k logged steps showed 'batch_size': '1').  Pass
+        the literal batch_size instead, sized to this dispatch's own item
+        count, so funasr's inference() loop does exactly one real batched
+        forward pass over the whole chunk instead of len(items) separate ones.
         """
         lang = self.cfg["lang"] or "auto"
         audio_inputs = [(y16, ASR_SR) for y16 in items]
@@ -915,7 +945,7 @@ class SenseVoiceWorker(GPUWorkerBase):
                 input=[a for a, _ in audio_inputs],
                 language=lang,
                 use_itn=True,           # inverse text normalisation
-                batch_size_s=300,       # up to 300s audio per internal sub-batch
+                batch_size=len(items),  # real item-count batch (see docstring -- batch_size_s is a no-op here)
             )
         except Exception as e:
             # Return empty placeholder for every item so caller can handle gracefully.
