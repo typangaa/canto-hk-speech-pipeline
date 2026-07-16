@@ -19,9 +19,11 @@ See docs/REARCHITECTURE_IMPLEMENTATION_PLAN.md §3.2 for the rationale.
 """
 
 import json
+import uuid
 from pathlib import Path
 
 import duckdb
+import pandas as pd
 
 from pipeline.config import CATALOG_PATH
 
@@ -120,6 +122,18 @@ def connect_ro(
 # Generic bulk-upsert helper
 # ---------------------------------------------------------------------------
 
+# Below this row count, conn.executemany()'s per-statement overhead is cheap
+# enough that building a DataFrame isn't worth it. At/above it, executemany()
+# becomes the dominant cost (DuckDB's DBAPI executemany() binds and executes
+# one parameterised statement per row -- an OLAP engine paying OLTP-style
+# per-row overhead). See docs/UPSERT_PERFORMANCE_FIX_PLAN.md for the full
+# investigation (measured: a 538,310-row executemany() upsert against an
+# already-populated table took ~78 minutes; DuckDB's own issue tracker
+# documents executemany() as 100x+ slower than its vectorised bulk-insert
+# path for comparable row counts).
+UPSERT_BULK_THRESHOLD = 2_000
+
+
 def upsert_rows(
     conn: duckdb.DuckDBPyConnection,
     table: str,
@@ -154,24 +168,64 @@ def upsert_rows(
     binding because DuckDB's parameterised interface does not automatically
     coerce them to its native JSON type.  Plain ``str``, ``int``, ``float``,
     ``bool``, and ``None`` are passed through unchanged.
+
+    Below ``UPSERT_BULK_THRESHOLD`` rows, this uses the original
+    ``conn.executemany()`` path (cheap for small batches, e.g. a `--limit`
+    test run). At/above the threshold, it registers a pandas DataFrame as a
+    temporary view and does a single vectorised ``INSERT ... SELECT`` instead
+    — see docs/UPSERT_PERFORMANCE_FIX_PLAN.md for the full rationale and
+    benchmark. Both paths produce identical rows; only the write mechanism
+    differs.
     """
     if not rows:
         return 0
 
     columns: list[str] = list(rows[0].keys())
-    placeholders = ", ".join("?" * len(columns))
     col_list = ", ".join(columns)
-    sql = f"INSERT OR REPLACE INTO {table} ({col_list}) VALUES ({placeholders})"
 
     def _coerce(value: object) -> object:
         if isinstance(value, (list, dict)):
             return json.dumps(value, ensure_ascii=False)
         return value
 
-    tuples = [
-        tuple(_coerce(row[col]) for col in columns)
+    if len(rows) < UPSERT_BULK_THRESHOLD:
+        placeholders = ", ".join("?" * len(columns))
+        sql = f"INSERT OR REPLACE INTO {table} ({col_list}) VALUES ({placeholders})"
+        tuples = [
+            tuple(_coerce(row[col]) for col in columns)
+            for row in rows
+        ]
+        conn.executemany(sql, tuples)
+        return len(rows)
+
+    # Bulk path: register a DataFrame, single vectorised INSERT ... SELECT.
+    # dtype=object keeps every cell as its original Python value (int/str/
+    # None/...) instead of letting pandas infer a numpy dtype per column --
+    # numpy's automatic dtype inference would silently upcast an int column
+    # containing None to float64 and turn None into NaN, corrupting integer
+    # PK/FK columns. object columns are slower to build in pure pandas terms
+    # but DuckDB's registration still reads them as one vectorised scan, not
+    # a per-row Python round-trip -- correctness here matters more than
+    # squeezing out the last bit of DataFrame-construction speed.
+    coerced = [
+        {col: _coerce(row[col]) for col in columns}
         for row in rows
     ]
+    df = pd.DataFrame(coerced, columns=columns, dtype=object)
 
-    conn.executemany(sql, tuples)
+    # Unique view name: this connection may be shared across concurrently
+    # running `pipe run-many` nodes (each on its own conn.cursor()) -- a
+    # uuid4 suffix means two simultaneous bulk upserts can never collide on
+    # the same registered view name regardless of how DuckDB scopes
+    # registration internally.
+    view_name = f"_upsert_bulk_{uuid.uuid4().hex}"
+    try:
+        conn.register(view_name, df)
+        conn.execute(
+            f"INSERT OR REPLACE INTO {table} ({col_list}) "
+            f"SELECT {col_list} FROM {view_name}"
+        )
+    finally:
+        conn.unregister(view_name)
+
     return len(rows)

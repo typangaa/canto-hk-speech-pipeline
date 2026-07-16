@@ -4,8 +4,10 @@ import pytest
 from pipeline.catalog.catalog import init_schema
 from pipeline.nodes.manifest import (
     INCLUDED_TIERS,
+    QUALITY_TIER_PRECEDENCE,
     TIER_PRECEDENCE,
     _export_tag,
+    _quality_tiers_at_or_above,
     _stratified_split_new_entries,
     _tiers_at_or_above,
     build_entry,
@@ -114,6 +116,43 @@ def test_export_tag_combines_both():
     assert _export_tag(0.90, "silver") == "tier_silver_agree090"
 
 
+def test_export_tag_code_switch_only():
+    assert _export_tag(None, None, "only") == "codeswitch_only"
+
+
+def test_export_tag_code_switch_exclude():
+    assert _export_tag(None, None, "exclude") == "codeswitch_exclude"
+
+
+def test_export_tag_combines_all_three():
+    assert _export_tag(0.90, "silver", "only") == "tier_silver_agree090_codeswitch_only"
+
+
+# ---------------------------------------------------------------------------
+# min_quality_tier cut (added 2026-07-16, T13) -- SEPARATE axis from min_tier
+# ---------------------------------------------------------------------------
+
+def test_quality_tiers_at_or_above_b_is_b_only():
+    assert _quality_tiers_at_or_above("B") == ("B",)
+
+
+def test_quality_tiers_at_or_above_a_includes_everything():
+    assert _quality_tiers_at_or_above("A") == QUALITY_TIER_PRECEDENCE == ("B", "A")
+
+
+def test_quality_tiers_at_or_above_rejects_invalid():
+    with pytest.raises(ValueError):
+        _quality_tiers_at_or_above("C")
+
+
+def test_export_tag_min_quality_tier_only():
+    assert _export_tag(None, None, None, "B") == "qualityB"
+
+
+def test_export_tag_combines_min_tier_and_min_quality_tier():
+    assert _export_tag(None, "auto_gold", None, "B") == "tier_auto_gold_qualityB"
+
+
 @pytest.fixture
 def scratch_conn(tmp_path):
     conn = duckdb.connect(str(tmp_path / "scratch.duckdb"))
@@ -122,7 +161,7 @@ def scratch_conn(tmp_path):
     conn.close()
 
 
-def _seed_manifest_row(conn, seg_id, *, tier, agreement=0.9):
+def _seed_manifest_row(conn, seg_id, *, tier, agreement=0.9, english_ratio=0.0, quality_tier=None):
     conn.execute(
         "INSERT INTO segments (id, audio_path, source, duration_sec, sample_rate) "
         "VALUES (?, '/tmp/x.flac', 'podcast', 6.0, 48000)",
@@ -133,8 +172,16 @@ def _seed_manifest_row(conn, seg_id, *, tier, agreement=0.9):
         [seg_id, agreement],
     )
     conn.execute("INSERT INTO g2p (id, jyutping, valid_fraction, provenance) VALUES (?, 'hello', 1.0, 'g2p_node')", [seg_id])
-    conn.execute("INSERT INTO filters (id, pass, provenance) VALUES (?, TRUE, 'filter_decide')", [seg_id])
+    conn.execute(
+        "INSERT INTO filters (id, pass, english_ratio, provenance) VALUES (?, TRUE, ?, 'filter_decide')",
+        [seg_id, english_ratio],
+    )
     conn.execute("INSERT INTO tiers (id, tier, provenance) VALUES (?, ?, 'tier_assign')", [seg_id, tier])
+    if quality_tier is not None:
+        conn.execute(
+            "INSERT INTO quality_tiers (id, quality_tier, provenance) VALUES (?, ?, 'quality_tier_assign')",
+            [seg_id, quality_tier],
+        )
 
 
 def test_discover_min_tier_auto_gold_includes_gold_excludes_silver(scratch_conn):
@@ -165,6 +212,103 @@ def test_discover_min_tier_and_min_agreement_combine(scratch_conn):
 
     picked_ids = {row[0] for row in discover(conn, min_agreement=0.95, min_tier="silver")}
     assert picked_ids == {"sv_high"}
+
+
+# ---------------------------------------------------------------------------
+# code_switch cut (added 2026-07-15, T18) -- filters.english_ratio > 0 / = 0
+# ---------------------------------------------------------------------------
+
+def test_discover_code_switch_none_returns_all(scratch_conn):
+    conn = scratch_conn
+    _seed_manifest_row(conn, "mono1", tier="silver", english_ratio=0.0)
+    _seed_manifest_row(conn, "cs1", tier="silver", english_ratio=0.15)
+
+    picked_ids = {row[0] for row in discover(conn)}
+    assert picked_ids == {"mono1", "cs1"}
+
+
+def test_discover_code_switch_only_excludes_pure_cantonese(scratch_conn):
+    conn = scratch_conn
+    _seed_manifest_row(conn, "mono1", tier="silver", english_ratio=0.0)
+    _seed_manifest_row(conn, "cs1", tier="silver", english_ratio=0.15)
+
+    picked_ids = {row[0] for row in discover(conn, code_switch="only")}
+    assert picked_ids == {"cs1"}
+
+
+def test_discover_code_switch_exclude_excludes_code_switch(scratch_conn):
+    conn = scratch_conn
+    _seed_manifest_row(conn, "mono1", tier="silver", english_ratio=0.0)
+    _seed_manifest_row(conn, "cs1", tier="silver", english_ratio=0.15)
+
+    picked_ids = {row[0] for row in discover(conn, code_switch="exclude")}
+    assert picked_ids == {"mono1"}
+
+
+def test_discover_code_switch_combines_with_min_tier(scratch_conn):
+    conn = scratch_conn
+    _seed_manifest_row(conn, "ag_cs", tier="auto_gold", english_ratio=0.2)
+    _seed_manifest_row(conn, "sv_cs", tier="silver", english_ratio=0.2)
+    _seed_manifest_row(conn, "ag_mono", tier="auto_gold", english_ratio=0.0)
+
+    picked_ids = {row[0] for row in discover(conn, min_tier="auto_gold", code_switch="only")}
+    assert picked_ids == {"ag_cs"}
+
+
+def test_discover_rejects_invalid_code_switch(scratch_conn):
+    with pytest.raises(ValueError):
+        discover(scratch_conn, code_switch="bogus")
+
+
+# ---------------------------------------------------------------------------
+# min_quality_tier cut, integration -- discover() with a real quality_tiers join
+# ---------------------------------------------------------------------------
+
+def test_discover_min_quality_tier_none_ignores_axis_entirely(scratch_conn):
+    """Segments with no quality_tiers row at all (e.g. silver/bronze, which the
+    quality_tier.assign node never scopes) must stay included when the filter
+    is unused -- this is a LEFT JOIN, not an INNER JOIN."""
+    conn = scratch_conn
+    _seed_manifest_row(conn, "sv_no_qt", tier="silver")  # no quality_tier row
+    _seed_manifest_row(conn, "ag_a", tier="auto_gold", quality_tier="A")
+    _seed_manifest_row(conn, "ag_b", tier="auto_gold", quality_tier="B")
+
+    picked_ids = {row[0] for row in discover(conn)}
+    assert picked_ids == {"sv_no_qt", "ag_a", "ag_b"}
+
+
+def test_discover_min_quality_tier_b_excludes_a_and_unscored(scratch_conn):
+    conn = scratch_conn
+    _seed_manifest_row(conn, "sv_no_qt", tier="silver")
+    _seed_manifest_row(conn, "ag_a", tier="auto_gold", quality_tier="A")
+    _seed_manifest_row(conn, "ag_b", tier="auto_gold", quality_tier="B")
+
+    picked_ids = {row[0] for row in discover(conn, min_quality_tier="B")}
+    assert picked_ids == {"ag_b"}
+
+
+def test_discover_min_quality_tier_a_includes_a_and_b_but_not_unscored(scratch_conn):
+    conn = scratch_conn
+    _seed_manifest_row(conn, "sv_no_qt", tier="silver")
+    _seed_manifest_row(conn, "ag_a", tier="auto_gold", quality_tier="A")
+    _seed_manifest_row(conn, "ag_b", tier="auto_gold", quality_tier="B")
+
+    picked_ids = {row[0] for row in discover(conn, min_quality_tier="A")}
+    assert picked_ids == {"ag_a", "ag_b"}
+
+
+def test_discover_min_quality_tier_combines_with_min_tier(scratch_conn):
+    conn = scratch_conn
+    _seed_manifest_row(conn, "gold_b", tier="gold", quality_tier="B")
+    _seed_manifest_row(conn, "ag_b", tier="auto_gold", quality_tier="B")
+
+    picked_ids = {row[0] for row in discover(conn, min_tier="gold", min_quality_tier="B")}
+    assert picked_ids == {"gold_b"}
+
+
+def test_discover_rejects_invalid_min_quality_tier(scratch_conn):
+    with pytest.raises(ValueError):
+        discover(scratch_conn, min_quality_tier="C")
 
 
 # ---------------------------------------------------------------------------

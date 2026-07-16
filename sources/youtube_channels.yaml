@@ -72,10 +72,11 @@
   priority: "high"
   estimated_hours: 150
   max_age_days: 365
-  status: "active"
+  status: "paused"
   notes: >
     CONFIRMED 2026-06-10. ~4k videos. HOY TV cable news, separate speaker pool from TVB/RTHK.
     HK Cantonese news anchors, adds anchor diversity to corpus.
+    PAUSED 2026-07-13: YouTube rate-limiting.
 
 - name: "Now 財經新聞"
   url: "https://www.youtube.com/@nowbnc"
@@ -87,10 +88,11 @@
   priority: "high"
   estimated_hours: 100
   max_age_days: 365
-  status: "active"
+  status: "paused"
   notes: >
     CONFIRMED 2026-06-10. Finance and business news. Clear enunciation.
     Verify primarily Cantonese (some NowTV finance shows are bilingual). Sample first.
+    PAUSED 2026-07-13: YouTube rate-limiting.
 
 - name: "ISD 香港特區政府新聞處"
   url: "https://www.youtube.com/@isdgovhk"

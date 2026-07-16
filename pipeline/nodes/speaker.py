@@ -88,7 +88,7 @@ import logging
 import os
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
@@ -768,6 +768,8 @@ async def run_speaker_cluster(
         # Rows with embedding IS NULL (not yet backfilled, or legacy-reused
         # sidecar hits that speaker.embed never re-reads at discovery time)
         # fall back to the old per-file _load_npy() path.
+        log.info(f"{source}: querying speaker_embeddings ...")
+        t_query0 = time.time()
         source_rows = conn.execute(
             """
             SELECT id, embedding, embedding_ref
@@ -777,6 +779,7 @@ async def run_speaker_cluster(
             """,
             [source],
         ).fetchall()
+        log.info(f"{source}: query returned {len(source_rows)} rows in {time.time() - t_query0:.1f}s")
 
         if limit:
             source_rows = source_rows[:limit]
@@ -790,10 +793,26 @@ async def run_speaker_cluster(
         needs_npy = [(seg_id, ref) for seg_id, emb, ref in source_rows
                      if emb is None and ref is not None]
 
+        # Progress logging (2026-07-15): this fallback path opens one .npy
+        # file per row -- ext4 dentry-cache thrashing (see comment above) can
+        # make it 40-50x slower than the in-table columnar path with no
+        # visible symptom other than the process just taking a long time.
+        # Log every 5000 completions (via as_completed, not pool.map, which
+        # blocks silently until the whole batch is done) so a slow run is
+        # diagnosable from the log alone instead of needing /proc/<pid>/io
+        # inspection.
         loaded_npy: list[tuple[str, str, np.ndarray | None]] = []
         if needs_npy:
+            log.info(f"{source}: {len(needs_npy)} rows need .npy sidecar fallback "
+                      f"({io_workers} I/O threads) ...")
+            t_npy0 = time.time()
             with ThreadPoolExecutor(max_workers=io_workers) as pool:
-                loaded_npy = list(pool.map(_load_npy, needs_npy))
+                futures = [pool.submit(_load_npy, item) for item in needs_npy]
+                for i, future in enumerate(as_completed(futures), start=1):
+                    loaded_npy.append(future.result())
+                    if i % 5000 == 0 or i == len(futures):
+                        rate = i / (time.time() - t_npy0) if time.time() > t_npy0 else 0.0
+                        log.info(f"{source}: npy fallback {i}/{len(needs_npy)} loaded ({rate:.1f}/s)")
 
         log.info(
             f"{source}: {len(in_table)} from catalog column, "
@@ -842,12 +861,27 @@ async def run_speaker_cluster(
             }
             for seg_id, ref, cluster_id in zip(seg_ids, refs, labels)
         ]
-        upsert_rows(conn, "speakers", speaker_rows, ["id"])
-        record_batch(
-            conn, run_id, "speaker.cluster",
-            [r["id"] for r in speaker_rows], "ok",
-            metrics={"n_clusters": n_clusters, "n_segments": len(speaker_rows)},
-        )
+        # Write in chunks, not one upsert_rows()+record_batch() call for the
+        # whole source (2026-07-15): record_batch() writes ONE task_runs row
+        # per item_id (pipeline/orchestrator/journal.py), so a 500k+-segment
+        # source turned into a single ~1M-combined-row write (speakers +
+        # task_runs) with zero progress visibility until it finished --
+        # measured taking ~78 minutes for podcast's 538,310 segments with no
+        # log output the whole time, which looked indistinguishable from a
+        # hang. Same "don't do the whole backlog as one giant write" lesson
+        # as filter.decide's OOM fix (DECISIONS.md 2026-07-14) -- chunking
+        # gives periodic log lines instead of a silent multi-hour black box.
+        CLUSTER_WRITE_BATCH = 20_000
+        for i in range(0, len(speaker_rows), CLUSTER_WRITE_BATCH):
+            batch = speaker_rows[i:i + CLUSTER_WRITE_BATCH]
+            upsert_rows(conn, "speakers", batch, ["id"])
+            record_batch(
+                conn, run_id, "speaker.cluster",
+                [r["id"] for r in batch], "ok",
+                metrics={"n_clusters": n_clusters, "n_segments": len(batch)},
+            )
+            written = i + len(batch)
+            log.info(f"{source}: wrote {written}/{len(speaker_rows)} speaker rows")
 
         total_segments += len(speaker_rows)
         total_speakers += n_clusters

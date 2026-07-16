@@ -36,6 +36,23 @@ def cmd_golden_build(args: argparse.Namespace) -> int:
     return golden_main()
 
 
+def cmd_logs_prune(args: argparse.Namespace) -> int:
+    from pipeline.tools.prune_logs import prune_logs
+
+    result = prune_logs(
+        gzip_after_days=args.gzip_after_days,
+        delete_after_days=args.delete_after_days,
+        dry_run=args.dry_run,
+    )
+    verb = "Would gzip" if args.dry_run else "Gzipped"
+    print(f"{verb} {len(result['gzipped'])} file(s)")
+    verb = "Would delete" if args.dry_run else "Deleted"
+    print(f"{verb} {len(result['deleted'])} archive(s)")
+    if not args.dry_run:
+        print(f"Bytes reclaimed: {result['bytes_reclaimed']:,}")
+    return 0
+
+
 def cmd_run_ingest_download(args: argparse.Namespace) -> int:
     import asyncio
     import logging
@@ -150,6 +167,8 @@ def cmd_run_asr_transcribe(args: argparse.Namespace) -> int:
         batch_size=args.batch,
         mem_fraction=args.mem_fraction,
         limit=args.limit,
+        prefetch=args.prefetch,
+        io_workers=args.io_workers,
     ))
     print(f"\nDone: {result}")
     return 0
@@ -186,11 +205,13 @@ def cmd_run_filter_acoustic(args: argparse.Namespace) -> int:
     from pipeline.nodes.filter import run_filter_acoustic
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    gpu_ids = [int(x) for x in args.gpu.split(",")] if args.gpu else None
     result = asyncio.run(run_filter_acoustic(
         n_workers=args.workers,
         threads_per_worker=args.threads,
         batch_size=args.batch,
         limit=args.limit,
+        gpu_ids=gpu_ids,
     ))
     print(f"\nDone: {result}")
     return 0
@@ -347,6 +368,8 @@ async def _run_many_adapt_asr_transcribe(args: argparse.Namespace, conn) -> dict
         conn=conn,
         gpu_policy=args.gpu_policy,
         batch_size=args.batch,
+        prefetch=args.prefetch,
+        io_workers=args.io_workers,
         mem_fraction=args.mem_fraction,
         limit=args.limit,
     )
@@ -402,10 +425,16 @@ async def _run_many_adapt_tier_assign(args: argparse.Namespace, conn) -> dict:
     return await run_tier_assign(conn=conn, batch_size=args.batch, limit=args.limit)
 
 
+async def _run_many_adapt_quality_tier_assign(args: argparse.Namespace, conn) -> dict:
+    from pipeline.nodes.quality_tier import run_quality_tier_assign
+    return await run_quality_tier_assign(conn=conn, batch_size=args.batch, limit=args.limit)
+
+
 async def _run_many_adapt_calibrate_sample(args: argparse.Namespace, conn) -> dict:
     from pipeline.nodes.calibrate import run_calibrate_sample
     return await run_calibrate_sample(
-        conn=conn, n=args.n, tier=args.tier, min_agreement=args.min_agreement
+        conn=conn, n=args.n, tier=args.tier, min_agreement=args.min_agreement,
+        code_switch=args.code_switch,
     )
 
 
@@ -517,6 +546,7 @@ RUN_MANY_ADAPTERS = {
     "speaker.cluster": _run_many_adapt_speaker_cluster,
     "lang_screen.auto": _run_many_adapt_lang_screen_auto,
     "tier.assign": _run_many_adapt_tier_assign,
+    "quality_tier.assign": _run_many_adapt_quality_tier_assign,
     "calibrate.sample": _run_many_adapt_calibrate_sample,
     "filter.text": _run_many_adapt_filter_text,
     "filter.decide": _run_many_adapt_filter_decide,
@@ -665,6 +695,18 @@ def cmd_run_tier_assign(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_run_quality_tier_assign(args: argparse.Namespace) -> int:
+    import asyncio
+    import logging
+
+    from pipeline.nodes.quality_tier import run_quality_tier_assign
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    result = asyncio.run(run_quality_tier_assign(batch_size=args.batch, limit=args.limit))
+    print(f"\nDone: {result}")
+    return 0
+
+
 def cmd_run_calibrate_sample(args: argparse.Namespace) -> int:
     import asyncio
     import logging
@@ -672,7 +714,11 @@ def cmd_run_calibrate_sample(args: argparse.Namespace) -> int:
     from pipeline.nodes.calibrate import run_calibrate_sample
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    result = asyncio.run(run_calibrate_sample(n=args.n, tier=args.tier, min_agreement=args.min_agreement))
+    result = asyncio.run(
+        run_calibrate_sample(
+            n=args.n, tier=args.tier, min_agreement=args.min_agreement, code_switch=args.code_switch
+        )
+    )
     print(f"\nDone: {result}")
     return 0
 
@@ -752,7 +798,10 @@ def cmd_run_manifest_build(args: argparse.Namespace) -> int:
     from pipeline.nodes.manifest import run_manifest_build
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    result = run_manifest_build(limit=args.limit, min_agreement=args.min_agreement, min_tier=args.min_tier)
+    result = run_manifest_build(
+        limit=args.limit, min_agreement=args.min_agreement, min_tier=args.min_tier,
+        code_switch=args.code_switch, min_quality_tier=args.min_quality_tier,
+    )
     summary = {k: v for k, v in result.items() if k != "entries"}
     print(f"\nDone: {summary}")
     return 0
@@ -765,7 +814,8 @@ def cmd_run_manifest_export(args: argparse.Namespace) -> int:
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     result = run_manifest_export(
-        limit=args.limit, dry_run=args.dry_run, min_agreement=args.min_agreement, min_tier=args.min_tier
+        limit=args.limit, dry_run=args.dry_run, min_agreement=args.min_agreement, min_tier=args.min_tier,
+        code_switch=args.code_switch, min_quality_tier=args.min_quality_tier,
     )
     summary = {k: v for k, v in result.items() if k != "entries"}
     print(f"\nDone: {summary}")
@@ -857,6 +907,14 @@ def main() -> int:
     golden_sub = p_golden.add_subparsers(dest="golden_command", required=True)
     p_golden_build = golden_sub.add_parser("build", help="Build stratified golden set + legacy snapshot")
     p_golden_build.set_defaults(func=cmd_golden_build)
+
+    p_logs = sub.add_parser("logs", help="metadata/logs/ maintenance")
+    logs_sub = p_logs.add_subparsers(dest="logs_command", required=True)
+    p_logs_prune = logs_sub.add_parser("prune", help="T12: gzip old *.log, delete old *.log.gz (safe to run repeatedly / on a schedule)")
+    p_logs_prune.add_argument("--gzip-after-days", type=float, default=7)
+    p_logs_prune.add_argument("--delete-after-days", type=float, default=60)
+    p_logs_prune.add_argument("--dry-run", action="store_true")
+    p_logs_prune.set_defaults(func=cmd_logs_prune)
 
     p_calibrate = sub.add_parser("calibrate", help="Human text-verification calibration (see calibrate.sample DAG node for queuing)")
     calibrate_sub = p_calibrate.add_subparsers(dest="calibrate_command", required=True)
@@ -988,6 +1046,11 @@ def main() -> int:
     p_run_asr.add_argument("--batch", type=int, default=8)
     p_run_asr.add_argument("--mem-fraction", type=float, default=None)
     p_run_asr.add_argument("--limit", type=int, default=None)
+    p_run_asr.add_argument("--prefetch", type=int, default=2,
+                            help="tasks kept in flight per worker so CPU decode of batch N+1 "
+                                 "overlaps GPU forward of batch N (1 = old sequential behaviour)")
+    p_run_asr.add_argument("--io-workers", type=int, default=16,
+                            help="decode+resample thread-pool size inside each worker subprocess")
     p_run_asr.set_defaults(func=cmd_run_asr_transcribe)
     p_run_agree = run_sub.add_parser("asr.agreement", help="P3: cross-model char-overlap agreement (CPU)")
     p_run_agree.add_argument("--batch", type=int, default=2000)
@@ -1002,6 +1065,8 @@ def main() -> int:
     p_run_facoustic.add_argument("--threads", type=int, default=4, help="onnxruntime intra_op_num_threads per worker")
     p_run_facoustic.add_argument("--batch", type=int, default=8)
     p_run_facoustic.add_argument("--limit", type=int, default=None)
+    p_run_facoustic.add_argument("--gpu", type=str, default=None,
+                                  help="comma-separated CUDA device ids to round-robin DNSMOS onto (default: CPU-only)")
     p_run_facoustic.set_defaults(func=cmd_run_filter_acoustic)
     p_run_fdecide = run_sub.add_parser("filter.decide", help="P3: merge filters_text + filters_acoustic into filters.pass")
     p_run_fdecide.add_argument("--batch", type=int, default=5000)
@@ -1047,6 +1112,10 @@ def main() -> int:
     p_run_tier.add_argument("--batch", type=int, default=5000)
     p_run_tier.add_argument("--limit", type=int, default=None)
     p_run_tier.set_defaults(func=cmd_run_tier_assign)
+    p_run_qtier = run_sub.add_parser("quality_tier.assign", help="T13: A/B acoustic-cleanliness axis (pretrain/clean) for the gold+auto_gold scope, CPU in-supervisor -- SEPARATE from tier.assign, see pipeline/nodes/quality_tier.py")
+    p_run_qtier.add_argument("--batch", type=int, default=5000)
+    p_run_qtier.add_argument("--limit", type=int, default=None)
+    p_run_qtier.set_defaults(func=cmd_run_quality_tier_assign)
     p_run_calib_sample = run_sub.add_parser("calibrate.sample", help="P4: queue a random sample of filter-passing segments for human text-verification review (see 'pipe calibrate serve')")
     p_run_calib_sample.add_argument("--n", type=int, default=300, help="sample size to queue")
     p_run_calib_sample.add_argument("--tier", default=None,
@@ -1055,6 +1124,12 @@ def main() -> int:
     p_run_calib_sample.add_argument("--min-agreement", type=float, default=None,
                                      help="scope the sample to asr_agreement.agreement >= this value "
                                           "(QA a specific --min-agreement manifest.export cut)")
+    p_run_calib_sample.add_argument("--code-switch", default=None, choices=["only", "exclude"],
+                                     help="'only' = filters.english_ratio > 0 (code-switched segments "
+                                          "only -- pair with a larger --n, e.g. "
+                                          "recommended_sample_n(..., code_switch=True), for the intended "
+                                          "10x oversampled QA batch), 'exclude' = english_ratio = 0; see "
+                                          "pending_task.md T18")
     p_run_calib_sample.set_defaults(func=cmd_run_calibrate_sample)
     p_run_mbuild = run_sub.add_parser("manifest.build", help="P4: build manifest entries from the catalog (in-memory, no file write)")
     p_run_mbuild.add_argument("--limit", type=int, default=None)
@@ -1064,6 +1139,15 @@ def main() -> int:
     p_run_mbuild.add_argument("--min-tier", default=None, choices=["gold", "auto_gold", "silver", "bronze"],
                                help="only include entries at or above this tiers.tier value "
                                     "(e.g. 'auto_gold' includes gold+auto_gold) -- see pipeline/nodes/tier.py")
+    p_run_mbuild.add_argument("--code-switch", default=None, choices=["only", "exclude"],
+                               help="'only' = filters.english_ratio > 0 (code-switched segments only), "
+                                    "'exclude' = english_ratio = 0 (pure Cantonese only); omit for no filter "
+                                    "-- see pending_task.md T18")
+    p_run_mbuild.add_argument("--min-quality-tier", default=None, choices=["A", "B"],
+                               help="only include entries at or above this quality_tiers.quality_tier "
+                                    "value (SEPARATE axis from --min-tier -- see pipeline/nodes/quality_tier.py); "
+                                    "only meaningful combined with --min-tier gold/auto_gold (or omitted), "
+                                    "since quality_tiers only covers that scope -- see pending_task.md T13")
     p_run_mbuild.set_defaults(func=cmd_run_manifest_build)
     p_run_mexport = run_sub.add_parser("manifest.export", help="P4: build + write metadata/manifest.jsonl + train.jsonl + val.jsonl")
     p_run_mexport.add_argument("--limit", type=int, default=None)
@@ -1077,6 +1161,18 @@ def main() -> int:
                                 help="write a cut containing only entries at or above this tiers.tier value "
                                      "(e.g. 'auto_gold' includes gold+auto_gold) to manifest_tier_<tier>.jsonl "
                                      "etc. -- combinable with --min-agreement")
+    p_run_mexport.add_argument("--code-switch", default=None, choices=["only", "exclude"],
+                                help="write a cut to manifest_codeswitch_<mode>.jsonl etc.: 'only' = "
+                                     "filters.english_ratio > 0 (code-switched segments only, e.g. for a "
+                                     "dedicated QA/eval subset), 'exclude' = english_ratio = 0 (pure "
+                                     "Cantonese only) -- combinable with --min-tier/--min-agreement; see "
+                                     "pending_task.md T18")
+    p_run_mexport.add_argument("--min-quality-tier", default=None, choices=["A", "B"],
+                                help="write a cut to manifest_qualityA.jsonl / manifest_qualityB.jsonl etc: "
+                                     "SEPARATE axis from --min-tier (see pipeline/nodes/quality_tier.py) -- "
+                                     "'B' for the strict clean-fine-tune subset, 'A' for the full "
+                                     "pretrain scope; only meaningful combined with --min-tier gold/auto_gold "
+                                     "(or omitted) -- see pending_task.md T13")
     p_run_mexport.set_defaults(func=cmd_run_manifest_export)
     p_run_report = run_sub.add_parser("report.build", help="P4: dataset-statistics + acceptance-criteria report, read live from the catalog -> metadata/DATASET_REPORT.md")
     p_run_report.add_argument("--min-tier", default=None, choices=["gold", "auto_gold", "silver", "bronze"],

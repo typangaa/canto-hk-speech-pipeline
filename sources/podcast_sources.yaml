@@ -1564,6 +1564,193 @@ sources:
     status: "active"
     notes: "FOUND 2026-07-13. Book reviews and personal growth. Clear narration by standard Cantonese speaker, no BGM."
 
+  - name: "路邊電台｜最真實香港Podcast (Roadside Radio)"
+    rss_url: "https://feed.firstory.me/rss/user/ckvnajq2h9hqp0884k19gwy0p"
+    source: "podcast"
+    language: "yue"
+    domain: "podcast"
+    style: "casual"
+    priority: "medium"
+    estimated_hours: 60
+    status: "active"
+    notes: "FOUND 2026-07-14. Growth, relationships and society talks. Native HK hosts, natural conversational register, good mic setups."
+
+  - name: "廣東話新聞慢慢聽 (Cantonese News with Tsubasa)"
+    rss_url: "https://feed.podbean.com/tsubasacantonese/feed.xml"
+    source: "podcast"
+    language: "yue"
+    domain: "news"
+    style: "narration"
+    priority: "high"
+    estimated_hours: 12
+    status: "active"
+    notes: "FOUND 2026-07-14. Slow-paced news reading for language learners. Native HK Cantonese, exceptionally clear speech, no BGM during news."
+
+  - name: "亂噏24 (Cantonese Coffee Break)"
+    rss_url: "https://rss.buzzsprout.com/2571175.rss"
+    source: "podcast"
+    language: "yue"
+    domain: "podcast"
+    style: "casual"
+    priority: "medium"
+    estimated_hours: 15
+    status: "active"
+    notes: "FOUND 2026-07-14. Unscripted everyday conversations on local culture. Clean voice tracks, no BGM."
+
+  - name: "乜東東．豎起耳仔窿 (Cantonese Podcast for Kids)"
+    rss_url: "https://anchor.fm/s/f767b374/podcast/rss"
+    source: "podcast"
+    language: "yue"
+    domain: "educational"
+    style: "narration"
+    priority: "medium"
+    estimated_hours: 10
+    status: "active"
+    notes: "FOUND 2026-07-14. Kids bedtime stories. Highly expressive storytelling register, clear pronunciation, clean studio mic."
+
+  - name: "心急人上 (No9Up)"
+    rss_url: "https://anchor.fm/s/ffa0837c/podcast/rss"
+    source: "podcast"
+    language: "yue"
+    domain: "podcast"
+    style: "casual"
+    priority: "high"
+    estimated_hours: 80
+    status: "active"
+    notes: "FOUND 2026-07-14. HK society and relationships discussion. Host is a licensed speech therapist, providing exceptionally clear articulation."
+
+  - name: "投資唔講廢話 (investnobullshit)"
+    rss_url: "https://feeds.soundon.fm/podcasts/e0e275d9-9a69-49c2-8c16-cbdfb914e9e7.xml"
+    source: "podcast"
+    language: "yue"
+    domain: "podcast"
+    style: "casual"
+    priority: "medium"
+    estimated_hours: 80
+    status: "active"
+    notes: "FOUND 2026-07-14. Trading and stock market commentary. Dry clean home voice recordings, no background music."
+
+  - name: "法醫研究所 (RTHK Podcast)"
+    rss_url: "https://podcast.rthk.hk/podcast/forensic_institute.xml"
+    source: "podcast"
+    language: "yue"
+    domain: "educational"
+    style: "conversational"
+    priority: "high"
+    estimated_hours: 46
+    status: "active"
+    notes: "FOUND 2026-07-15. Forensic anthropology talk show. Studio microphone quality, clear speech, no BGM during talk."
+
+  - name: "古文觀止 (RTHK Podcast)"
+    rss_url: "https://podcast.rthk.hk/podcast/culturewritings.xml"
+    source: "podcast"
+    language: "yue"
+    domain: "educational"
+    style: "narration"
+    priority: "high"
+    estimated_hours: 40
+    status: "active"
+    notes: "FOUND 2026-07-15. Classic Chinese prose readings and lectures. Highly formal register, extremely clean studio recording, zero BGM."
+
+  - name: "天圓地方 (RTHK Podcast)"
+    rss_url: "https://podcast.rthk.hk/podcast/acrosstheuniverse.xml"
+    source: "podcast"
+    language: "yue"
+    domain: "educational"
+    style: "formal"
+    priority: "high"
+    estimated_hours: 35
+    status: "active"
+    notes: "FOUND 2026-07-15. Popular science and astronomy talk show. Clean scholarly discussion register, clear enunciation, studio audio."
+
+  - name: "建築意 (RTHK Podcast)"
+    rss_url: "https://podcast.rthk.hk/podcast/radio5_classicarchitecture.xml"
+    source: "podcast"
+    language: "yue"
+    domain: "educational"
+    style: "formal"
+    priority: "high"
+    estimated_hours: 45
+    status: "active"
+    notes: "FOUND 2026-07-15. Panel discussions on world architectural history. Studio mic quality, formal speech, very low BGM."
+
+  - name: "開卷樂 (RTHK Podcast)"
+    rss_url: "https://podcast.rthk.hk/podcast/bookview.xml"
+    source: "podcast"
+    language: "yue"
+    domain: "educational"
+    style: "formal"
+    priority: "high"
+    estimated_hours: 40
+    status: "active"
+    notes: "FOUND 2026-07-15. Book reviews and author interviews. Literary register, clean studio audio, minimal BGM."
+
+  - name: "一分鐘閱讀 (RTHK Podcast)"
+    rss_url: "https://podcast.rthk.hk/podcast/1minreading.xml"
+    source: "podcast"
+    language: "yue"
+    domain: "educational"
+    style: "narration"
+    priority: "medium"
+    estimated_hours: 15
+    status: "active"
+    notes: "FOUND 2026-07-15. Short literary commentaries read by professional hosts. Studio narration quality, no BGM during speech."
+
+  - name: "大學堂 (RTHK Podcast)"
+    rss_url: "https://podcast.rthk.hk/podcast/radio1_university_knowledge_platform.xml"
+    source: "podcast"
+    language: "yue"
+    domain: "educational"
+    style: "formal"
+    priority: "high"
+    estimated_hours: 50
+    status: "active"
+    notes: "FOUND 2026-07-15. University public lectures on history, science, philosophy. High speaker diversity, formal academic Cantonese."
+
+  - name: "香港風物誌 (RTHK Podcast)"
+    rss_url: "https://podcast.rthk.hk/podcast/tv_heritageconnect.xml"
+    source: "podcast"
+    language: "yue"
+    domain: "documentary"
+    style: "narration"
+    priority: "high"
+    estimated_hours: 15
+    status: "active"
+    notes: "FOUND 2026-07-15. Local cultural heritage documentary. Clear narration-heavy studio sound, full archive feed."
+
+  - name: "333 On Air 三字經"
+    rss_url: "https://feeds.soundon.fm/podcasts/8664aa41-f4a8-437c-8e43-da1951b7cbb1.xml"
+    source: "podcast"
+    language: "yue"
+    domain: "podcast"
+    style: "casual"
+    priority: "medium"
+    estimated_hours: 80
+    status: "active"
+    notes: "FOUND 2026-07-15. Daily life, relationship, and cultural talks. Young HK hosts, great for casual slang/conversations, no constant BGM."
+
+  - name: "港女講旅行 Gong Travel"
+    rss_url: "https://feeds.soundon.fm/podcasts/4f70c2c4-bfbf-4eda-be81-d40ba18360c9.xml"
+    source: "podcast"
+    language: "yue"
+    domain: "podcast"
+    style: "casual"
+    priority: "medium"
+    estimated_hours: 200
+    status: "active"
+    notes: "FOUND 2026-07-15. Travel anecdotes and interviews by two female hosts. Clear home studio mic quality, minimal BGM."
+
+  - name: "小夜燈 Read and Hug"
+    rss_url: "https://feeds.soundon.fm/podcasts/8dd13611-a040-445c-9a46-f3ddcc17a9e1.xml"
+    source: "podcast"
+    language: "yue"
+    domain: "podcast"
+    style: "casual"
+    priority: "medium"
+    estimated_hours: 50
+    status: "active"
+    notes: "FOUND 2026-07-15. Culture and reflections by HK couple. Natural conversational register, warm room acoustics, clean audio."
+
 # ──────────────────────────────────────────────
 # Download Configuration
 # ──────────────────────────────────────────────

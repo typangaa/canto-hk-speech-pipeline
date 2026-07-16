@@ -66,14 +66,17 @@ name, per the qwen-asr package API).
 # WORKER_CLASSES dict; the JSONL stdin/stdout protocol (ready/task/result/error/
 # shutdown) is byte-identical regardless of backend.
 
-Golden-set parity note (REARCHITECTURE_IMPLEMENTATION_PLAN.md §9.1, updated
-2026-07-03): the 16 kHz downsample uses scipy.signal.resample_poly(wav, 1, 3)
-— identical to scripts/04_transcribe.py's _load_and_resample — instead of
-audio/bus.py's soxr resampler.  48000/16000 is an exact 3:1 ratio (lossless
-polyphase, no approximation), and this node is the only reader of its audio (no
-decode-once fan-out benefit to sharing bus.py here), so there is no reason to
-introduce a different resampler that would risk perturbing greedy-decoded
-(beam_size=1) ASR text at the token boundary.
+Resampler note (updated 2026-07-14, owner-approved — see DECISIONS.md): the
+16 kHz downsample now uses soxr.resample(quality="HQ") instead of
+scipy.signal.resample_poly(wav, 1, 3).  The original scipy choice (2026-07-03)
+was golden-set parity with scripts/04_transcribe.py's faster-whisper models —
+both of which are now retired (whisper_v3 2026-07-10, canto_ft 2026-07-13), so
+that parity constraint no longer binds.  soxr HQ is ~4x faster per resample and
+is the same libsoxr engine audio/bus.py and librosa (≥0.10 default) use;
+quality is equal-or-better (125 dB SNR at HQ) for the exact 3:1 ratio.  The
+swap is part of the decode+resample throughput fix (the CPU preprocessing
+stage, not the GPU, was the measured bottleneck once sense_voice's forward
+pass was batched — see the worker pipelining note in worker_main()'s docstring).
 
 ASR text is NOT expected to match the legacy snapshot byte-for-byte, even with
 identical uv.lock-pinned ctranslate2/faster-whisper versions and identical audio
@@ -249,18 +252,22 @@ EXCLUDED_FROM_AGREEMENT = {"whisper_v3", "canto_ft"}
 # ---------------------------------------------------------------------------
 
 def _load_and_resample(wav_path: str) -> np.ndarray | None:
-    """Load a 48 kHz WAV and downsample to 16 kHz for ASR. Thread-safe (scipy only,
-    no torch/CUDA) — identical to scripts/04_transcribe.py's _load_and_resample."""
-    from scipy.signal import resample_poly
+    """Load a 48 kHz segment (FLAC or WAV) and downsample to 16 kHz for ASR.
+    Thread-safe and GIL-releasing on both stages: libsndfile (sf.read) and
+    libsoxr (soxr.resample) each release the GIL, so an 8-16 thread pool scales
+    near-linearly — unlike scipy.resample_poly (the pre-2026-07-14 choice, ~4x
+    slower per file; see the module-docstring resampler note)."""
+    import soxr
     try:
-        wav48, _ = sf.read(wav_path, dtype="float32", always_2d=False)
+        wav48, sr = sf.read(wav_path, dtype="float32", always_2d=False)
     except Exception as e:
         log.warning(f"read fail {wav_path}: {e}")
         return None
     if wav48.ndim > 1:
         wav48 = wav48.mean(axis=1)
-    # 48000 → 16000 is exactly x(1/3); resample_poly is lossless for integer ratios.
-    return resample_poly(wav48, 1, 3).astype(np.float32)
+    if sr == ASR_SR:
+        return wav48.astype(np.float32, copy=False)
+    return soxr.resample(wav48, sr, ASR_SR, quality="HQ").astype(np.float32, copy=False)
 
 
 # ---------------------------------------------------------------------------
@@ -464,6 +471,8 @@ async def run_asr_transcribe(
     batch_size: int = 8,
     mem_fraction: float | None = None,
     limit: int | None = None,
+    prefetch: int = 2,
+    io_workers: int = 16,
 ) -> dict:
     """Supervisor entrypoint for the asr.transcribe node.
 
@@ -479,6 +488,17 @@ async def run_asr_transcribe(
     running alongside other nodes under `pipe run-many` (see filter.py's
     run_filter_acoustic docstring for the rationale). Defaults to a fresh
     self-managed connect() for standalone `pipe run asr.transcribe` usage.
+
+    prefetch (2026-07-14): number of tasks kept in flight per worker so the
+    worker's preprocess stage (decode+resample) overlaps the GPU forward of
+    the previous task — see worker_main()'s docstring. The device pool is now
+    acquired around the SEND only (dispatch gating): the foreign-GPU sampler
+    still throttles new dispatches by lowering the pool target, and in-flight
+    tasks are still never preempted, but preprocessing no longer serialises
+    with GPU compute. 1 restores the old strictly-sequential behaviour.
+
+    io_workers: decode+resample thread-pool size inside each worker subprocess
+    (passed through as --io-workers; sf.read and soxr both release the GIL).
     """
     from pipeline.catalog.catalog import connect, upsert_rows
     from pipeline.orchestrator.journal import new_run_id, record_batch
@@ -527,6 +547,7 @@ async def run_asr_transcribe(
         cmd = [
             sys.executable, "-m", "pipeline.nodes.asr",
             "--device", device, "--model-key", model_key,
+            "--io-workers", str(io_workers),
         ]
         if mem_fraction is not None and device.startswith("cuda"):
             cmd += ["--mem-fraction", str(mem_fraction)]
@@ -560,26 +581,57 @@ async def run_asr_transcribe(
         for batch in _batches(per_assignment_rows[(model_key, device)], batch_size):
             queue.put_nowait(batch)
 
-        while True:
+        # Double-buffered dispatch (2026-07-14, see run_asr_transcribe docstring):
+        # keep up to `prefetch` tasks in flight so the worker's preprocess stage
+        # decodes task N+1 while its GPU runs task N. The pool is acquired
+        # around the SEND only — foreign-GPU yield still gates new dispatches,
+        # in-flight tasks are never preempted. Results are matched by task_id
+        # (worker emits FIFO, but matching by id keeps a late straggler after a
+        # timeout from being attributed to the wrong batch).
+        inflight: dict[str, list[tuple]] = {}
+        seq = 0
+
+        async def dispatch_next() -> bool:
+            nonlocal seq
             try:
                 batch = queue.get_nowait()
             except asyncio.QueueEmpty:
-                return
-            meta = {r[0]: r[2] for r in batch}  # id -> duration_sec (unused, kept for parity/logs)
+                return False
+            task_id = f"{model_key}@{device}-{seq}"
+            seq += 1
             items = [{"id": r[0], "path": r[1]} for r in batch]
             async with pool.acquire():
-                await handle.send_task(f"{model_key}-{processed}", items)
-                try:
-                    result = await handle.read_message(timeout=600.0)
-                except Exception as e:
-                    log.error(f"{model_key}@{device}: batch failed: {e}")
-                    errors += len(batch)
-                    queue.task_done()
-                    continue
+                await handle.send_task(task_id, items)
+            inflight[task_id] = batch
+            return True
+
+        while True:
+            while len(inflight) < max(1, prefetch) and await dispatch_next():
+                pass
+            if not inflight:
+                return
+            try:
+                result = await handle.read_message(timeout=600.0)
+            except Exception as e:
+                # A timeout/death can't be attributed to one specific task —
+                # fail everything currently in flight for this worker (same
+                # accounting as the old per-batch failure path, scaled to the
+                # window). If a straggler result for one of these ids arrives
+                # later it is dropped by the unknown-task_id guard below.
+                n_failed = sum(len(b) for b in inflight.values())
+                log.error(f"{model_key}@{device}: read failed with {len(inflight)} task(s) "
+                          f"in flight ({n_failed} segments): {e}")
+                errors += n_failed
+                inflight.clear()
+                continue
+            batch = inflight.pop(result.get("task_id"), None)
+            if batch is None:
+                log.warning(f"{model_key}@{device}: result for unknown/expired task "
+                            f"{result.get('task_id')!r} — dropped")
+                continue
             if result["type"] == "error":
                 log.error(f"{model_key}@{device}: worker error: {result['error']}")
                 errors += len(batch)
-                queue.task_done()
                 continue
 
             # metadata is only populated by backends that produce backend-specific
@@ -611,7 +663,6 @@ async def run_asr_transcribe(
 
             processed += len(out_rows) + len(skipped_rows)
             errors += len(skipped_rows)
-            queue.task_done()
             if processed and processed % (batch_size * 20) < batch_size:
                 rate = processed / (time.time() - t0)
                 log.info(f"{processed}/{total} processed ({rate:.1f}/s), pools={registry.snapshot()}")
@@ -973,11 +1024,33 @@ WORKER_CLASSES: dict[str, type] = {
 
 
 def worker_main() -> None:
+    """Worker-subprocess entrypoint — a 3-stage threaded pipeline (2026-07-14).
+
+    Before this date the loop was strictly sequential per task: decode+resample
+    ALL items, then run the GPU forward, then read the next task — so the GPU
+    idled during CPU preprocessing and vice versa.  Once sense_voice's forward
+    pass was properly batched (2026-07-13 batch_size fix), preprocessing became
+    the measured wall-clock bottleneck (cold-cache FLAC decode ~76 ms/file vs a
+    ~0.55 s forward for a whole batch of 64).  Standard producer-consumer fix
+    (the same pattern as torch DataLoader prefetch / tf.data.prefetch):
+
+        [stdin reader thread] -> raw_q -> [preprocess thread + IO pool] -> ready_q -> [main thread: GPU + emit]
+
+    Bounded queues (maxsize=2) give backpressure; the supervisor keeps up to
+    --prefetch tasks in flight (see run_asr_transcribe) so the preprocess stage
+    always has a next task to decode while the GPU runs the current one.  Only
+    the main thread writes to stdout, so result JSONL lines never interleave.
+    Results are emitted in task order (both queues are FIFO), but the
+    supervisor matches on task_id anyway.
+    """
+    import queue as queue_mod
+    import threading
+
     ap = argparse.ArgumentParser()
     ap.add_argument("--device", default="cuda:0")
     ap.add_argument("--model-key", required=True, choices=list(ASR_MODELS.keys()))
     ap.add_argument("--mem-fraction", type=float, default=None)
-    ap.add_argument("--io-workers", type=int, default=8)
+    ap.add_argument("--io-workers", type=int, default=16)
     args = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO, stream=sys.stderr,
@@ -988,36 +1061,70 @@ def worker_main() -> None:
     worker = worker_cls(args.device, args.model_key, mem_fraction=args.mem_fraction)
 
     def emit(msg: dict) -> None:
+        # Called from the main thread only (before the pipeline threads start,
+        # and then from the GPU loop) — single writer, no interleaving.
         sys.stdout.write(json.dumps(msg, ensure_ascii=False) + "\n")
         sys.stdout.flush()
 
     emit({"type": "ready", "node": "asr.transcribe", "pid": __import__("os").getpid(), "proto": 1})
 
     ex = ThreadPoolExecutor(max_workers=args.io_workers)
+    raw_q: queue_mod.Queue = queue_mod.Queue(maxsize=2)
+    ready_q: queue_mod.Queue = queue_mod.Queue(maxsize=2)
 
-    for line in sys.stdin:
-        line = line.strip()
-        if not line:
-            continue
-        msg = json.loads(line)
-        if msg["type"] == "shutdown":
+    def reader_loop() -> None:
+        """stdin → raw_q. A None sentinel (on shutdown message or stdin EOF)
+        flows through both queues so each stage drains in-flight work before
+        exiting."""
+        for line in sys.stdin:
+            line = line.strip()
+            if not line:
+                continue
+            msg = json.loads(line)
+            if msg["type"] == "shutdown":
+                break
+            if msg["type"] != "task":
+                continue
+            raw_q.put(msg)
+        raw_q.put(None)
+
+    def preprocess_loop() -> None:
+        """raw_q → decode+resample (GIL-releasing sf/soxr on the IO pool) → ready_q."""
+        while True:
+            msg = raw_q.get()
+            if msg is None:
+                ready_q.put(None)
+                return
+            task_id, items = msg["task_id"], msg["items"]
+            t0 = time.time()
+            try:
+                paths = [it["path"] for it in items]
+                wavs = list(ex.map(_load_and_resample, paths))
+                keep_idx = [i for i, w in enumerate(wavs) if w is not None and len(w) >= ASR_SR // 10]
+                skipped_ids = [items[i]["id"] for i in range(len(items)) if i not in set(keep_idx)]
+                kept_wavs = [wavs[i] for i in keep_idx]
+                ready_q.put(("task", task_id, items, kept_wavs, keep_idx, skipped_ids, t0))
+            except Exception as e:
+                ready_q.put(("error", task_id, str(e)))
+
+    threading.Thread(target=reader_loop, daemon=True, name="stdin-reader").start()
+    threading.Thread(target=preprocess_loop, daemon=True, name="preprocess").start()
+
+    # Main thread: GPU inference + stdout emit.
+    while True:
+        entry = ready_q.get()
+        if entry is None:
             break
-        if msg["type"] != "task":
+        if entry[0] == "error":
+            _, task_id, err = entry
+            emit({"type": "error", "task_id": task_id, "error": err, "retryable": True})
             continue
-
-        task_id = msg["task_id"]
-        items = msg["items"]
-        t0 = time.time()
+        _, task_id, items, kept_wavs, keep_idx, skipped_ids, t0 = entry
         try:
-            paths = [it["path"] for it in items]
-            wavs = list(ex.map(_load_and_resample, paths))
-            keep_idx = [i for i, w in enumerate(wavs) if w is not None and len(w) >= ASR_SR // 10]
-            skipped_ids = [items[i]["id"] for i in range(len(items)) if i not in set(keep_idx)]
             if not keep_idx:
                 emit({"type": "result", "task_id": task_id, "rows": [],
                       "skipped_ids": skipped_ids, "metrics": {"items_s": 0.0}})
                 continue
-            kept_wavs = [wavs[i] for i in keep_idx]
             results = worker.infer_with_oom_halving(kept_wavs)
             rows = []
             for i, res in zip(keep_idx, results):

@@ -402,6 +402,7 @@ async def run_filter_acoustic(
     threads_per_worker: int = 4,
     batch_size: int = 8,
     limit: int | None = None,
+    gpu_ids: list[int] | None = None,
 ) -> dict:
     """Supervisor entrypoint for filter.acoustic. Spawns n_workers CPU worker
     subprocesses (each with its own capped-thread ONNX sessions), dispatches
@@ -412,7 +413,12 @@ async def run_filter_acoustic(
     running alongside other nodes under `pipe run-many` (DuckDB's write lock
     is per-process, not per-transaction; a cursor on a shared connection is a
     transparent drop-in for upsert_rows/record_batch). Defaults to a fresh
-    self-managed connect() for standalone `pipe run filter.acoustic` usage."""
+    self-managed connect() for standalone `pipe run filter.acoustic` usage.
+
+    gpu_ids: if given, workers round-robin across these CUDA device ids for the
+    DNSMOS ONNX sessions instead of CPU-only (2026-07-14 GPU-offload experiment
+    — CPU worker scaling hit a throughput wall, see DECISIONS.md 2026-07-14).
+    Requires onnxruntime-gpu installed and CUDAExecutionProvider available."""
     from pipeline.catalog.catalog import connect, upsert_rows
     from pipeline.orchestrator.journal import new_run_id, record_batch
     from pipeline.orchestrator.pools import PoolRegistry
@@ -446,13 +452,29 @@ async def run_filter_acoustic(
         "MKL_NUM_THREADS": "1",
         "NUMEXPR_NUM_THREADS": "1",
     }
+    if gpu_ids:
+        # onnxruntime-gpu 1.27 needs libcudart.so.13/libcudnn.so — not on the
+        # default loader path, but torch's own pip-bundled CUDA 13 runtime
+        # (nvidia-* wheels) ships them; point workers at that instead of
+        # requiring a separate system CUDA toolkit install.
+        import nvidia
+        nvidia_root = Path(nvidia.__path__[0])
+        cuda_lib_dirs = [
+            str(nvidia_root / sub / "lib")
+            for sub in ("cu13", "cudnn", "cuda_runtime")
+            if (nvidia_root / sub / "lib").is_dir()
+        ]
+        existing = os.environ.get("LD_LIBRARY_PATH", "")
+        worker_env["LD_LIBRARY_PATH"] = ":".join(cuda_lib_dirs + ([existing] if existing else []))
 
     handles = {}
-    for pool_name in pool_names:
+    for i, pool_name in enumerate(pool_names):
         cmd = [
             sys.executable, "-m", "pipeline.nodes.filter",
             "--threads", str(threads_per_worker),
         ]
+        if gpu_ids:
+            cmd += ["--gpu-id", str(gpu_ids[i % len(gpu_ids)])]
         handle = await spawn_worker(cmd, env=worker_env)
         await handle.wait_ready(timeout=120.0)
         handles[pool_name] = handle
@@ -529,11 +551,17 @@ async def run_filter_acoustic(
     return {"processed": processed, "errors": errors, "run_id": run_id}
 
 
-def _build_capped_dnsmos(threads: int):
+def _build_capped_dnsmos(threads: int, gpu_id: int | None = None):
     """Build a speechmos.dnsmos.DNSMOS instance whose two ONNX sessions are capped
     to *threads* intra-op threads, without monkeypatching onnxruntime.InferenceSession
-    (see module docstring). Reuses DNSMOS's own audio_melspec/get_polyfit_val/__call__
-    unmodified — only session construction differs."""
+    (see module docstring). Reuses speechmos.dnsmos.DNSMOS's own (otherwise
+    unmodified) audio_melspec/get_polyfit_val/__call__ methods — only session
+    construction differs.
+
+    gpu_id: if not None, tries CUDAExecutionProvider on that device first (falls
+    back to CPUExecutionProvider automatically if unavailable — onnxruntime's own
+    provider-fallback behavior, 2026-07-14 GPU-offload experiment, see DECISIONS.md).
+    """
     import onnxruntime as ort
     import speechmos.dnsmos as _dnsmos_mod
 
@@ -541,14 +569,19 @@ def _build_capped_dnsmos(threads: int):
     so.intra_op_num_threads = threads
     so.inter_op_num_threads = 1
 
+    if gpu_id is not None:
+        providers = [("CUDAExecutionProvider", {"device_id": gpu_id}), "CPUExecutionProvider"]
+    else:
+        providers = ["CPUExecutionProvider"]
+
     models_dir = Path(_dnsmos_mod.__file__).resolve().parent / "dnsmos_models"
     primary_path = str(models_dir / "sig_bak_ovr.onnx")
     p808_path = str(models_dir / "model_v8.onnx")
 
     instance = _dnsmos_mod.DNSMOS.__new__(_dnsmos_mod.DNSMOS)
     instance.primary_model_path = primary_path
-    instance.onnx_sess = ort.InferenceSession(primary_path, sess_options=so)
-    instance.p808_onnx_sess = ort.InferenceSession(p808_path, sess_options=so)
+    instance.onnx_sess = ort.InferenceSession(primary_path, sess_options=so, providers=providers)
+    instance.p808_onnx_sess = ort.InferenceSession(p808_path, sess_options=so, providers=providers)
     return instance
 
 
@@ -571,13 +604,15 @@ def compute_dnsmos(wav48: np.ndarray, dnsmos_instance) -> tuple[float, float]:
 
 
 class AcousticWorker(GPUWorkerBase):
-    def __init__(self, threads: int = 4) -> None:
+    def __init__(self, threads: int = 4, gpu_id: int | None = None) -> None:
         self.threads = threads
+        self.gpu_id = gpu_id
         super().__init__("cpu", fp16=False)
 
     def load_model(self):
-        log.info(f"Loading DNSMOS ONNX sessions (intra_op_num_threads={self.threads}) ...")
-        return _build_capped_dnsmos(self.threads)
+        log.info(f"Loading DNSMOS ONNX sessions (intra_op_num_threads={self.threads}, "
+                 f"gpu_id={self.gpu_id}) ...")
+        return _build_capped_dnsmos(self.threads, gpu_id=self.gpu_id)
 
     def forward_batch(self, items: list[np.ndarray]) -> list[dict]:
         return [self._acoustic_one(wav48) for wav48 in items]
@@ -605,6 +640,8 @@ def worker_main() -> None:
     ap.add_argument("--threads", type=int, default=4,
                      help="onnxruntime intra_op_num_threads cap per worker process")
     ap.add_argument("--io-workers", type=int, default=4)
+    ap.add_argument("--gpu-id", type=int, default=None,
+                     help="CUDA device id for DNSMOS ONNX sessions (default: CPU)")
     args = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO, stream=sys.stderr,
@@ -619,7 +656,7 @@ def worker_main() -> None:
     # better than a single process). Cap it the same way onnxruntime is capped.
     torch.set_num_threads(1)
 
-    worker = AcousticWorker(threads=args.threads)
+    worker = AcousticWorker(threads=args.threads, gpu_id=args.gpu_id)
 
     def emit(msg: dict) -> None:
         sys.stdout.write(json.dumps(msg, ensure_ascii=False) + "\n")
@@ -742,10 +779,19 @@ async def run_filter_decide(*, conn=None, batch_size: int = 5000, limit: int | N
     passed = 0
     t0 = time.time()
 
-    # Wrap all batches in a single transaction so DuckDB only performs one WAL
-    # checkpoint flush at the end rather than one per batch.  For a pure
-    # in-memory aggregation step like filter.decide (no audio, no workers),
-    # this cuts wall-clock time from O(n²) to O(n) on large catalogs.
+    # Batch several `upsert_rows()` calls per transaction so DuckDB doesn't
+    # perform a WAL checkpoint flush on every single batch (O(n^2)-ish on
+    # large catalogs). But NEVER wrap the *entire* backlog in one
+    # transaction: `filters` was pre-populated by the P0 legacy import
+    # (455,299 rows, provenance IS NULL), so almost every write here is an
+    # INSERT OR REPLACE over an existing PK row — i.e. a delete+insert whose
+    # MVCC undo/version-chain state DuckDB must hold in memory until commit.
+    # A single all-rows transaction grows that state unboundedly and OOM'd
+    # at ~430k/578,889 rows on a 251GiB box (DuckDB's default memory_limit
+    # is ~80% of system RAM; see DECISIONS.md 2026-07-14). Committing every
+    # COMMIT_EVERY_ROWS bounds the per-transaction memory instead.
+    COMMIT_EVERY_ROWS = 50_000
+    rows_since_commit = 0
     conn.begin()
     try:
         for i in range(0, len(rows), batch_size):
@@ -755,6 +801,11 @@ async def run_filter_decide(*, conn=None, batch_size: int = 5000, limit: int | N
             record_batch(conn, run_id, "filter.decide", [r["id"] for r in out_rows], "ok")
             processed += len(out_rows)
             passed += sum(1 for r in out_rows if r["pass"])
+            rows_since_commit += len(out_rows)
+            if rows_since_commit >= COMMIT_EVERY_ROWS:
+                conn.commit()
+                conn.begin()
+                rows_since_commit = 0
             rate = processed / (time.time() - t0) if time.time() > t0 else 0.0
             log.info(f"{processed}/{len(rows)} decided ({rate:.1f}/s), pass_rate={passed / processed:.3f}")
         conn.commit()

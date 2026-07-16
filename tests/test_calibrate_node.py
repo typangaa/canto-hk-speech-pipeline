@@ -6,6 +6,8 @@ import pytest
 
 from pipeline.catalog.catalog import init_schema
 from pipeline.nodes.calibrate import (
+    CODE_SWITCH_QA_MULTIPLIER,
+    MANDARIN_FLAG_REASON,
     QA_SAMPLE_RATE_BY_TIER,
     _levenshtein,
     append_pending_decision,
@@ -36,7 +38,7 @@ def scratch_conn(tmp_path):
     conn.close()
 
 
-def _seed_segment(conn, seg_id, *, passes_filter=True, agreement=0.7, source="podcast", tier=None):
+def _seed_segment(conn, seg_id, *, passes_filter=True, agreement=0.7, source="podcast", tier=None, english_ratio=0.0):
     conn.execute(
         "INSERT INTO segments (id, audio_path, source, duration_sec, program) "
         "VALUES (?, ?, ?, 6.0, 'test-program')",
@@ -47,8 +49,8 @@ def _seed_segment(conn, seg_id, *, passes_filter=True, agreement=0.7, source="po
         [seg_id, agreement, "呢個係測試文字"],
     )
     conn.execute(
-        "INSERT INTO filters (id, pass) VALUES (?, ?)",
-        [seg_id, passes_filter],
+        "INSERT INTO filters (id, pass, english_ratio) VALUES (?, ?, ?)",
+        [seg_id, passes_filter, english_ratio],
     )
     conn.execute(
         "INSERT INTO asr_results (id, model, text, confidence) VALUES (?, 'canto_ft', '呢個係測試文字', 0.9)",
@@ -172,6 +174,86 @@ def test_recommended_sample_n_rejects_unknown_tier(scratch_conn):
 
 
 # ---------------------------------------------------------------------------
+# code_switch oversampling (added 2026-07-15, T18)
+# ---------------------------------------------------------------------------
+
+def test_discover_code_switch_only_scopes_to_english_ratio_positive(scratch_conn):
+    conn = scratch_conn
+    _seed_segment(conn, "mono1", english_ratio=0.0)
+    _seed_segment(conn, "cs1", english_ratio=0.2)
+
+    picked = discover(conn, 10, code_switch="only")
+    assert [seg_id for seg_id, _ in picked] == ["cs1"]
+
+
+def test_discover_code_switch_exclude_scopes_to_english_ratio_zero(scratch_conn):
+    conn = scratch_conn
+    _seed_segment(conn, "mono1", english_ratio=0.0)
+    _seed_segment(conn, "cs1", english_ratio=0.2)
+
+    picked = discover(conn, 10, code_switch="exclude")
+    assert [seg_id for seg_id, _ in picked] == ["mono1"]
+
+
+def test_discover_code_switch_none_returns_both(scratch_conn):
+    conn = scratch_conn
+    _seed_segment(conn, "mono1", english_ratio=0.0)
+    _seed_segment(conn, "cs1", english_ratio=0.2)
+
+    picked = {seg_id for seg_id, _ in discover(conn, 10)}
+    assert picked == {"mono1", "cs1"}
+
+
+def test_discover_code_switch_combines_with_tier(scratch_conn):
+    conn = scratch_conn
+    _seed_segment(conn, "ag_cs", tier="auto_gold", english_ratio=0.2)
+    _seed_segment(conn, "sv_cs", tier="silver", english_ratio=0.2)
+    _seed_segment(conn, "ag_mono", tier="auto_gold", english_ratio=0.0)
+
+    picked = discover(conn, 10, tier="auto_gold", code_switch="only")
+    assert [seg_id for seg_id, _ in picked] == ["ag_cs"]
+
+
+def test_discover_rejects_invalid_code_switch(scratch_conn):
+    with pytest.raises(ValueError):
+        discover(scratch_conn, 10, code_switch="bogus")
+
+
+def test_recommended_sample_n_code_switch_applies_multiplier(scratch_conn):
+    conn = scratch_conn
+    for i in range(1000):
+        _seed_segment(conn, f"br_cs{i}", tier="bronze", english_ratio=0.2)
+
+    n = recommended_sample_n(conn, "bronze", code_switch=True)
+    expected_rate = min(QA_SAMPLE_RATE_BY_TIER["bronze"] * CODE_SWITCH_QA_MULTIPLIER, 1.0)
+    assert n == round(1000 * expected_rate)
+    assert n > round(1000 * QA_SAMPLE_RATE_BY_TIER["bronze"])
+
+
+def test_recommended_sample_n_code_switch_scopes_population_to_code_switch_only(scratch_conn):
+    conn = scratch_conn
+    for i in range(100):
+        _seed_segment(conn, f"ag_mono{i}", tier="auto_gold", english_ratio=0.0)
+    for i in range(10):
+        _seed_segment(conn, f"ag_cs{i}", tier="auto_gold", english_ratio=0.2)
+
+    n = recommended_sample_n(conn, "auto_gold", min_n=1, code_switch=True)
+    expected_rate = min(QA_SAMPLE_RATE_BY_TIER["auto_gold"] * CODE_SWITCH_QA_MULTIPLIER, 1.0)
+    assert n == max(1, round(10 * expected_rate))
+
+
+def test_recommended_sample_n_code_switch_rate_capped_at_one(scratch_conn):
+    """auto_gold base rate (0.015) * 10x = 0.15, well under 1.0 -- but bronze's base
+    rate (0.10) * 10x = 1.0 exactly, the boundary the cap must not exceed."""
+    conn = scratch_conn
+    for i in range(20):
+        _seed_segment(conn, f"br_cs{i}", tier="bronze", english_ratio=0.2)
+
+    n = recommended_sample_n(conn, "bronze", min_n=1, code_switch=True)
+    assert n == 20  # 100% of the 20-row population, not more
+
+
+# ---------------------------------------------------------------------------
 # record_decision() — human review write-back
 # ---------------------------------------------------------------------------
 
@@ -218,6 +300,38 @@ def test_record_decision_rejects_invalid_decision(scratch_conn):
     _seed_segment(conn, "s1")
     with pytest.raises(ValueError):
         record_decision(conn, "s1", "maybe", None)
+
+
+def test_record_decision_rejected_excludes_from_tier(scratch_conn):
+    conn = scratch_conn
+    _seed_segment(conn, "s1")
+    conn.execute("INSERT INTO calibration_review (id, decision) VALUES ('s1', 'pending')")
+    conn.execute("INSERT INTO tiers (id, tier, provenance) VALUES ('s1', 'silver', 'tier_assign')")
+
+    record_decision(conn, "s1", "rejected", None)
+
+    review = conn.execute("SELECT decision FROM calibration_review WHERE id='s1'").fetchone()
+    assert review == ("rejected",)
+    tier_row = conn.execute("SELECT tier, provenance FROM tiers WHERE id='s1'").fetchone()
+    assert tier_row == ("excluded", "calibrate_reject")
+    # rejection must never masquerade as human text verification
+    agreement_row = conn.execute("SELECT text_verified FROM asr_agreement WHERE id='s1'").fetchone()
+    assert agreement_row == (False,)
+
+
+def test_record_decision_rejected_with_mandarin_reason_excludes_and_stores_reason(scratch_conn):
+    conn = scratch_conn
+    _seed_segment(conn, "s1")
+    conn.execute("INSERT INTO calibration_review (id, decision) VALUES ('s1', 'pending')")
+
+    record_decision(conn, "s1", "rejected", None, flag_reason=MANDARIN_FLAG_REASON)
+
+    review = conn.execute(
+        "SELECT decision, flag_reason FROM calibration_review WHERE id='s1'"
+    ).fetchone()
+    assert review == ("rejected", "mandarin")
+    tier_row = conn.execute("SELECT tier FROM tiers WHERE id='s1'").fetchone()
+    assert tier_row == ("excluded",)
 
 
 # ---------------------------------------------------------------------------
@@ -435,6 +549,20 @@ def test_summary_stats_aggregates_decisions_and_edit_distance(scratch_conn):
     assert stats["verified_edit_sample_size"] == 1
     assert stats["avg_edit_distance_verified"] > 0
     assert stats["top_flag_reasons"] == [{"reason": "audio corrupt", "count": 1}]
+
+
+def test_summary_stats_includes_mandarin_rejections_in_flag_leaderboard(scratch_conn):
+    conn = scratch_conn
+    _seed_segment(conn, "a", source="youtube")
+    _seed_segment(conn, "b", source="youtube")
+    conn.execute("INSERT INTO calibration_review (id, decision) VALUES ('a', 'pending')")
+    conn.execute("INSERT INTO calibration_review (id, decision) VALUES ('b', 'pending')")
+    record_decision(conn, "a", "rejected", None, flag_reason=MANDARIN_FLAG_REASON)
+    record_decision(conn, "b", "rejected", None)  # plain rejection, no reason
+
+    stats = summary_stats(conn)
+    assert stats["decision_counts"]["rejected"] == 2
+    assert stats["top_flag_reasons"] == [{"reason": "mandarin", "count": 1}]
 
 
 def test_summary_stats_scoped_by_batch(scratch_conn):

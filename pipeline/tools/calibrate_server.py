@@ -4,9 +4,14 @@ Local browser UI for human text-verification calibration. NOT a DAG node --
 this is a long-running interactive server, not an idempotent-discovery batch
 step. It reads the sample queue that `pipe run calibrate.sample` writes into
 `calibration_review` and lets the owner listen to each segment, compare ASR
-candidates, and record a verified/skipped/rejected decision. See
+candidates, and record a verified/skipped/rejected/flagged decision. See
 pipeline/nodes/calibrate.py's module docstring for why this exists (owner
 decision 2026-07-10: text_verified/gold was structurally dead in the DAG).
+A dedicated one-click "Mandarin" button (2026-07-15) submits a 'rejected'
+decision with a fixed flag_reason ("mandarin", MANDARIN_FLAG_REASON) for
+segments that surface for text QA but turn out to be non-HK-Cantonese --
+'rejected' now also excludes the segment from the manifest (tiers.tier is
+set to 'excluded', see record_decision() in pipeline/nodes/calibrate.py).
 
 Usage:
     .venv/bin/python -m pipeline.tools.calibrate_server [--port 8420] [--batch <sample_batch id>]
@@ -156,6 +161,27 @@ def _read(fn, *args, **kwargs):
         return fn(conn, *args, **kwargs)
     finally:
         conn.close()
+
+
+_VALID_QA_TIERS = ("auto_gold", "silver", "bronze")
+
+
+def _parse_sample_options(payload: dict) -> tuple:
+    """Shared tier/min_agreement/code_switch parsing for /api/refill (JSON body)
+    and /api/next's auto-refill (query string, flattened by the caller into the
+    same {tier, min_agreement, code_switch} shape first) -- the browser UI's
+    equivalent of `pipe run calibrate.sample --tier/--min-agreement/--code-switch`
+    (added 2026-07-15, mirrors calibrate.py's own discover()/run_calibrate_sample()
+    params). Raises ValueError on a malformed tier/min_agreement so the caller can
+    400 instead of silently sampling something the reviewer didn't ask for;
+    code_switch is validated downstream by calibrate.discover() itself."""
+    tier = (payload.get("tier") or "").strip() or None
+    if tier is not None and tier not in _VALID_QA_TIERS:
+        raise ValueError(f"tier must be one of {_VALID_QA_TIERS}, got {tier!r}")
+    raw_min_agreement = payload.get("min_agreement")
+    min_agreement = float(raw_min_agreement) if raw_min_agreement not in (None, "") else None
+    code_switch = (payload.get("code_switch") or "").strip() or None
+    return tier, min_agreement, code_switch
 
 
 def _write(fn, *args, **kwargs):
@@ -314,7 +340,7 @@ def _offline_summary_stats(sample_batch: str | None) -> dict:
             agreements_by_decision.setdefault(e["decision"], []).append(item["agreement"])
         if e["decision"] == "verified" and item and e.get("text") is not None:
             edits.append(_levenshtein(item.get("best_text") or "", e["text"]))
-        if e["decision"] == "flagged" and e.get("flag_reason"):
+        if e["decision"] in ("flagged", "rejected") and e.get("flag_reason"):
             flag_counter[e["flag_reason"]] = flag_counter.get(e["flag_reason"], 0) + 1
     return {
         "decision_counts": _offline_queue_stats(sample_batch, None),
@@ -418,9 +444,25 @@ def _build_app(default_batch: str | None):
                     # new segments -- no offline equivalent, so this step is
                     # simply skipped while offline (the reviewer works through
                     # whatever the snapshot already has).
+                    # tier/min_agreement/code_switch (added 2026-07-15): the
+                    # reviewer's current sample-options selection, so this
+                    # auto top-up stays scoped to what they're actually
+                    # reviewing instead of diluting it with an unscoped
+                    # random sample -- see _parse_sample_options().
+                    try:
+                        tier, min_agreement, code_switch = _parse_sample_options({
+                            "tier": qs.get("tier", [None])[0],
+                            "min_agreement": qs.get("min_agreement", [None])[0],
+                            "code_switch": qs.get("code_switch", [None])[0],
+                        })
+                    except ValueError:
+                        tier = min_agreement = code_switch = None
                     try:
                         result = _write(
-                            lambda conn: asyncio.run(run_calibrate_sample(conn=conn, n=_AUTO_REFILL_N))
+                            lambda conn: asyncio.run(run_calibrate_sample(
+                                conn=conn, n=_AUTO_REFILL_N, tier=tier,
+                                min_agreement=min_agreement, code_switch=code_switch,
+                            ))
                         )
                         if result["queued"]:
                             refilled = result
@@ -539,12 +581,20 @@ def _build_app(default_batch: str | None):
                 try:
                     payload = json.loads(self.rfile.read(length)) if length else {}
                     n = int(payload.get("n", 200))
-                except json.JSONDecodeError:
-                    self.send_error(400, "malformed request body")
+                    tier, min_agreement, code_switch = _parse_sample_options(payload)
+                except (json.JSONDecodeError, ValueError) as exc:
+                    self._send_json({"error": f"malformed request body: {exc}"}, status=400)
                     return
-                result = _write(
-                    lambda conn: asyncio.run(run_calibrate_sample(conn=conn, n=n))
-                )
+                try:
+                    result = _write(
+                        lambda conn: asyncio.run(run_calibrate_sample(
+                            conn=conn, n=n, tier=tier, min_agreement=min_agreement,
+                            code_switch=code_switch,
+                        ))
+                    )
+                except ValueError as exc:
+                    self._send_json({"error": str(exc)}, status=400)
+                    return
                 self._send_json(result)
                 return
 
@@ -620,9 +670,18 @@ _PAGE_HTML = r"""<!doctype html>
   #progress-bar { flex: 1 1 160px; min-width: 120px; height: 6px; border-radius: 3px;
                   background: var(--border); overflow: hidden; display: flex; }
   #progress-bar span { display: block; height: 100%; }
-  .filters { display: flex; gap: 0.5rem; margin-left: auto; flex-wrap: wrap; }
+  .filters { display: flex; gap: 0.5rem; margin-left: auto; flex-wrap: wrap; align-items: center; }
   select { background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
            border-radius: 6px; padding: 0.35rem 0.5rem; font-size: 0.82rem; }
+  /* ---- sample-options group: what a Refill click queues, distinct from the
+     batch/source/order group above which only scopes browsing of the
+     already-queued items (added 2026-07-15) ---- */
+  .sample-options { display: flex; gap: 0.4rem; align-items: center; padding-left: 0.6rem;
+                     border-left: 1px solid var(--border); }
+  .sample-options .label { font-size: 0.72rem; color: var(--dim); }
+  #minAgreementInput { width: 5.2rem; background: var(--panel-2); color: var(--text);
+                        border: 1px solid var(--border); border-radius: 6px;
+                        padding: 0.35rem 0.5rem; font-size: 0.82rem; }
 
   /* ---- main grid: review card (left) + history (right) ---- */
   #layout { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 1rem; align-items: start; }
@@ -695,6 +754,7 @@ _PAGE_HTML = r"""<!doctype html>
   #verify { background: var(--good); color: white; }
   #skip { background: var(--panel-2); color: var(--text); border: 1px solid var(--border) !important; }
   #reject { background: var(--bad); color: white; }
+  #mandarin { background: var(--bad); color: white; border: 2px solid #7a0000 !important; }
   #flag { background: var(--warn); color: #1c1300; }
   .hint { color: var(--dim); font-size: 0.74rem; margin-top: 0.8rem; }
   #done { display: none; color: var(--muted); }
@@ -785,7 +845,22 @@ _PAGE_HTML = r"""<!doctype html>
       <option value="agreement_asc">Lowest agreement first</option>
       <option value="agreement_desc">Highest agreement first</option>
     </select>
-    <button id="refillBtn" title="Queue another random sample">↻ Refill</button>
+    <span class="sample-options" title="Scopes what the Refill button queues (same as pipe run calibrate.sample --tier/--min-agreement/--code-switch) -- does not filter the items already in the queue.">
+      <span class="label">Sample:</span>
+      <select id="tierSelect">
+        <option value="">any tier</option>
+        <option value="auto_gold">auto_gold</option>
+        <option value="silver">silver</option>
+        <option value="bronze">bronze</option>
+      </select>
+      <input id="minAgreementInput" type="number" step="0.01" min="0" max="1" placeholder="min agr.">
+      <select id="codeSwitchSelect">
+        <option value="">any code-switch</option>
+        <option value="only">code-switch only</option>
+        <option value="exclude">no code-switch</option>
+      </select>
+    </span>
+    <button id="refillBtn" title="Queue another random sample using the Sample options above">↻ Refill</button>
   </div>
 </div>
 
@@ -815,6 +890,7 @@ _PAGE_HTML = r"""<!doctype html>
         <button class="action" id="verify">Verify (Enter)</button>
         <button class="action" id="skip">Skip (S)</button>
         <button class="action" id="reject">Reject (D)</button>
+        <button class="action" id="mandarin" title="Not HK Cantonese -- rejects and records the reason">Mandarin (M)</button>
         <button class="action" id="flag">Flag issue (F)</button>
       </div>
       <div id="flag-box">
@@ -866,6 +942,18 @@ function currentFilters() {
     batch: document.getElementById('batchSelect').value,
     source: document.getElementById('sourceSelect').value,
     order: document.getElementById('orderSelect').value,
+  };
+}
+
+// Scopes what a Refill (manual or auto-on-empty) queues -- distinct from
+// currentFilters() above, which only scopes browsing of items already in
+// the queue. Mirrors `pipe run calibrate.sample --tier/--min-agreement/
+// --code-switch` (2026-07-15).
+function currentSampleOptions() {
+  return {
+    tier: document.getElementById('tierSelect').value,
+    min_agreement: document.getElementById('minAgreementInput').value,
+    code_switch: document.getElementById('codeSwitchSelect').value,
   };
 }
 
@@ -962,7 +1050,7 @@ async function refreshHistory() {
   for (const it of items) {
     const div = document.createElement('div');
     div.className = 'hist-item';
-    const bodyText = it.decision === 'flagged'
+    const bodyText = (it.decision === 'flagged' || (it.decision === 'rejected' && it.flag_reason))
       ? (it.flag_reason || '(no reason given)')
       : (it.reviewed_text || '(no text)');
     div.innerHTML =
@@ -1094,7 +1182,7 @@ function renderItem(item) {
     `<span class="agreement-pill ${agreementCls}">agreement ${item.agreement?.toFixed(2)}</span>`;
   if (item.decision && item.decision !== 'pending') {
     metaHtml += `<span class="decision-pill ${item.decision}">${item.decision}</span>`;
-    if (item.decision === 'flagged' && item.flag_reason) {
+    if ((item.decision === 'flagged' || item.decision === 'rejected') && item.flag_reason) {
       metaHtml += `<span style="color:var(--warn)">${escapeHtml(item.flag_reason)}</span>`;
     }
   }
@@ -1154,7 +1242,8 @@ function undoInsert() {
 // ---- navigation ----
 async function loadNext() {
   const { batch, source, order } = currentFilters();
-  const r = await fetch('/api/next?' + qs({ batch, source, order }));
+  const { tier, min_agreement, code_switch } = currentSampleOptions();
+  const r = await fetch('/api/next?' + qs({ batch, source, order, tier, min_agreement, code_switch }));
   const { item, refilled } = await r.json();
   reviewingFromHistory = false;
   if (refilled) {
@@ -1219,6 +1308,13 @@ async function submit(decision, flagReason) {
 document.getElementById('verify').onclick = () => submit('verified');
 document.getElementById('skip').onclick = () => submit('skipped');
 document.getElementById('reject').onclick = () => submit('rejected');
+// Mandarin flag (added 2026-07-15): one-click reject with a fixed reason --
+// must match MANDARIN_FLAG_REASON in pipeline/nodes/calibrate.py. Submits
+// decision='rejected' directly (record_decision excludes the segment from
+// the manifest for any 'rejected' decision), so this both flags the issue
+// (reason recorded for the top_flag_reasons triage leaderboard) and drops
+// the segment, in one click -- no free-text box needed.
+document.getElementById('mandarin').onclick = () => submit('rejected', 'mandarin');
 document.getElementById('undoBtn').onclick = undoInsert;
 
 // ---- flag issue (4th decision, does not touch text_verified/tiers) ----
@@ -1242,11 +1338,16 @@ document.getElementById('flag-reason').addEventListener('keydown', (e) => {
 
 // ---- queue refill (manual + reacting to auto-refill from /api/next) ----
 async function refillQueue(n) {
-  await fetch('/api/refill', {
+  const r = await fetch('/api/refill', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ n: n || 200 }),
+    body: JSON.stringify({ n: n || 200, ...currentSampleOptions() }),
   });
+  if (!r.ok) {
+    const body = await r.json().catch(() => ({}));
+    alert('Refill failed: ' + (body.error || r.statusText));
+    return;
+  }
   await refreshFilterOptions();
   await Promise.all([refreshStats(), refreshHistory()]);
   loadNext();
@@ -1358,10 +1459,12 @@ document.getElementById('text').addEventListener('input', () => {
 document.addEventListener('keydown', (e) => {
   const inBox = document.activeElement === document.getElementById('text');
   const inFlagReason = document.activeElement === document.getElementById('flag-reason');
-  if (inFlagReason) return;  // flag-reason has its own Enter/Escape handler
+  const inMinAgreement = document.activeElement === document.getElementById('minAgreementInput');
+  if (inFlagReason || inMinAgreement) return;  // these have their own input handling
   if (e.key === 'Enter' && inBox && !e.shiftKey) { e.preventDefault(); submit('verified'); }
   else if (e.key.toLowerCase() === 's' && !inBox) { submit('skipped'); }
   else if (e.key.toLowerCase() === 'd' && !inBox) { submit('rejected'); }
+  else if (e.key.toLowerCase() === 'm' && !inBox) { submit('rejected', 'mandarin'); }
   else if (e.key.toLowerCase() === 'f' && !inBox) { openFlagBox(); }
   else if (e.key === ' ' && !inBox) {
     e.preventDefault();

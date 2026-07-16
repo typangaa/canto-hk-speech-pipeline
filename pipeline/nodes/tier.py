@@ -6,15 +6,34 @@ tier logic inside scripts/09_manifest.py's build_entry() function into its own
 catalog-driven node that writes one `tiers` table row per segment, independent of
 manifest building. Runs entirely in-supervisor (no worker subprocess, no GPU).
 
-auto_gold (added 2026-07-10, thresholds raised 2026-07-11, owner decision -- see
-DECISIONS.md and docs/FINDINGS_ASR_AGREEMENT_THRESHOLDS.md): a statistical-confidence
-tier for segments that were NEVER human-reviewed but clear a high enough cross-model
-agreement + canto_ft-confidence bar that treating them as gold-equivalent is
-defensible without 100%-reviewing a 1000h+ corpus by hand. It deliberately does
-NOT set asr_agreement.text_verified (that stays a strict "a human actually looked
-at this" signal) -- auto_gold is sample-QA'd via calibrate.sample(tier='auto_gold')
-+ calibrate_server, not exhaustively reviewed. Do not treat tier=='auto_gold' as
-equivalent to text_verified==True anywhere downstream.
+auto_gold (added 2026-07-10, thresholds raised 2026-07-11, gate rebuilt 2026-07-15 --
+owner decision -- see DECISIONS.md and docs/FINDINGS_ASR_AGREEMENT_THRESHOLDS.md): a
+statistical-confidence tier for segments that were NEVER human-reviewed but clear a
+high enough cross-model agreement + acoustic-quality bar that treating them as
+gold-equivalent is defensible without 100%-reviewing a 1000h+ corpus by hand. It
+deliberately does NOT set asr_agreement.text_verified (that stays a strict "a human
+actually looked at this" signal) -- auto_gold is sample-QA'd via
+calibrate.sample(tier='auto_gold') + calibrate_server, not exhaustively reviewed. Do
+not treat tier=='auto_gold' as equivalent to text_verified==True anywhere downstream.
+
+**2026-07-15 gate rebuild (T16, pending_task.md / docs/PIPELINE_REVIEW_2026-07-13.md
+Issue #17)**: the original auto_gold gate's confidence signal was `canto_ft`'s own
+logprob-derived confidence -- `canto_ft` retired 2026-07-13, so that column is now
+always NULL for new segments and the gate failed closed (new segments capped at
+silver/bronze). Two changes landed together: (1) `asr_agreement.agreement` was
+backfilled corpus-wide using the already-shipped char_agreement() punctuation/digit
+normalization (Issue #20) and excluding canto_ft from the comparison -- previously
+existing rows were computed pre-normalization/3-way and systematically understated
+agreement (2026-07-10 whisper_v3-era rows and earlier). (2) The confidence gate was
+replaced with `filters.dnsmos` (an existing, zero-new-compute acoustic-quality signal)
+as the third, non-ASR trust signal recommended by targeted external research (2-model
+text agreement alone is an insufficient auto-trust signal per industry consensus --
+GigaSpeech 2 / Emilia-Pipe-style pipelines layer LID/DNSMOS on top of ASR agreement;
+see docs/PIPELINE_REVIEW_2026-07-13.md §5). Owner-picked bundle: "Balanced" --
+AUTO_GOLD_AGREE_MIN 0.95->0.92, AUTO_GOLD_DNSMOS_MIN=3.5 (new), silver/bronze
+unchanged (0.85/0.70) since normalization alone already substantially grew those
+pools. This is provisional pending T1 pilot QA ground-truth validation (still 0/~900
+reviewed as of this decision) -- revisit once real precision data exists.
 
 bronze (added 2026-07-11, owner decision): a lower-confidence band below silver,
 still manifest-eligible but flagged as the noisiest of the three statistical tiers
@@ -52,26 +71,27 @@ log = logging.getLogger(__name__)
 
 SILVER_AGREE_MIN = 0.85
 BRONZE_AGREE_MIN = 0.70
-AUTO_GOLD_AGREE_MIN = 0.95
-AUTO_GOLD_CANTO_FT_CONF_MIN = 0.8
+AUTO_GOLD_AGREE_MIN = 0.92
+AUTO_GOLD_DNSMOS_MIN = 3.5
 
 
-def assign_tier(text_verified: bool, agreement: float, canto_ft_confidence: float | None = None) -> str:
+def assign_tier(text_verified: bool, agreement: float, dnsmos: float | None = None) -> str:
     """Return the verification-confidence tier for a single segment.
 
     Rules (thresholds are production-verified -- do not change without an
     owner decision + re-running docs/FINDINGS_ASR_AGREEMENT_THRESHOLDS.md's analysis):
       - ``text_verified`` is True (human-reviewed via calibrate_server) -> "gold";
-        wins even if agreement/canto_ft_confidence would also qualify for auto_gold.
-      - ``agreement`` >= AUTO_GOLD_AGREE_MIN (0.95) AND
-        ``canto_ft_confidence`` > AUTO_GOLD_CANTO_FT_CONF_MIN (0.8) -> "auto_gold"
-        (statistical confidence, NOT human-reviewed -- see module docstring).
+        wins even if agreement/dnsmos would also qualify for auto_gold.
+      - ``agreement`` >= AUTO_GOLD_AGREE_MIN (0.92) AND
+        ``dnsmos`` >= AUTO_GOLD_DNSMOS_MIN (3.5) -> "auto_gold"
+        (statistical confidence, NOT human-reviewed -- see module docstring's
+        2026-07-15 gate rebuild note for why dnsmos replaced canto_ft_confidence).
       - ``agreement`` >= SILVER_AGREE_MIN (0.85) -> "silver"
       - ``agreement`` >= BRONZE_AGREE_MIN (0.70) -> "bronze"
       - otherwise                  -> "excluded"
 
-    canto_ft_confidence may be None (e.g. canto_ft has no active row for this id) --
-    treated as failing the auto_gold gate, same as any confidence <= 0.8.
+    dnsmos may be None (e.g. filters row not yet written for this id) -- treated
+    as failing the auto_gold gate, same as any dnsmos < 3.5 (fails closed).
 
     An "excluded" row is always written so that discovery does not re-process
     the segment on every subsequent run (same 'always write a row, even on
@@ -81,7 +101,7 @@ def assign_tier(text_verified: bool, agreement: float, canto_ft_confidence: floa
     """
     if text_verified:
         return "gold"
-    elif agreement >= AUTO_GOLD_AGREE_MIN and (canto_ft_confidence or 0.0) > AUTO_GOLD_CANTO_FT_CONF_MIN:
+    elif agreement >= AUTO_GOLD_AGREE_MIN and (dnsmos or 0.0) >= AUTO_GOLD_DNSMOS_MIN:
         return "auto_gold"
     elif agreement >= SILVER_AGREE_MIN:
         return "silver"
@@ -92,8 +112,9 @@ def assign_tier(text_verified: bool, agreement: float, canto_ft_confidence: floa
 
 
 TIER_DISCOVER_SQL = """
-    SELECT a.id, a.text_verified, a.agreement, a.canto_ft_confidence
+    SELECT a.id, a.text_verified, a.agreement, f.dnsmos
     FROM asr_agreement a
+    LEFT JOIN filters f ON a.id = f.id
     LEFT JOIN tiers t ON a.id = t.id AND t.provenance = 'tier_assign'
     WHERE t.id IS NULL
 """
@@ -131,8 +152,8 @@ async def run_tier_assign(*, conn=None, batch_size: int = 5000, limit: int | Non
     for i in range(0, len(rows), batch_size):
         batch = rows[i : i + batch_size]
         out_rows = []
-        for seg_id, text_verified, agreement, canto_ft_confidence in batch:
-            tier = assign_tier(bool(text_verified), float(agreement), canto_ft_confidence)
+        for seg_id, text_verified, agreement, dnsmos in batch:
+            tier = assign_tier(bool(text_verified), float(agreement), dnsmos)
             out_rows.append({"id": seg_id, "tier": tier, "provenance": "tier_assign"})
             if tier == "gold":
                 gold += 1

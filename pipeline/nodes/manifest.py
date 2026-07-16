@@ -107,12 +107,51 @@ def _tiers_at_or_above(min_tier: str) -> tuple[str, ...]:
 #
 # min_tier (added 2026-07-11) lets a caller cut by the tier column directly instead of/as well
 # as raw agreement -- e.g. min_tier='auto_gold' for exactly the segments tier.assign already
-# classified gold-equivalent-or-better (agreement>=0.95 AND canto_ft_confidence>0.8, OR
-# human-verified). This is NOT the same as min_agreement=0.95: a segment can have agreement>=0.95
-# but fail the canto_ft_confidence gate and land in 'silver' instead of 'auto_gold' -- min_tier
-# reads the tier tier.assign already computed rather than re-deriving a agreement-only cut.
+# classified gold-equivalent-or-better (agreement>=0.92 AND dnsmos>=3.5, OR human-verified --
+# gate rebuilt 2026-07-15, see pipeline/nodes/tier.py's module docstring). This is NOT the
+# same as min_agreement=0.92: a segment can have agreement>=0.92 but fail the dnsmos gate and
+# land in 'silver' instead of 'auto_gold' -- min_tier reads the tier tier.assign already
+# computed rather than re-deriving an agreement-only cut.
 # The `{tier_list}` placeholder is filled via .format() with a validated (against
 # TIER_PRECEDENCE) `?`-placeholder list, never raw user SQL -- see discover().
+# code_switch (added 2026-07-15, T18 / pending_task.md): lets a caller cut by
+# filters.english_ratio -- 'only' for code-switched segments (english_ratio > 0, e.g. for
+# a dedicated QA/eval subset), 'exclude' for pure-Cantonese-only (english_ratio = 0, e.g.
+# for a monolingual curriculum-training stage). None (default) = no filter, same as every
+# other cut here. See docs/PIPELINE_REVIEW... T16 analysis: code-switched segments clear
+# ASR-agreement thresholds far less often than pure-Cantonese ones (systematic AR-vs-CTC
+# English-transliteration divergence, not necessarily a quality signal) -- this cut lets
+# downstream training stratify/curriculum around that without physically forking the corpus
+# (CLAUDE.md hard constraint: code-switching is a natural HK Cantonese feature, kept in the
+# single default export; this is purely an opt-in slicing tool).
+CODE_SWITCH_CONDITIONS = {
+    None: "",
+    "only": "AND f.english_ratio > 0",
+    "exclude": "AND f.english_ratio = 0",
+}
+
+# min_quality_tier (added 2026-07-16, T13): cuts by the SEPARATE A/B acoustic-cleanliness
+# axis (pipeline/nodes/quality_tier.py), not the tiers.tier verification-confidence axis
+# above. `quality_tiers` only has rows for the gold/auto_gold scope that node was pointed
+# at (owner decision) -- a LEFT JOIN, since most manifest-eligible rows (silver/bronze)
+# have no quality_tiers row at all and must stay included when this filter is unused
+# (None, the default). 'B' (strict/clean) implies 'A' is NOT stored redundantly -- a
+# segment gets exactly one value, its best-earned grade -- so "at or above 'A'" means
+# "has ANY quality_tiers row" (everything the node scored), and "at or above 'B'" means
+# "quality_tier = 'B'" only. Same best-to-worst precedence-list pattern as
+# TIER_PRECEDENCE/_tiers_at_or_above() above, mirrored for this axis.
+QUALITY_TIER_PRECEDENCE = ("B", "A")
+
+
+def _quality_tiers_at_or_above(min_quality_tier: str) -> tuple[str, ...]:
+    if min_quality_tier not in QUALITY_TIER_PRECEDENCE:
+        raise ValueError(
+            f"min_quality_tier must be one of {QUALITY_TIER_PRECEDENCE}, got {min_quality_tier!r}"
+        )
+    idx = QUALITY_TIER_PRECEDENCE.index(min_quality_tier)
+    return QUALITY_TIER_PRECEDENCE[: idx + 1]
+
+
 MANIFEST_DISCOVER_SQL = """
     SELECT
         s.id, s.audio_path, s.source, s.source_url, s.program, s.domain,
@@ -126,12 +165,15 @@ MANIFEST_DISCOVER_SQL = """
     JOIN g2p g ON s.id = g.id
     JOIN filters f ON s.id = f.id
     JOIN tiers t ON s.id = t.id
+    LEFT JOIN quality_tiers qt ON s.id = qt.id
     WHERE
         (f.pass = TRUE OR (f.pass IS NULL AND f.provenance IS NULL))
         AND (g.valid_fraction >= 0.80 OR (g.valid_fraction IS NULL AND g.provenance IS NULL))
         AND t.tier IN ({tier_list})
         AND g.jyutping IS NOT NULL AND g.jyutping != ''
         AND (? IS NULL OR a.agreement >= ?)
+        {code_switch_cond}
+        {quality_tier_cond}
     ORDER BY s.id
 """
 
@@ -194,18 +236,43 @@ def build_entry(row: tuple, asr_candidates: list[dict]) -> dict:
     }
 
 
-def discover(conn, min_agreement: float | None = None, min_tier: str | None = None) -> list[tuple]:
+def discover(
+    conn,
+    min_agreement: float | None = None,
+    min_tier: str | None = None,
+    code_switch: str | None = None,
+    min_quality_tier: str | None = None,
+) -> list[tuple]:
+    if code_switch not in CODE_SWITCH_CONDITIONS:
+        raise ValueError(
+            f"code_switch must be one of {sorted(k for k in CODE_SWITCH_CONDITIONS if k)}, "
+            f"got {code_switch!r}"
+        )
     tiers = _tiers_at_or_above(min_tier) if min_tier is not None else INCLUDED_TIERS
     tier_list = ", ".join("?" for _ in tiers)
-    sql = MANIFEST_DISCOVER_SQL.format(tier_list=tier_list)
-    return conn.execute(sql, [*tiers, min_agreement, min_agreement]).fetchall()
+    params = [*tiers, min_agreement, min_agreement]
+    quality_tier_cond = ""
+    if min_quality_tier is not None:
+        quality_tiers = _quality_tiers_at_or_above(min_quality_tier)
+        quality_tier_cond = f"AND qt.quality_tier IN ({', '.join('?' for _ in quality_tiers)})"
+        params.extend(quality_tiers)
+    sql = MANIFEST_DISCOVER_SQL.format(
+        tier_list=tier_list,
+        code_switch_cond=CODE_SWITCH_CONDITIONS[code_switch],
+        quality_tier_cond=quality_tier_cond,
+    )
+    return conn.execute(sql, params).fetchall()
 
 
 def build_manifest(
-    conn, min_agreement: float | None = None, min_tier: str | None = None
+    conn,
+    min_agreement: float | None = None,
+    min_tier: str | None = None,
+    code_switch: str | None = None,
+    min_quality_tier: str | None = None,
 ) -> list[dict]:
     """Runs the full catalog join and returns every eligible manifest entry, sorted by id."""
-    rows = discover(conn, min_agreement, min_tier)
+    rows = discover(conn, min_agreement, min_tier, code_switch, min_quality_tier)
     candidates_by_id = _fetch_asr_candidates_by_id(conn)
     return [build_entry(row, candidates_by_id.get(row[0], [])) for row in rows]
 
@@ -215,6 +282,8 @@ def run_manifest_build(
     limit: int | None = None,
     min_agreement: float | None = None,
     min_tier: str | None = None,
+    code_switch: str | None = None,
+    min_quality_tier: str | None = None,
 ) -> dict:
     """Synchronous, CLI-style -- builds the manifest in-memory and returns it plus a
     summary; does not write files (see run_manifest_export for that). Kept separate from
@@ -223,14 +292,18 @@ def run_manifest_build(
     min_agreement: optional asr_agreement.agreement cutoff for a smaller, higher-confidence
     subset (see MANIFEST_DISCOVER_SQL's comment / docs/FINDINGS_ASR_AGREEMENT_THRESHOLDS.md).
     min_tier: optional tier-column cutoff, e.g. 'auto_gold' for {'gold','auto_gold'} only --
-    see TIER_PRECEDENCE / _tiers_at_or_above(). Both default to None = full pool, unchanged
-    behaviour; the two can be combined (e.g. min_tier='silver' AND min_agreement=0.90 for an
-    extra-strict cut within the silver-or-better tiers)."""
+    see TIER_PRECEDENCE / _tiers_at_or_above(). code_switch: optional 'only'/'exclude' cut on
+    filters.english_ratio (see CODE_SWITCH_CONDITIONS). min_quality_tier: optional cut on the
+    SEPARATE A/B acoustic-cleanliness axis (see QUALITY_TIER_PRECEDENCE / quality_tier.py) --
+    'B' for the strict clean subset only, 'A' for everything the quality_tier.assign node
+    scored (its gold/auto_gold scope). All four default to None = full pool, unchanged
+    behaviour; they can be combined freely (e.g. min_tier='silver' AND code_switch='only' for
+    a code-switch-focused eval subset within silver-or-better)."""
     from pipeline.catalog.catalog import connect_ro
 
     t0 = time.time()
     conn = connect_ro()
-    entries = build_manifest(conn, min_agreement, min_tier)
+    entries = build_manifest(conn, min_agreement, min_tier, code_switch, min_quality_tier)
     conn.close()
     if limit:
         entries = entries[:limit]
@@ -248,6 +321,8 @@ def run_manifest_build(
         f"silver={tier_counts.get('silver', 0)} bronze={tier_counts.get('bronze', 0)}"
         + (f" [min_agreement={min_agreement}]" if min_agreement is not None else "")
         + (f" [min_tier={min_tier}]" if min_tier is not None else "")
+        + (f" [code_switch={code_switch}]" if code_switch is not None else "")
+        + (f" [min_quality_tier={min_quality_tier}]" if min_quality_tier is not None else "")
     )
     return {
         "entries": entries,
@@ -334,15 +409,26 @@ def _agreement_tag(min_agreement: float) -> str:
     return f"agree{round(min_agreement * 100):03d}"
 
 
-def _export_tag(min_agreement: float | None, min_tier: str | None) -> str | None:
-    """Combines min_agreement/min_tier into one filename tag, e.g. min_tier='auto_gold' ->
-    'tier_auto_gold'; both set -> 'tier_auto_gold_agree090'. None if neither is set (the
-    default, unfiltered export keeps the original filenames -- see run_manifest_export)."""
+def _export_tag(
+    min_agreement: float | None,
+    min_tier: str | None,
+    code_switch: str | None = None,
+    min_quality_tier: str | None = None,
+) -> str | None:
+    """Combines min_agreement/min_tier/code_switch/min_quality_tier into one filename tag,
+    e.g. min_tier='auto_gold' -> 'tier_auto_gold'; code_switch='only' -> 'codeswitch_only';
+    min_quality_tier='B' -> 'qualityB'; all set -> 'tier_auto_gold_agree090_codeswitch_only_qualityB'.
+    None if none are set (the default, unfiltered export keeps the original filenames --
+    see run_manifest_export)."""
     parts = []
     if min_tier is not None:
         parts.append(f"tier_{min_tier}")
     if min_agreement is not None:
         parts.append(_agreement_tag(min_agreement))
+    if code_switch is not None:
+        parts.append(f"codeswitch_{code_switch}")
+    if min_quality_tier is not None:
+        parts.append(f"quality{min_quality_tier}")
     return "_".join(parts) if parts else None
 
 
@@ -352,6 +438,8 @@ def run_manifest_export(
     dry_run: bool = False,
     min_agreement: float | None = None,
     min_tier: str | None = None,
+    code_switch: str | None = None,
+    min_quality_tier: str | None = None,
 ) -> dict:
     """Builds the manifest then writes metadata/manifest.jsonl + train.jsonl + val.jsonl.
     manifest.jsonl is sorted by id; train/val preserve existing split membership (see
@@ -359,21 +447,37 @@ def run_manifest_export(
     "Output ordering" section for why this is not a byte-identical reorder of the legacy
     files, only a membership-preserving one).
 
-    min_agreement (added 2026-07-10) / min_tier (added 2026-07-11): when both are None
-    (default), writes the exact same three filenames as always -- CLAUDE.md hard constraint
-    #9 (zero-risk / external interface unchanged) requires this default call to stay
-    byte-compatible with what canto-tts already reads. When either is set, writes to
-    SEPARATE files instead (e.g. manifest_tier_auto_gold.jsonl / train_tier_auto_gold.jsonl /
-    val_tier_auto_gold.jsonl for min_tier='auto_gold'; see _export_tag()), so a cut export
-    never overwrites the full-pool manifest. Each cut's train/val split membership is
-    tracked independently against its own prior train_<tag>.jsonl/val_<tag>.jsonl (same
-    preserve-then-extend logic as the default export, just scoped to that cut's own files)."""
+    min_agreement (added 2026-07-10) / min_tier (added 2026-07-11) / code_switch (added
+    2026-07-15, T18) / min_quality_tier (added 2026-07-16, T13): when all are None (default),
+    writes the exact same three filenames as always -- CLAUDE.md hard constraint #9
+    (zero-risk / external interface unchanged) requires this default call to stay
+    byte-compatible with what canto-tts already reads. When any is set, writes to SEPARATE
+    files instead (e.g. manifest_tier_auto_gold.jsonl / train_tier_auto_gold.jsonl /
+    val_tier_auto_gold.jsonl for min_tier='auto_gold'; manifest_codeswitch_only.jsonl for
+    code_switch='only'; manifest_qualityB.jsonl for min_quality_tier='B'; see _export_tag()),
+    so a cut export never overwrites the full-pool manifest. Each cut's train/val split
+    membership is tracked independently against its own prior train_<tag>.jsonl/
+    val_<tag>.jsonl (same preserve-then-extend logic as the default export, just scoped to
+    that cut's own files). code_switch='only' is intended for a dedicated QA/eval subset
+    (see pipeline/nodes/calibrate.py's CODE_SWITCH_QA_MULTIPLIER for the matching QA
+    oversampling), not for training on a permanently-forked monolingual-vs-code-switch
+    corpus (CLAUDE.md: code-switching stays in the single default export as a natural HK
+    Cantonese feature). min_quality_tier='B' is intended for canto-tts's clean fine-tune
+    stage (see pipeline/nodes/quality_tier.py); min_quality_tier is only meaningful combined
+    with a min_tier of 'gold' or 'auto_gold' (or omitted), since quality_tiers only covers
+    that scope -- combining it with min_tier='silver'/'bronze' silently returns zero rows."""
     from pipeline.config import MANIFEST_PATH, TRAIN_PATH, VAL_PATH, VAL_FRAC
 
-    result = run_manifest_build(limit=limit, min_agreement=min_agreement, min_tier=min_tier)
+    result = run_manifest_build(
+        limit=limit,
+        min_agreement=min_agreement,
+        min_tier=min_tier,
+        code_switch=code_switch,
+        min_quality_tier=min_quality_tier,
+    )
     entries = result["entries"]
 
-    tag = _export_tag(min_agreement, min_tier)
+    tag = _export_tag(min_agreement, min_tier, code_switch, min_quality_tier)
     if tag is not None:
         manifest_path = MANIFEST_PATH.with_name(f"manifest_{tag}.jsonl")
         train_path = TRAIN_PATH.with_name(f"train_{tag}.jsonl")

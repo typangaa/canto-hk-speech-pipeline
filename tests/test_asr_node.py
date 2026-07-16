@@ -664,3 +664,122 @@ def test_shard_rows_round_robin_covers_every_row_exactly_once():
 def test_shard_rows_round_robin_empty_rows():
     shards = shard_rows_round_robin([], ['cuda:0', 'cuda:1'])
     assert shards == {'cuda:0': [], 'cuda:1': []}
+
+
+# ---------------------------------------------------------------------------
+# run_asr_transcribe supervisor dispatch — double-buffered prefetch (2026-07-14)
+# ---------------------------------------------------------------------------
+
+class _FakeAsrWorkerHandle:
+    """Stands in for pipeline.orchestrator.worker.WorkerHandle: echoes a valid
+    result for every task, and records the in-flight high-water mark so tests
+    can assert the supervisor really pipelines dispatch (sends task N+1 before
+    reading task N's result) rather than strictly alternating send/read."""
+
+    def __init__(self):
+        self.pid = 424242
+        self.sent = []
+        self._pending: asyncio.Queue = asyncio.Queue()
+        self._inflight_now = 0
+        self.max_inflight = 0
+        self.shutdown_called = False
+
+    async def send_task(self, task_id, items):
+        self._inflight_now += 1
+        self.max_inflight = max(self.max_inflight, self._inflight_now)
+        self.sent.append((task_id, items))
+        await self._pending.put({
+            "type": "result", "task_id": task_id,
+            "rows": [{"id": it["id"], "text": "測試文字", "confidence": 1.0, "metadata": None}
+                     for it in items],
+            "skipped_ids": [], "metrics": {"items_s": 1.0},
+        })
+
+    async def read_message(self, timeout=None):
+        msg = await self._pending.get()
+        self._inflight_now -= 1
+        return msg
+
+    async def wait_ready(self, timeout=None):
+        return {"type": "ready", "pid": self.pid}
+
+    async def shutdown(self, grace_period=10.0):
+        self.shutdown_called = True
+
+
+class _FakeSampler:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    async def run(self):
+        return None
+
+    def stop(self):
+        pass
+
+
+def _seed_segments(conn, n):
+    conn.executemany(
+        "INSERT OR REPLACE INTO segments (id, audio_path, duration_sec) VALUES (?, ?, ?)",
+        [[f"seg{i:03d}", f"/mnt/Drive2/canto/segments/fake/seg{i:03d}.flac", 5.0] for i in range(n)],
+    )
+
+
+def _run_transcribe_with_fakes(scratch_conn, monkeypatch, *, prefetch, batch_size=2, n_segments=8):
+    import pipeline.orchestrator.resources as resources_mod
+    import pipeline.orchestrator.worker as worker_mod
+    from pipeline.nodes.asr import run_asr_transcribe
+
+    _seed_segments(scratch_conn, n_segments)
+    handles = []
+
+    async def fake_spawn_worker(cmd, **kwargs):
+        handle = _FakeAsrWorkerHandle()
+        handles.append(handle)
+        return handle
+
+    monkeypatch.setattr(worker_mod, "spawn_worker", fake_spawn_worker)
+    monkeypatch.setattr(resources_mod, "Sampler", _FakeSampler)
+
+    result = asyncio.run(run_asr_transcribe(
+        [("sense_voice", "cpu")],
+        conn=scratch_conn,
+        batch_size=batch_size,
+        prefetch=prefetch,
+    ))
+    return result, handles
+
+
+def test_run_asr_transcribe_prefetch_keeps_two_tasks_in_flight(scratch_conn, monkeypatch):
+    result, handles = _run_transcribe_with_fakes(scratch_conn, monkeypatch, prefetch=2)
+    assert result["processed"] == 8
+    assert result["errors"] == 0
+    (handle,) = handles
+    assert len(handle.sent) == 4  # 8 segments / batch_size 2
+    assert handle.max_inflight == 2, (
+        "with prefetch=2 the supervisor must send the next task before reading "
+        "the previous result (double-buffering), not strictly alternate"
+    )
+    assert handle.shutdown_called
+    n_rows = scratch_conn.execute(
+        "SELECT count(*) FROM asr_results WHERE model = ?", [SENSE_VOICE]
+    ).fetchone()[0]
+    assert n_rows == 8
+
+
+def test_run_asr_transcribe_prefetch_1_restores_sequential_dispatch(scratch_conn, monkeypatch):
+    """prefetch=1 must reproduce the pre-2026-07-14 strictly-sequential behaviour
+    (at most one task in flight) — it's the documented escape hatch."""
+    result, handles = _run_transcribe_with_fakes(scratch_conn, monkeypatch, prefetch=1)
+    assert result["processed"] == 8
+    (handle,) = handles
+    assert handle.max_inflight == 1
+
+
+def test_run_asr_transcribe_task_ids_unique_per_worker(scratch_conn, monkeypatch):
+    """Results are matched to in-flight batches by task_id, so task_ids must
+    never repeat within a worker's stream."""
+    _, handles = _run_transcribe_with_fakes(scratch_conn, monkeypatch, prefetch=2)
+    (handle,) = handles
+    task_ids = [tid for tid, _ in handle.sent]
+    assert len(task_ids) == len(set(task_ids))

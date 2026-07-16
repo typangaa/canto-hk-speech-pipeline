@@ -82,9 +82,10 @@ PENDING_DECISIONS_PATH = REPO_ROOT / "metadata" / "calibration_pending_decisions
 
 _pending_write_lock = threading.Lock()
 
-# Risk-scaled QA sample rate per tier (owner decision, 2026-07-11): the noisier the tier's
+# Risk-scaled QA sample rate per tier (owner decision, 2026-07-11; auto_gold gate rebuilt
+# 2026-07-15, see pipeline/nodes/tier.py's module docstring): the noisier the tier's
 # a-priori confidence, the higher the fraction of it that gets human review. auto_gold clears
-# the strictest statistical bar (agreement>=0.95 AND canto_ft_confidence>0.8) so it needs the
+# the strictest statistical bar (agreement>=0.92 AND dnsmos>=3.5) so it needs the
 # least checking; bronze is the lowest manifest-eligible bar (agreement>=0.70) so it needs the
 # most. 'gold' (already human-verified) and 'excluded' (never enters the manifest) are not QA'd.
 QA_SAMPLE_RATE_BY_TIER = {
@@ -93,19 +94,53 @@ QA_SAMPLE_RATE_BY_TIER = {
     "bronze": 0.10,      # ~8-12%
 }
 
+# Code-switch QA oversampling multiplier (owner decision, 2026-07-15, T18 /
+# pending_task.md): T16's distribution analysis found code-switched segments
+# (filters.english_ratio > 0) clear ASR-agreement thresholds far less often than
+# pure-Cantonese ones (e.g. 18.8% vs 48.5% at agreement>=0.90) -- the two active ASR
+# backends (qwen3_asr AR / sense_voice CTC) diverge systematically on English-token
+# transliteration/spelling, not necessarily on audio/text quality. That means a given
+# agreement score is a WEAKER trust signal for a code-switch segment than the same score
+# on a pure-Cantonese segment, so a dedicated code-switch QA sample (recommended_sample_n
+# / discover with code_switch='only') uses this multiplier on top of the tier's normal
+# base rate rather than relying on the population-wide rate to naturally cover enough
+# code-switch examples.
+CODE_SWITCH_QA_MULTIPLIER = 10.0
 
-def recommended_sample_n(conn, tier: str, min_n: int = 50) -> int:
+# Fixed flag_reason used by calibrate_server.py's one-click "Mandarin" button
+# (added 2026-07-15): a segment surfaced for text QA but that is actually
+# Mandarin (or otherwise non-HK-Cantonese) content, not a text-quality issue.
+# Submitted as decision='rejected' (see record_decision below -- 'rejected'
+# now excludes the segment from the manifest) with this reason string, so it
+# shows up distinctly in summary_stats()'s top_flag_reasons leaderboard
+# instead of being buried among free-text rejection notes.
+MANDARIN_FLAG_REASON = "mandarin"
+
+
+def recommended_sample_n(
+    conn, tier: str, min_n: int = 50, *, code_switch: bool = False
+) -> int:
     """Population-scaled QA sample size for `tier`, per QA_SAMPLE_RATE_BY_TIER --
     population is filter-passing segments currently carrying that tier. Floors at
-    `min_n` so a small/newly-introduced tier still gets a meaningful spot-check."""
+    `min_n` so a small/newly-introduced tier still gets a meaningful spot-check.
+
+    code_switch=True (added 2026-07-15, T18) scopes BOTH the population count and the
+    rate to code-switched segments only (filters.english_ratio > 0), applying
+    CODE_SWITCH_QA_MULTIPLIER on top of the tier's base rate -- e.g. auto_gold's base
+    1.5% becomes 15% for its code-switch subset. Rate is capped at 1.0 (100%) so a small
+    population with a high multiplier never asks for more than "review all of them"."""
     if tier not in QA_SAMPLE_RATE_BY_TIER:
         raise ValueError(f"no QA sample rate defined for tier {tier!r}")
+    code_switch_cond = "AND f.english_ratio > 0" if code_switch else ""
     population = conn.execute(
-        "SELECT count(*) FROM tiers t JOIN filters f ON f.id = t.id "
-        "WHERE t.tier = ? AND f.pass = TRUE",
+        f"SELECT count(*) FROM tiers t JOIN filters f ON f.id = t.id "
+        f"WHERE t.tier = ? AND f.pass = TRUE {code_switch_cond}",
         [tier],
     ).fetchone()[0]
-    return max(min_n, round(population * QA_SAMPLE_RATE_BY_TIER[tier]))
+    rate = QA_SAMPLE_RATE_BY_TIER[tier]
+    if code_switch:
+        rate = min(rate * CODE_SWITCH_QA_MULTIPLIER, 1.0)
+    return max(min_n, round(population * rate))
 
 
 SAMPLE_DISCOVER_SQL = """
@@ -116,22 +151,41 @@ SAMPLE_DISCOVER_SQL = """
     LEFT JOIN calibration_review c ON a.id = c.id
     WHERE c.id IS NULL
       {min_agreement_cond}
+      {code_switch_cond}
     ORDER BY random()
     LIMIT ?
 """
 
+_CODE_SWITCH_SAMPLE_CONDITIONS = {
+    None: "",
+    "only": "AND f.english_ratio > 0",
+    "exclude": "AND f.english_ratio = 0",
+}
+
 
 def discover(
-    conn, n: int, tier: str | None = None, min_agreement: float | None = None
+    conn,
+    n: int,
+    tier: str | None = None,
+    min_agreement: float | None = None,
+    code_switch: str | None = None,
 ) -> list[tuple[str, str]]:
     """tier/min_agreement (added 2026-07-10) narrow the sample population for scoped QA:
       - tier='auto_gold' -- QA the statistical-confidence tier specifically
-        (pipeline/nodes/tier.py's auto_gold, agreement>=0.95 AND canto_ft_confidence>0.8).
+        (pipeline/nodes/tier.py's auto_gold, agreement>=0.92 AND dnsmos>=3.5).
         Also valid: tier='silver' / tier='bronze' for those tiers' own QA pools.
       - min_agreement=0.95/0.85/etc -- QA a specific --min-agreement export cut
         (pipeline/nodes/manifest.py), independent of tier labels.
-    Both default to None, reproducing the original unscoped behaviour exactly (random
-    sample of all filter-passing, not-yet-reviewed segments)."""
+    code_switch (added 2026-07-15, T18): 'only' scopes the sample to
+    filters.english_ratio > 0 (pair with recommended_sample_n(..., code_switch=True) for
+    the matching oversampled `n`), 'exclude' scopes to english_ratio = 0. All three
+    default to None, reproducing the original unscoped behaviour exactly (random sample
+    of all filter-passing, not-yet-reviewed segments)."""
+    if code_switch not in _CODE_SWITCH_SAMPLE_CONDITIONS:
+        raise ValueError(
+            f"code_switch must be one of {sorted(k for k in _CODE_SWITCH_SAMPLE_CONDITIONS if k)}, "
+            f"got {code_switch!r}"
+        )
     params: list = []
     tier_join = ""
     if tier is not None:
@@ -142,24 +196,34 @@ def discover(
         min_agreement_cond = "AND a.agreement >= ?"
         params.append(min_agreement)
     params.append(n)
-    sql = SAMPLE_DISCOVER_SQL.format(tier_join=tier_join, min_agreement_cond=min_agreement_cond)
+    sql = SAMPLE_DISCOVER_SQL.format(
+        tier_join=tier_join,
+        min_agreement_cond=min_agreement_cond,
+        code_switch_cond=_CODE_SWITCH_SAMPLE_CONDITIONS[code_switch],
+    )
     return conn.execute(sql, params).fetchall()
 
 
 async def run_calibrate_sample(
-    *, conn=None, n: int = 300, tier: str | None = None, min_agreement: float | None = None
+    *,
+    conn=None,
+    n: int = 300,
+    tier: str | None = None,
+    min_agreement: float | None = None,
+    code_switch: str | None = None,
 ) -> dict:
     """conn: optional pre-opened DuckDB connection (or cursor) -- pass one when
     running alongside other nodes under `pipe run-many` (see filter.py's
     run_filter_acoustic docstring for the rationale). Defaults to a fresh
     self-managed connect() for standalone `pipe run calibrate.sample` usage.
 
-    tier/min_agreement: see discover()'s docstring -- scoped QA sampling, added 2026-07-10."""
+    tier/min_agreement/code_switch: see discover()'s docstring -- scoped QA sampling,
+    added 2026-07-10 (tier/min_agreement) and 2026-07-15 (code_switch, T18)."""
     from pipeline.catalog.catalog import connect, upsert_rows
     from pipeline.orchestrator.journal import new_run_id, record_batch
 
     conn = conn or connect()
-    picked = discover(conn, n, tier=tier, min_agreement=min_agreement)
+    picked = discover(conn, n, tier=tier, min_agreement=min_agreement, code_switch=code_switch)
     log.info(f"calibrate.sample: queuing {len(picked)} segments for human review")
     if not picked:
         return {"queued": 0, "run_id": None}
@@ -211,10 +275,25 @@ def record_decision(
     compute for this row -- not a shortcut around its logic, just doing it
     inline since the anti-join can't reach this row again.
 
-    decision='flagged' is a pipeline-bug report (bad segmentation, non-
-    Cantonese content, corrupt audio, etc. spotted during review), distinct
-    from 'rejected' (text just isn't verifiable). It never touches
-    asr_agreement/tiers -- flag_reason is free text for later triage.
+    decision='rejected' (added 2026-07-15: propagation fix) directly upserts
+    tiers.tier='excluded' for this id, same mechanism/rationale as the
+    'verified'->'gold' write above. Before this, a human 'rejected' decision
+    was recorded in calibration_review but never reached manifest.py's
+    eligibility join (which only reads segments/asr_agreement/g2p/filters/
+    tiers, never calibration_review) -- a reviewer rejecting a segment had no
+    actual effect on what shipped in the manifest. flag_reason (e.g. the
+    calibrate_server.py Mandarin-flag button's fixed reason "mandarin", see
+    MANDARIN_FLAG_REASON) is stored alongside for triage but does not change
+    this behaviour -- any 'rejected' decision excludes, regardless of reason.
+
+    decision='flagged' is a pipeline-bug report (bad segmentation, corrupt
+    audio, etc. spotted during review) that the reviewer is NOT simultaneously
+    rejecting -- distinct from 'rejected' (text/audio is bad enough to drop
+    from the manifest). It never touches asr_agreement/tiers -- flag_reason is
+    free text for later triage. Language-mislabel issues (segment is actually
+    Mandarin, not Cantonese) should go through decision='rejected' with
+    flag_reason=MANDARIN_FLAG_REASON instead, since those segments should not
+    ship in an HK-Cantonese-only corpus (CLAUDE.md hard constraint #1).
     """
     from pipeline.catalog.catalog import upsert_rows
 
@@ -235,6 +314,12 @@ def record_decision(
         upsert_rows(
             conn, "tiers",
             [{"id": seg_id, "tier": "gold", "provenance": "calibrate_verify"}],
+            ["id"],
+        )
+    elif decision == "rejected":
+        upsert_rows(
+            conn, "tiers",
+            [{"id": seg_id, "tier": "excluded", "provenance": "calibrate_reject"}],
             ["id"],
         )
 
@@ -522,7 +607,12 @@ def summary_stats(conn, sample_batch: str | None = None) -> dict:
     ]
     avg_edit_distance = round(sum(edits) / len(edits), 2) if edits else None
 
-    where_sql, params = _where("c.decision = 'flagged' AND c.flag_reason IS NOT NULL")
+    # Includes 'rejected' as well as 'flagged' (added 2026-07-15) so the Mandarin-flag
+    # button's flag_reason='mandarin' rejections (see MANDARIN_FLAG_REASON) show up here
+    # too, not just informational 'flagged' reports.
+    where_sql, params = _where(
+        "c.decision IN ('flagged', 'rejected') AND c.flag_reason IS NOT NULL"
+    )
     flag_rows = conn.execute(
         f"SELECT c.flag_reason, count(*) FROM calibration_review c {where_sql} "
         f"GROUP BY c.flag_reason ORDER BY count(*) DESC LIMIT 10",

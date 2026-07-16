@@ -313,12 +313,12 @@ def test_manifest_build_matches_expected_corpus_totals(catalog_conn):
     Update this baseline only after an intentional, verified manifest.export re-run."""
     from pipeline.nodes.manifest import run_manifest_build
 
-    BASELINE_COUNT = 458843
-    BASELINE_SPEAKERS = 8817
-    BASELINE_GOLD = 43
-    BASELINE_AUTO_GOLD = 72014
-    BASELINE_SILVER = 235646
-    BASELINE_BRONZE = 151140
+    BASELINE_COUNT = 606775
+    BASELINE_SPEAKERS = 9023
+    BASELINE_GOLD = 58
+    BASELINE_AUTO_GOLD = 279195
+    BASELINE_SILVER = 158087
+    BASELINE_BRONZE = 169435
     TIER_DEPLETION_TOLERANCE = 1000
 
     result = run_manifest_build()

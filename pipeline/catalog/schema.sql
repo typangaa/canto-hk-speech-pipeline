@@ -180,6 +180,16 @@ CREATE TABLE IF NOT EXISTS tiers (
 );
 ALTER TABLE tiers ADD COLUMN IF NOT EXISTS provenance TEXT;
 
+-- T13 (added 2026-07-16): A/B TTS-quality axis (docs/LABEL_FRAMEWORK_SPEC.md section 10),
+-- a DIFFERENT axis from `tiers` above -- see pipeline/nodes/quality_tier.py's module
+-- docstring. Only populated for the gold/auto_gold verification-confidence scope
+-- (owner decision, canto-tts training pull).
+CREATE TABLE IF NOT EXISTS quality_tiers (
+    id           TEXT PRIMARY KEY,
+    quality_tier TEXT,
+    provenance   TEXT
+);
+
 -- Human calibration review queue (owner decision 2026-07-10: text_verified/gold was
 -- structurally dead -- asr.transcribe always writes text_verified=False and no live DAG node
 -- ever flips it, the only path that once did was the legacy scripts/05_calibrate.py against

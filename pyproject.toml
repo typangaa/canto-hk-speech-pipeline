@@ -12,6 +12,7 @@ dependencies = [
     "modelscope>=1.38.1",
     "numpy>=2.4.6",
     "opencc-python-reimplemented>=0.1.7",
+    "pandas>=2.2.0",
     "panns-inference>=0.1.1",
     "praat-parselmouth>=0.4.6",
     "pyannote-audio>=4.0.4",
