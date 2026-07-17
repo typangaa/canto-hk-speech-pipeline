@@ -755,6 +755,8 @@ _PAGE_HTML = r"""<!doctype html>
   #skip { background: var(--panel-2); color: var(--text); border: 1px solid var(--border) !important; }
   #reject { background: var(--bad); color: white; }
   #mandarin { background: var(--bad); color: white; border: 2px solid #7a0000 !important; }
+  #multiSpeaker { background: var(--bad); color: white; border: 2px solid #7a0000 !important; }
+  #wrongSpeakerId { background: var(--warn); color: #1c1300; border: 2px solid #7a5c00 !important; }
   #flag { background: var(--warn); color: #1c1300; }
   .hint { color: var(--dim); font-size: 0.74rem; margin-top: 0.8rem; }
   #done { display: none; color: var(--muted); }
@@ -891,6 +893,8 @@ _PAGE_HTML = r"""<!doctype html>
         <button class="action" id="skip">Skip (S)</button>
         <button class="action" id="reject">Reject (D)</button>
         <button class="action" id="mandarin" title="Not HK Cantonese -- rejects and records the reason">Mandarin (M)</button>
+        <button class="action" id="multiSpeaker" title="Audio has more than one speaker -- rejects and records the reason (T9)">Multi-speaker (N)</button>
+        <button class="action" id="wrongSpeakerId" title="Audio is single-speaker but filed under the wrong speaker_id -- flags only, does NOT exclude (T9)">Wrong speaker ID (W)</button>
         <button class="action" id="flag">Flag issue (F)</button>
       </div>
       <div id="flag-box">
@@ -1315,6 +1319,13 @@ document.getElementById('reject').onclick = () => submit('rejected');
 // (reason recorded for the top_flag_reasons triage leaderboard) and drops
 // the segment, in one click -- no free-text box needed.
 document.getElementById('mandarin').onclick = () => submit('rejected', 'mandarin');
+// T9 speaker-purity buttons (added 2026-07-17, must match NOT_SINGLE_SPEAKER_FLAG_REASON /
+// WRONG_SPEAKER_ID_FLAG_REASON in pipeline/nodes/calibrate.py): two separate buttons for two
+// different failure modes -- "multi-speaker" is a real audio defect (excludes, same as
+// Mandarin/reject), "wrong speaker ID" is a harmless metadata mislabel (flags only, audio
+// stays in the manifest).
+document.getElementById('multiSpeaker').onclick = () => submit('rejected', 'not_single_speaker');
+document.getElementById('wrongSpeakerId').onclick = () => submit('flagged', 'wrong_speaker_id');
 document.getElementById('undoBtn').onclick = undoInsert;
 
 // ---- flag issue (4th decision, does not touch text_verified/tiers) ----
@@ -1465,6 +1476,8 @@ document.addEventListener('keydown', (e) => {
   else if (e.key.toLowerCase() === 's' && !inBox) { submit('skipped'); }
   else if (e.key.toLowerCase() === 'd' && !inBox) { submit('rejected'); }
   else if (e.key.toLowerCase() === 'm' && !inBox) { submit('rejected', 'mandarin'); }
+  else if (e.key.toLowerCase() === 'n' && !inBox) { submit('rejected', 'not_single_speaker'); }
+  else if (e.key.toLowerCase() === 'w' && !inBox) { submit('flagged', 'wrong_speaker_id'); }
   else if (e.key.toLowerCase() === 'f' && !inBox) { openFlagBox(); }
   else if (e.key === ' ' && !inBox) {
     e.preventDefault();

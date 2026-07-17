@@ -845,6 +845,30 @@ def cmd_calibrate_flush_pending(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_calibrate_progress(args: argparse.Namespace) -> int:
+    from pipeline.nodes.calibrate import run_calibrate_progress
+
+    report = run_calibrate_progress()
+    totals = report["totals"]
+    by_kind = report["by_code_switch"]
+
+    print(f"\nQA queue: {totals['total']} total, {totals['reviewed']} reviewed, "
+          f"{totals['pending']} pending")
+    print(f"  pure Cantonese:  {by_kind['pure']['total']:>6} total, "
+          f"{by_kind['pure']['pending']:>6} pending")
+    print(f"  code-switch:     {by_kind['code_switch']['total']:>6} total, "
+          f"{by_kind['code_switch']['pending']:>6} pending")
+
+    print(f"\n{'tier':<12}{'kind':<14}{'pending':>9}{'verified':>10}{'rejected':>10}"
+          f"{'skipped':>9}{'flagged':>9}")
+    for tier in sorted(report["breakdown"]):
+        for kind in sorted(report["breakdown"][tier]):
+            d = report["breakdown"][tier][kind]
+            print(f"{tier:<12}{kind:<14}{d.get('pending', 0):>9}{d.get('verified', 0):>10}"
+                  f"{d.get('rejected', 0):>10}{d.get('skipped', 0):>9}{d.get('flagged', 0):>9}")
+    return 0
+
+
 def cmd_run_manifest_build(args: argparse.Namespace) -> int:
     import logging
 
@@ -1008,6 +1032,12 @@ def main() -> int:
     )
     p_calibrate_flush.add_argument("--input", default=None, help="default: metadata/calibration_pending_decisions.jsonl")
     p_calibrate_flush.set_defaults(func=cmd_calibrate_flush_pending)
+    p_calibrate_progress = calibrate_sub.add_parser(
+        "progress",
+        help="T1 QA-backlog tracker (2026-07-17): review queue broken down by tier x "
+             "code-switch status x decision, read-only",
+    )
+    p_calibrate_progress.set_defaults(func=cmd_calibrate_progress)
 
     p_run = sub.add_parser("run", help="Run a DAG node via the orchestrator")
     run_sub = p_run.add_subparsers(dest="run_command", required=True)

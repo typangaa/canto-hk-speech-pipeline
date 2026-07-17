@@ -1,5 +1,8 @@
+import duckdb
 import numpy as np
+import pytest
 
+from pipeline.catalog.catalog import init_schema
 from pipeline.nodes.filter import (
     MAX_DUR,
     MAX_ENG_RATIO,
@@ -12,11 +15,21 @@ from pipeline.nodes.filter import (
     compute_snr,
     decide_row,
     detect_language,
+    discover_decide,
+    discover_text,
     english_ratio,
     evaluate_text,
     is_cjk,
     mandarin_ratio,
 )
+
+
+@pytest.fixture
+def scratch_conn(tmp_path):
+    conn = duckdb.connect(str(tmp_path / "scratch.duckdb"))
+    init_schema(conn)
+    yield conn
+    conn.close()
 
 
 def test_is_cjk_basic():
@@ -204,3 +217,107 @@ def test_decide_row_acoustic_pending_guard():
     )
     assert row["pass"] is False
     assert row["fail_reason"] == "acoustic_pending"
+
+
+def test_decide_row_stores_text_model_count():
+    row = decide_row(
+        "id5", True, None, 0.1, 0.05, "yue", 0.9,
+        True, None, 30.0, 3.5, 3.2, text_model_count=3,
+    )
+    assert row["text_model_count"] == 3
+
+
+# ---------------------------------------------------------------------------
+# T5 (2026-07-17): discover_text/discover_decide re-evaluation on a stale
+# asr_agreement.model_count, not just bare row-existence.
+# ---------------------------------------------------------------------------
+
+def _seed_agreement(conn, seg_id, *, model_count=2, best_text="呢個係測試"):
+    conn.execute(
+        "INSERT INTO segments (id, audio_path, source, duration_sec, sample_rate, program) "
+        "VALUES (?, ?, 'podcast', 6.0, 48000, 'test-program')",
+        [seg_id, f"/tmp/{seg_id}.flac"],
+    )
+    conn.execute(
+        "INSERT INTO asr_agreement (id, agreement, best_text, text_verified, model_count) "
+        "VALUES (?, 0.9, ?, FALSE, ?)",
+        [seg_id, best_text, model_count],
+    )
+
+
+def test_discover_text_picks_up_never_evaluated_segment(scratch_conn):
+    conn = scratch_conn
+    _seed_agreement(conn, "a", model_count=2)
+    rows = discover_text(conn)
+    assert [r[0] for r in rows] == ["a"]
+
+
+def test_discover_text_excludes_already_current_segment(scratch_conn):
+    conn = scratch_conn
+    _seed_agreement(conn, "a", model_count=2)
+    conn.execute(
+        "INSERT INTO filters_text (id, pass, asr_model_count) VALUES ('a', TRUE, 2)"
+    )
+    assert discover_text(conn) == []
+
+
+def test_discover_text_reevaluates_when_model_count_advances(scratch_conn):
+    """A later ASR model landing bumps asr_agreement.model_count -- filter.text
+    must re-pick up the id even though a filters_text row already exists."""
+    conn = scratch_conn
+    _seed_agreement(conn, "a", model_count=2)
+    conn.execute(
+        "INSERT INTO filters_text (id, pass, asr_model_count) VALUES ('a', TRUE, 1)"
+    )
+    rows = discover_text(conn)
+    assert [r[0] for r in rows] == ["a"]
+
+
+def test_discover_text_legacy_null_model_count_reevaluates(scratch_conn):
+    """Legacy P0-imported filters_text rows have asr_model_count IS NULL --
+    must still be picked up (same legacy-row-collision fix as elsewhere)."""
+    conn = scratch_conn
+    _seed_agreement(conn, "a", model_count=2)
+    conn.execute("INSERT INTO filters_text (id, pass) VALUES ('a', TRUE)")
+    rows = discover_text(conn)
+    assert [r[0] for r in rows] == ["a"]
+
+
+def _seed_decide_inputs(conn, seg_id, *, text_model_count=2, ft_pass=True, decided=False, decided_model_count=2):
+    conn.execute(
+        "INSERT INTO filters_text (id, pass, asr_model_count) VALUES (?, ?, ?)",
+        [seg_id, ft_pass, text_model_count],
+    )
+    conn.execute(
+        "INSERT INTO filters_acoustic (id, pass, snr_db, dnsmos_sig, dnsmos_ovrl) "
+        "VALUES (?, TRUE, 30.0, 3.5, 3.2)",
+        [seg_id],
+    )
+    if decided:
+        conn.execute(
+            "INSERT INTO filters (id, pass, provenance, text_model_count) "
+            "VALUES (?, ?, 'filter_decide', ?)",
+            [seg_id, ft_pass, decided_model_count],
+        )
+
+
+def test_discover_decide_picks_up_never_decided_segment(scratch_conn):
+    conn = scratch_conn
+    _seed_decide_inputs(conn, "a", decided=False)
+    rows = discover_decide(conn)
+    assert [r[0] for r in rows] == ["a"]
+
+
+def test_discover_decide_excludes_already_current_decision(scratch_conn):
+    conn = scratch_conn
+    _seed_decide_inputs(conn, "a", text_model_count=2, decided=True, decided_model_count=2)
+    assert discover_decide(conn) == []
+
+
+def test_discover_decide_reevaluates_when_filters_text_advances(scratch_conn):
+    """filter.text re-evaluated this id under a newer model (asr_model_count now
+    3) after filter.decide already decided it at model_count=2 -- must re-decide."""
+    conn = scratch_conn
+    _seed_decide_inputs(conn, "a", text_model_count=3, decided=True, decided_model_count=2)
+    rows = discover_decide(conn)
+    assert [r[0] for r in rows] == ["a"]

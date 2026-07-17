@@ -109,6 +109,11 @@ ALTER TABLE filters ADD COLUMN IF NOT EXISTS fail_reason TEXT;
 -- not-yet-decided-by-this-node (relevant once a legacy segment also gains
 -- filters_text/filters_acoustic rows) without needing a backfill migration.
 ALTER TABLE filters ADD COLUMN IF NOT EXISTS provenance TEXT;
+-- T5 (added 2026-07-17): snapshots filters_text.asr_model_count at filter.decide time, so
+-- filter.decide's discovery can tell "already decided, filters_text unchanged since" apart
+-- from "already decided, but filters_text was re-evaluated under a newer ASR model since" --
+-- see filter.py's DECIDE_DISCOVER_SQL and pending_task.md T5.
+ALTER TABLE filters ADD COLUMN IF NOT EXISTS text_model_count INTEGER;
 
 -- P3 session 2 (pipeline/nodes/filter.py): filter.text's own raw output — gates that need
 -- only catalog columns + ASR text, no audio decode (sample_rate/duration/text-length/
@@ -126,6 +131,13 @@ CREATE TABLE IF NOT EXISTS filters_text (
     pass                 BOOLEAN,
     fail_reason          TEXT
 );
+-- T5 (added 2026-07-17, pending_task.md / Issue #4): snapshots asr_agreement.model_count at
+-- filter.text evaluation time. filter.text reads asr_agreement.best_text, so when a later
+-- ASR model lands and asr.agreement recomputes best_text for an id (model_count increments --
+-- see pipeline/nodes/asr.py), filter.text's own bare row-existence anti-join previously had no
+-- way to notice the text underneath it had changed and would never re-evaluate. Discovery now
+-- anti-joins on "no row OR asr_model_count != asr_agreement.model_count" instead.
+ALTER TABLE filters_text ADD COLUMN IF NOT EXISTS asr_model_count INTEGER;
 
 -- P3 session 2 (pipeline/nodes/filter.py): filter.acoustic's own raw output — SNR + DNSMOS,
 -- both requiring an actual audio decode. Discovery only picks up ids where filters_text.pass
@@ -179,6 +191,16 @@ CREATE TABLE IF NOT EXISTS tiers (
     tier TEXT
 );
 ALTER TABLE tiers ADD COLUMN IF NOT EXISTS provenance TEXT;
+-- T5 (added 2026-07-17, pending_task.md / Issue #4): snapshots asr_agreement.model_count at
+-- tier.assign time, so discovery can tell a stale tier (computed before a later ASR model
+-- improved this id's agreement score) apart from a current one, and re-tier it. Rows written
+-- by a human decision (provenance IN ('calibrate_verify', 'calibrate_reject'), see
+-- calibrate.py's record_decision()) are deliberately EXCLUDED from this re-evaluation --
+-- text_verified/human-rejected is a terminal, human-made call that a later statistical
+-- recompute must never silently overturn (assign_tier()'s own docstring: "wins even if
+-- agreement/dnsmos would also qualify for auto_gold" -- that invariant only holds if
+-- discovery never revisits these rows at all). See tier.py's TIER_DISCOVER_SQL.
+ALTER TABLE tiers ADD COLUMN IF NOT EXISTS asr_model_count INTEGER;
 
 -- T13 (added 2026-07-16): A/B TTS-quality axis (docs/LABEL_FRAMEWORK_SPEC.md section 10),
 -- a DIFFERENT axis from `tiers` above -- see pipeline/nodes/quality_tier.py's module

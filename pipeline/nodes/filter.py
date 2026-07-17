@@ -68,6 +68,17 @@ scripts/06_filter.py's compute_dnsmos(), because this numeric output is held to 
 different resampler is not a safe substitution for a value-sensitive neural MOS model
 (the same reasoning pipeline/nodes/asr.py's module docstring gives for keeping its own
 resample_poly instead of bus.py's soxr path).
+
+T5 re-evaluation note (added 2026-07-17, pending_task.md / Issue #4): filter.text and
+filter.decide both depend on asr_agreement (best_text / model_count), which can change
+after their initial run when a later ASR model lands and asr.agreement recomputes an id's
+best_text. Their discovery used to be a bare row-existence anti-join, so a segment already
+evaluated under an older/weaker ASR ensemble was never re-checked even after the text
+underneath it improved. Both nodes now snapshot asr_agreement.model_count (filters_text.
+asr_model_count / filters.text_model_count) at evaluation time and anti-join on "no row OR
+stale model_count" instead. filter.acoustic is NOT part of this — it only reads audio
+(segments.audio_path), never asr_agreement, so its output never goes stale when an ASR
+model changes; its existing "fa.id IS NULL" discovery is already correct as-is.
 """
 
 import argparse
@@ -286,11 +297,11 @@ def compute_snr(wav: np.ndarray) -> float:
 # ---------------------------------------------------------------------------
 
 TEXT_DISCOVER_SQL = """
-    SELECT s.id, s.duration_sec, s.sample_rate, a.best_text
+    SELECT s.id, s.duration_sec, s.sample_rate, a.best_text, a.model_count
     FROM segments s
     JOIN asr_agreement a ON s.id = a.id
     LEFT JOIN filters_text ft ON s.id = ft.id
-    WHERE ft.id IS NULL
+    WHERE ft.id IS NULL OR ft.asr_model_count IS DISTINCT FROM a.model_count
     ORDER BY s.duration_sec
 """
 
@@ -357,8 +368,8 @@ async def run_filter_text(*, conn=None, batch_size: int = 5000, limit: int | Non
     for i in range(0, len(rows), batch_size):
         batch = rows[i:i + batch_size]
         out_rows = [
-            {"id": seg_id, **evaluate_text(duration_sec, sample_rate, text)}
-            for seg_id, duration_sec, sample_rate, text in batch
+            {"id": seg_id, "asr_model_count": model_count, **evaluate_text(duration_sec, sample_rate, text)}
+            for seg_id, duration_sec, sample_rate, text, model_count in batch
         ]
         upsert_rows(conn, "filters_text", out_rows, ["id"])
         record_batch(conn, run_id, "filter.text", [r["id"] for r in out_rows], "ok")
@@ -709,12 +720,13 @@ def worker_main() -> None:
 DECIDE_DISCOVER_SQL = """
     SELECT ft.id, ft.pass, ft.fail_reason, ft.english_ratio, ft.mandarin_ratio,
            ft.detected_language, ft.language_confidence,
-           fa.pass, fa.fail_reason, fa.snr_db, fa.dnsmos_sig, fa.dnsmos_ovrl
+           fa.pass, fa.fail_reason, fa.snr_db, fa.dnsmos_sig, fa.dnsmos_ovrl,
+           ft.asr_model_count
     FROM filters_text ft
     LEFT JOIN filters_acoustic fa ON ft.id = fa.id
     LEFT JOIN filters f ON ft.id = f.id AND f.provenance = 'filter_decide'
-    WHERE f.id IS NULL
-      AND (ft.pass = FALSE OR fa.id IS NOT NULL)
+    WHERE (ft.pass = FALSE OR fa.id IS NOT NULL)
+      AND (f.id IS NULL OR f.text_model_count IS DISTINCT FROM ft.asr_model_count)
 """
 
 
@@ -727,6 +739,7 @@ def decide_row(
     eng: float, man: float, lang: str, lang_conf: float,
     ac_pass: bool | None, ac_reason: str | None,
     snr: float | None, dnsmos_sig: float | None, dnsmos_ovrl: float | None,
+    text_model_count: int | None = None,
 ) -> dict:
     """Merges filters_text + filters_acoustic into the final pass/fail_reason.
     Text gates always take priority (matches scripts/06_filter.py's cascading
@@ -755,6 +768,7 @@ def decide_row(
         "pass": final_pass,
         "fail_reason": reason,
         "provenance": "filter_decide",
+        "text_model_count": text_model_count,
     }
 
 

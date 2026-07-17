@@ -15,13 +15,43 @@ Source: round-2 post-execution review of `docs/PIPELINE_REVIEW_2026-07-11.md` §
 ## 🔴 Tier 1 — data-trust-critical, do first
 
 ### T1. Pilot QA batch review (Issue #15)
-- **What**: 3 queued 300-segment pilot batches (auto_gold / silver / bronze) in
-  `calibrate_review` — none reviewed yet.
+- **What**: **corrected 2026-07-17** — actual queue is **10 sample batches, 2,400 segments
+  total** in `calibration_review` (the "3 queued 300-segment pilot batches (~900)" figure
+  below was stale/undercounted; batches accumulated across several sessions via repeated
+  `calibrate.sample` calls). **58 already reviewed** (all `verified`, all in one batch,
+  flipped to `gold`) — **2,342 still pending**. Tier split of the pending pool: auto_gold
+  ~1,030, silver ~382, bronze ~917, excluded ~13 (drifted post-queue, e.g. a since-rejected
+  id). Run `pipe calibrate progress` anytime for a live breakdown (see tool below).
+- **Owner decision 2026-07-17**: pure-Cantonese segments are assumed already-adequate
+  quality — **review priority is code-switch segments** (`filters.english_ratio > 0`), not
+  a flat pass over the whole queue. Of the 2,342 pending, 787 are already code-switch by
+  incidental distribution (not deliberately oversampled); T18's `--code-switch only` sample
+  flag (built 2026-07-15, never yet used to queue a batch) is available to queue a
+  dedicated, oversampled code-switch batch on top of that if/when wanted — see T18 in Done
+  for `recommended_sample_n(..., code_switch=True)`'s suggested sizes (auto_gold 1,250,
+  silver 10,366, bronze capped at 100%/50,524 — those are full-population figures, a
+  smaller pilot slice is the practical near-term ask, not a full pass).
+- **Code-switch pilot batch queued 2026-07-17**: owner chose a small dedicated pilot
+  (150/tier, not T18's full oversampled recommendation) — `pipe run calibrate.sample --tier
+  {auto_gold,silver,bronze} --code-switch only --n 150` ×3, run_ids
+  `calibrate_sample_888979e8434c` (auto_gold), `calibrate_sample_c215b57afdff` (silver),
+  `calibrate_sample_aea932ef4a8d` (bronze). Queue is now **2,850 total / 2,792 pending**,
+  code-switch pending up to 1,237 (from 787).
+- **New tool (2026-07-17)**: `pipe calibrate progress` — read-only CLI command
+  (`pipeline/nodes/calibrate.py::progress_report()` /  `run_calibrate_progress()`, CLI
+  wiring in `pipeline/cli.py::cmd_calibrate_progress`) that breaks the whole review queue
+  down by tier x code-switch status x decision, so the backlog can be checked anytime
+  without hand-writing a query. 3 new tests in `tests/test_calibrate_node.py` (57/57
+  passing). Built specifically so the owner can track progress against the code-switch
+  focus above without me touching the review process itself (owner explicitly kept T1
+  review itself human-only, not delegable).
 - **How**: work through them via the live `pipe calibrate serve` browser UI.
 - **Why first**: this is the only way to validate whether the 2026-07-11 tightened tier
   thresholds (0.95 / 0.85 / 0.70 + `canto_ft` confidence gate) actually hold up. Every
   downstream export and training decision rests on these thresholds.
-- **Effort**: manual, ~900 segments, a few hours (can split across sessions).
+- **Effort**: manual, owner-paced — **owner decision 2026-07-17: no fixed completion
+  target, stop whenever** (superseded the earlier "~900 segments, a few hours" estimate,
+  which was based on the stale count anyway).
 - **Depends on**: nothing. `calibrate serve` is already running (PID 971786 at review time).
 - **Owner**: human (not delegable to Claude).
 - **Update 2026-07-13**: `calibrate serve` no longer blocks while a long batch node (T15's
@@ -36,16 +66,7 @@ Source: round-2 post-execution review of `docs/PIPELINE_REVIEW_2026-07-11.md` §
 
 ## 🟠 Tier 2 — functional gaps, close before P6
 
-### T5. Filter/tier re-evaluation mechanism (Issue #4)
-- **What**: `filter.text`/`filter.decide`/`tier.assign` discovery is a bare
-  row-existence anti-join — a later ASR model improving `asr_agreement.best_text`
-  does NOT trigger re-evaluation of already-filtered/tiered segments. Two full backfills
-  have papered over current data, but the gap is structural and will recur.
-- **How**: add an `agreement_version` column (or track `asr_agreement`'s last-modified
-  marker) on `filters_text`/`tiers`; change discovery to "no row **or** version stale".
-- **Effort**: medium, a few hours (discovery SQL + migration + tests across 3 nodes).
-- **Depends on**: nothing, but **must land before the next new ASR model** is added, or
-  another manual backfill will be needed.
+(none currently — T5 done 2026-07-17, see Done section)
 
 ---
 
@@ -71,6 +92,29 @@ Source: round-2 post-execution review of `docs/PIPELINE_REVIEW_2026-07-11.md` §
   auto-excluding button (conflates the two failure modes), or two separate buttons (most
   correct, more UI surface). **Owner wants to investigate further before deciding** —
   parked, no UI change made this session. Revisit once the owner has a direction.
+- **Owner decision 2026-07-17**: two separate buttons (the "most correct" option above).
+  **UI built same session** — even though T9 proper (the actual cosine-pruning threshold
+  calibration) stays parked until T1 produces enough QA ground truth, the two buttons were
+  added now so the T1 review sessions already underway (owner is actively reviewing the
+  2,850-segment queue) start collecting this ground truth immediately instead of needing a
+  second review pass later:
+  - `pipeline/nodes/calibrate.py`: `NOT_SINGLE_SPEAKER_FLAG_REASON = "not_single_speaker"`
+    (submitted as `decision='rejected'` — a real audio defect, Hard Constraint #5
+    violation, excludes from the manifest, same mechanism as the existing Mandarin button)
+    and `WRONG_SPEAKER_ID_FLAG_REASON = "wrong_speaker_id"` (submitted as
+    `decision='flagged'` — harmless metadata mislabel, audio is fine, does NOT exclude,
+    does NOT touch `tiers`/`asr_agreement`). No `record_decision()` code changes needed —
+    both ride its existing generic `'rejected'`/`'flagged'` handling.
+  - `pipeline/tools/calibrate_server.py`: two new buttons ("Multi-speaker (N)" /
+    "Wrong speaker ID (W)") + matching keyboard shortcuts, styled like the existing
+    Mandarin button. `summary_stats()`'s `top_flag_reasons` leaderboard picks up both
+    automatically (already generic over any `flag_reason` string).
+  - 2 new tests in `tests/test_calibrate_node.py` (61/61 passing) verifying the exclude vs.
+    non-exclude behavior for each button; live-smoke-tested that `_build_app()` still
+    constructs and both button ids/flag reason strings are present in the served page.
+  - **Still not done**: the actual cosine-pruning threshold/node itself (T9 proper) —
+    stays parked on T1 ground truth as before. This was purely the data-collection
+    prerequisite.
 
 ### T10. Content-hash linkage (§5 external best-practice gap)
 - **Owner decision 2026-07-16**: defer until canto-tts training actually starts consuming
@@ -81,7 +125,262 @@ Source: round-2 post-execution review of `docs/PIPELINE_REVIEW_2026-07-11.md` §
   rest slowly (io-bound, can run in background).
 - **Effort**: small design, long backlog fill (618k+ files); low priority.
 
-### T15. Drain the reingest.pending backlog through the full DAG (found 2026-07-12)
+(T15 — see Done section: fully drained, 2026-07-17)
+
+### T14. Full CPU+GPU utilization during chained node runs (found 2026-07-12)
+- **Owner decision 2026-07-16**: wants levers (3)+(4) done — approved.
+- **Progress 2026-07-17 — levers (3) and (4) both built, (3) live-validated, (4)
+  unit-tested but not yet live-validated against a real GPU stage:**
+  1. **Re-test of the original stall case (owner's recommended first step) —
+     CONFIRMED FIXED.** `pipe run-many ingest.probe -- speaker.cluster` (real
+     backlog: 4,086-row `ingest.probe` backlog from the same-day download round +
+     a full 3-source `speaker.cluster` recompute, 1,241,586 segments → 14,330
+     speakers) completed in **212s total, zero stalling** — both nodes' log lines
+     interleaved throughout, confirming genuine concurrency, not serialization.
+     This is the same class of pairing that stalled 30+ minutes in T15 points 3-5
+     before the 2026-07-16 `upsert_rows()` bulk-write fix. Lever (3)'s premise is
+     now viable.
+  2. **Lever (3) built**: `pipeline/tools/chain_runner.py` (`pipe chain run`) —
+     a committed replacement for the ad-hoc `run_t7_chain.sh`-style scripts that
+     were hand-written and thrown away each time. Codifies the full
+     ingest→quality_tier DAG as 12 ordered rounds; two rounds pair genuinely
+     independent nodes via `run-many` instead of a strict waterfall: round 2
+     (`ingest.probe` + `lang_screen.auto`, both read `raw_files` only, write
+     disjoint tables) and round 11 (`g2p` + `tier.assign` + `speaker.cluster`,
+     the direct stand-in for the historically-stalled pairing — all three read
+     already-landed tables and write disjoint ones). `--only`/`--skip` (comma
+     round numbers), `--devices` (threaded to the 3 GPU rounds only), `--dry-run`.
+     Every round's discovery is an idempotent anti-join, so re-running the full
+     chain when a round has nothing to do just no-ops fast — safe default.
+     18 new tests in `tests/test_chain_runner.py` (command construction, ordering,
+     only/skip filtering, failure short-circuit, log file). Live-validated: full
+     `--dry-run` round plan correct, `--only 1` (`ingest.commit`) ran for real.
+  3. **Lever (4) built, NOT yet live-validated against a real GPU stage**:
+     `pipeline/tools/stream_drain.py` (`pipe chain stream`) — backgrounds the
+     upstream GPU node (e.g. `asr.transcribe`) via `Popen`, then re-invokes the
+     downstream node(s) (solo `pipe run` or `run-many` if more than one) on a
+     poll interval (default 300s) while the upstream process is still alive,
+     plus one final drain pass after it exits. Relies on the same idempotent-
+     anti-join property lever (3) does — no coordination between the two
+     processes beyond the catalog itself. 9 new tests in `tests/test_stream_drain.py`
+     (`FakePopen`-based, injectable `sleep_fn`, no real wall-clock sleeps) —
+     command construction and poll/drain sequencing verified, but this has
+     **not been run against a real long-running `asr.transcribe` pass yet** —
+     no large ASR backlog was queued this session (the new download round
+     hadn't reached segmentation/ASR by session end). **Live-validate the next
+     time a real multi-hour `asr.transcribe` pass is queued** — pair with
+     `asr.agreement` (or `asr.agreement g2p` once g2p has backlog again) and
+     confirm the poll loop actually drains mid-run, not just at the end.
+  - Historical context retained below (original problem statement + lever menu
+    + the lever (2) `filter.acoustic` tuning result, already concluded — leave
+    as-is, don't change).
+- **What**: measured during the T7 chain resume run — `asr.agreement` (CPU-only stage)
+  used only 471% CPU (4.7 of 48 cores, `load average` 7.06/48); during the preceding
+  `asr.transcribe` stage each GPU sat at pool `target=1` using only ~2.7GB/24GB VRAM per
+  model. The `run_t7_chain.sh`-style orchestration also runs every stage as a strict
+  waterfall (`ingest.probe` → ... → `tier.assign`, each fully blocking the next), so GPUs
+  are 100% idle during every CPU-only stage and CPU cores are ~90% idle during every
+  GPU-only stage — despite `pipe run-many` (all 23/23 node call sites have `conn=`
+  injection, confirmed done 2026-07-07 per `docs/ORCHESTRATOR_PLAN.md` line 3 — **T8 above
+  was stale, already fully done, moved to Done section below**) already providing the
+  mechanism to run independent nodes concurrently under one shared DuckDB connection.
+- **How** (four independent levers, can be landed separately):
+  1. **GPU pool `target` bump**: `asr.transcribe`/`segment.diarize`/`speaker.embed` VRAM
+     headroom (~11% used per model on a 24GB card) suggests 2+ concurrent workers per GPU
+     is safe — try e.g. `--devices cuda:0,cuda:0,cuda:1,cuda:1` (same device listed twice)
+     and measure real throughput gain vs. VRAM/compute contention.
+  2. **CPU-stage internal parallelism**: `filter.acoustic` already has `--workers` (mind
+     the DNSMOS onnxruntime thread-oversubscription trap from earlier sessions — set
+     `OMP_NUM_THREADS=1` per worker); `asr.agreement`, `g2p`, `filter.text`,
+     `speaker.cluster`, `tier.assign` appear to run as a single process with no
+     `--workers`/multiprocessing option — audit each and add worker-pool parallelism
+     where the per-item work is independent (most of these are pure-Python/DuckDB CPU
+     loops, good multiprocessing candidates).
+  3. **Overlap independent stages via `run-many` in the chain script**: rewrite
+     `run_t7_chain.sh`'s strict waterfall to pair genuinely independent nodes in the same
+     `run-many` invocation when their discovery sets don't conflict — e.g. next round's
+     `ingest.probe`/`lang_screen.auto` can run alongside this round's `asr.transcribe`
+     (disjoint catalog tables, no lock contention).
+  4. **(Bigger lift) Streaming pipeline via poll loop**: because every node's discovery
+     is an idempotent anti-join, downstream CPU stages (`asr.agreement` → `filter.*` →
+     `g2p`) could in principle drain newly-landed rows continuously while an upstream GPU
+     stage (`asr.transcribe`) is still running, instead of waiting for the entire GPU
+     stage to finish first. Needs a wrapper that re-invokes `run-many` for the downstream
+     nodes on an interval until the upstream stage's process exits, then a final drain
+     pass. Biggest potential wall-clock win (GPU+CPU already-idle window observed was a
+     large fraction of total chain time), but needs script engineering + testing to avoid
+     redundant no-op invocations spamming the log.
+- **Effort**: (1)+(2) are quick, low-risk, testable independently against the real
+  catalog with `--limit`; (3) is a script-only change; (4) is a half-day-plus design+build.
+- **Depends on**: nothing blocking; safe to pick off individually. Do (1)/(2) first since
+  they're cheapest to validate.
+- **Lever (2) tested live 2026-07-12 — CLI default is already the best config found,
+  do not change it.** Measured 3 configs against the real T7 `filter.acoustic` backlog,
+  each read via a proper steady-state sample (several deltas 40s+ after worker startup,
+  not the first minute — an early reading looked like +25% and was actually just
+  worker-startup transient, corrected after longer sampling):
+  - `--workers 4 --threads 4` (CLI default): steady-state **~38-43/s**, ~1993% CPU
+    (~20 cores), load average ~7-23 depending on what else is running. **Best of the 3.**
+  - `--workers 8 --threads 3`: steady-state **~17-19/s** (worse) — fewer threads/worker
+    slows each DNSMOS inference enough that 8 workers don't compensate; total CPU stayed
+    flat at ~19-20 cores (same budget, split into smaller/less-efficient units).
+  - `--workers 8 --threads 4`: steady-state **~11-12/s** (worst) — CPU shot up to
+    ~3459% (~35 cores), `load average` hit 42/48 — classic oversubscription/thrashing,
+    8 concurrent ONNX sessions contending for L3 cache/memory bandwidth. More cores used,
+    less work done.
+  - **Conclusion**: `filter.acoustic`'s bottleneck is not raw core count — it's
+    per-worker ONNX inference efficiency, which degrades if threads-per-worker drops
+    below the default, and CPU/cache contention, which appears fast if worker count
+    rises without a matching drop in total nominal threads. Leave `filter.acoustic` at
+    its CLI default; do not spend more time tuning this specific stage's own
+    workers/threads knobs. The bigger win is still lever (3)/(4) (stage-waterfall idle
+    time) — worth remembering as a general lesson before tuning any other CPU-pool node
+    in this codebase (`asr.agreement`, `g2p`, etc. if multiprocessing is added there
+    later): always verify with a steady-state sample, not the first 1-2 minutes.
+
+---
+
+## 🟢 Tier 4 — optional / nice-to-have
+
+(none currently — T9/T10/T14 remaining levers are Tier 3, see above; T13 moved to Done)
+
+---
+
+## Suggested execution order
+
+```
+Do now (independent):      T1 (human QA, owner-paced, code-switch focus — 2026-07-17)
+Schedule into P6 proper:   T9 (depends on T1), T10, T14 levers (3)+(4) live-validation
+Pulled by training needs:  T13
+```
+(updated 2026-07-17 — T5/T6/T16/T15-remaining-chain all moved to Done since this list was
+last written; see Done section for what actually landed and when.)
+
+---
+
+## Done
+
+### T5. Filter/tier re-evaluation mechanism (Issue #4) — done 2026-07-17
+- **What**: `filter.text`/`filter.decide`/`tier.assign` discovery was a bare row-existence
+  anti-join — a later ASR model improving `asr_agreement.best_text` did NOT trigger
+  re-evaluation of already-filtered/tiered segments. Owner chose to do this now (full
+  3-node scope) rather than defer to the next new ASR model.
+- **How (built)**: rather than a separate version/timestamp column, reused
+  `asr_agreement.model_count` (already increments whenever a new active ASR model lands
+  for an id — see `asr.agreement`) as the version signal, snapshotted at evaluation time:
+  - `filters_text.asr_model_count` (schema.sql), compared against `asr_agreement.model_count`
+    in `TEXT_DISCOVER_SQL` — re-evaluates on "no row OR stale count".
+  - `filters.text_model_count`, compared against `filters_text.asr_model_count` in
+    `DECIDE_DISCOVER_SQL` — catches filter.decide going stale when filter.text re-evaluates
+    underneath it, even if filter.decide itself was never touched by a new ASR model directly.
+  - `tiers.asr_model_count`, compared against `asr_agreement.model_count` in
+    `TIER_DISCOVER_SQL`.
+  - `filter.acoustic` deliberately untouched — it only reads `segments.audio_path` (never
+    `asr_agreement`), so its output can never go stale from an ASR model change; its existing
+    `fa.id IS NULL` discovery was already correct.
+- **Bug found while implementing (data-trust-relevant)**: `tier.assign`'s OLD discovery
+  anti-joined via `LEFT JOIN tiers t ON a.id = t.id AND t.provenance = 'tier_assign'` — a
+  human review decision written by `calibrate.py`'s `record_decision()` carries a DIFFERENT
+  provenance (`'calibrate_verify'`/`'calibrate_reject'`), so it always looked like "not yet
+  tiered by this node" and got silently re-processed by the very next `tier.assign` run.
+  Confirmed live against the real catalog: all 58 currently-`verified` rows had already had
+  their provenance silently overwritten `calibrate_verify` → `tier_assign` by a prior
+  full-backlog run (harmless here since `text_verified=True` deterministically re-computes
+  `'gold'` either way) — but a `'rejected'` row would NOT have been harmless: `assign_tier
+  (False, ...)` recomputes from agreement/dnsmos alone and could silently promote a
+  human-rejected segment straight back into the manifest-eligible pool, undoing T19's
+  'rejected' propagation fix. No `'rejected'` decisions exist in the catalog yet (0 recorded),
+  so this hadn't visibly corrupted data, but was a live landmine for the T1 code-switch pilot
+  batch queued this same session. Fixed as part of the same discovery-SQL rewrite —
+  `TIER_DISCOVER_SQL` now unconditionally excludes `provenance IN ('calibrate_verify',
+  'calibrate_reject')` from re-discovery, regardless of `model_count`, making a human decision
+  permanently terminal (matches `assign_tier()`'s own documented invariant).
+- **Migration + backfill**: `pipeline/catalog/schema.sql` gained 3 `ALTER TABLE ... ADD
+  COLUMN IF NOT EXISTS` (idempotent, applied automatically via `init_schema()` on next
+  `connect()`). Ran a one-time backfill against the real catalog immediately after migrating
+  (all 1,241,610 rows in `filters_text`/`filters`/`tiers` would otherwise have `NULL` version
+  columns and look simultaneously "stale" — verified this WOULD have triggered an
+  unintended full-corpus reprocess before backfilling, confirmed 0-row discovery backlogs
+  after). `catalog verify` re-run clean, 17/17 PASS.
+- **Tests**: 14 new (`tests/test_filter_node.py` — discover_text/discover_decide
+  re-evaluation + legacy-NULL cases; `tests/test_tier_node.py` — discover() re-evaluation +
+  both human-decision-protection regression tests). 437/437 total passing.
+- **Not done / left as-is**: no attempt to backfill or re-run the actual filter/tier logic
+  for any segment (nothing changed operationally this session — no new ASR model landed —
+  this was purely the mechanism + a preventative correctness fix + the version-column
+  backfill needed to ship it safely).
+
+### T13. A/B TTS-quality tier axis (`docs/LABEL_FRAMEWORK_SPEC.md` §10) — done 2026-07-16
+- Pulled forward from Tier 4 by owner decision — canto-tts training is about to start,
+  scope narrowed to gold+auto_gold only (not the full manifest-eligible pool).
+- **Done**: new node `pipeline/nodes/quality_tier.py` (`quality_tier.assign`) + table
+  `quality_tiers (id, quality_tier, provenance)`. Tier A = full gold+auto_gold scope
+  (223,605 segs); Tier B (clean, strict bundle owner-picked after a 3-way loose/medium/
+  strict comparison against the real distribution) = `dnsmos>=3.7 AND music_prob<0.10
+  AND overlap_ratio<0.05` (55,580 segs / 152.1h). Explicitly a SEPARATE axis from
+  `tiers`/`tier.assign` — documented in both nodes' docstrings + CLAUDE.md's "Tier is
+  overloaded" section to prevent conflation.
+- `manifest.build`/`manifest.export` gained `--min-quality-tier {A,B}` (LEFT JOIN, so
+  silver/bronze/unscored rows stay included when unused). Exported
+  `metadata/manifest_tier_auto_gold_qualityB.jsonl` (55,594 entries/152.1h/1,860 speakers)
+  for the clean fine-tune stage; Tier A already covered by the existing
+  `manifest_tier_auto_gold.jsonl`.
+- Full backfill: 279,185 segments in 4s (validates the same-day upsert_rows() fix again).
+- **Tests**: 19 new in `tests/test_quality_tier_node.py`, 11 new in `tests/test_manifest_node.py`.
+  Full writeup: DECISIONS.md 2026-07-16.
+- **Not done**: no Tier A-only export file written (redundant with the existing
+  `manifest_tier_auto_gold.jsonl`); label coverage gap (~3-5% of the gold+auto_gold scope
+  has no `labels_music`/`labels_overlap` row yet) means a handful of segments fail closed
+  to Tier A that a full label.suite backfill might upgrade to Tier B later — not
+  re-triggered automatically (same structural gap as T5).
+
+### T12. Automate log retention (Issue #11 residual) — done 2026-07-16
+- Phase B2 cleaned `metadata/logs/` (1.7GB → 17M) but there's no mechanism preventing
+  regrowth. Most growth is ad-hoc shell-redirected batch logs (`t15_*.log` etc.), not
+  just the handful of nodes using `logging.FileHandler` directly — a Python-side
+  truncation hook wouldn't catch those, so went with a standalone prune script instead.
+- **Done**: `pipeline/tools/prune_logs.py` (`prune_logs()`) — gzips `*.log` older than
+  `--gzip-after-days` (default 7), deletes `*.log.gz` archives older than
+  `--delete-after-days` (default 60). Idempotent (already-gzipped files skipped,
+  operates on mtime). Wired as `pipe logs prune` (`--dry-run` supported) in
+  `pipeline/cli.py`. 7 new tests in `tests/test_prune_logs.py`.
+- **Automated**: added a real (not Claude-session-scoped) weekly crontab entry —
+  `0 3 * * 0` (Sun 3am) — running `pipe logs prune >> metadata/logs/prune_cron.log`.
+  Its own log is subject to the same pruning, self-limiting.
+- **Result**: first real run (not dry-run) gzipped 46 files, reclaimed 14.8MB
+  (`metadata/logs/` 70M → 56M — most of the remaining size is a handful of files
+  younger than the 7-day gzip threshold, e.g. the T15 batch64 run log, which will
+  compress on their next scheduled pass).
+
+### T11. Relocate dormant release data (Issue #16) — done 2026-07-16
+Moved `metadata/manifest_release.jsonl` (672MB) + `excluded_no_url.jsonl` (8.4MB) into
+`metadata/release_dormant/`, alongside the 3 dormant scripts already there. Zero risk
+difference (both `mv`d, not copied — no duplicate left behind); grepped first to confirm
+no code references the old root-level path, only prose in CLAUDE.md/DECISIONS.md/this
+file/the review doc — none of which are path-sensitive.
+
+### upsert_rows() performance fix — done 2026-07-16
+Not a numbered T-task (tracked only in `docs/UPSERT_PERFORMANCE_FIX_PLAN.md`, found
+mid-sweep while auditing the uncommitted backlog before commit) — closing the loop here
+so it doesn't fall through the cracks again. `upsert_rows()` (`pipeline/catalog/catalog.py`)
+switched from per-row `conn.executemany()` to a vectorised `pd.DataFrame` +
+`INSERT ... SELECT` bulk path above `UPSERT_BULK_THRESHOLD = 2_000` rows. Real-world
+validation: full 3-source `speaker.cluster` rerun (1,241,586 segments) — **104s total**
+vs. the historical ~78min for the podcast source's write alone (45×+ speedup), zero
+data drift (identical row/speaker counts). 357/357 tests passing (14 new in
+`tests/test_upsert_rows.py`). Full writeup: DECISIONS.md 2026-07-16. Side effect worth
+tracking under T14: removes the root cause of the `run-many`
+`asr.transcribe`+`speaker.cluster` pairing stall (T15 points 3-5) — worth a retry next
+time both have real backlogs queued.
+
+### T6. Re-export default manifest (Issue #2 + N3) — done 2026-07-15
+`pipe run manifest.export` re-run after T15's full chain landed (see T15 addendum below)
+and T16's auto_gold gate rebuild. `metadata/manifest.jsonl`/`train.jsonl`/`val.jsonl`
+regenerated 2026-07-15 21:35 (606,775 entries). `report.build` re-run 2026-07-16 00:03:
+1349.3h / 9,023 speakers / 3 sources / 6 domains, 11/12 acceptance criteria PASS (only
+`text_verified` fails, expected — see T1).
+
+### T15. Drain the reingest.pending backlog through the full DAG (found 2026-07-12) — done 2026-07-17
 - **What**: `docs/IO_OPTIMIZATION_PLAN.md` diagnosed Drive4's file-count skew (2.55M
   files, dentry-cache thrashing was the real `speaker.cluster` I/O bottleneck, not
   clustering compute or GPU availability — see that doc §1-2). Phase 0
@@ -393,224 +692,22 @@ Source: round-2 post-execution review of `docs/PIPELINE_REVIEW_2026-07-11.md` §
   quantify how much the old legacy-ASR rejection was actually a false-negative problem —
   worth a `PROGRESS.md`/`DECISIONS.md` note either way.
 
-### T14. Full CPU+GPU utilization during chained node runs (found 2026-07-12)
-- **Owner decision 2026-07-16**: wants levers (3)+(4) done — approved.
-- **Progress 2026-07-17 — levers (3) and (4) both built, (3) live-validated, (4)
-  unit-tested but not yet live-validated against a real GPU stage:**
-  1. **Re-test of the original stall case (owner's recommended first step) —
-     CONFIRMED FIXED.** `pipe run-many ingest.probe -- speaker.cluster` (real
-     backlog: 4,086-row `ingest.probe` backlog from the same-day download round +
-     a full 3-source `speaker.cluster` recompute, 1,241,586 segments → 14,330
-     speakers) completed in **212s total, zero stalling** — both nodes' log lines
-     interleaved throughout, confirming genuine concurrency, not serialization.
-     This is the same class of pairing that stalled 30+ minutes in T15 points 3-5
-     before the 2026-07-16 `upsert_rows()` bulk-write fix. Lever (3)'s premise is
-     now viable.
-  2. **Lever (3) built**: `pipeline/tools/chain_runner.py` (`pipe chain run`) —
-     a committed replacement for the ad-hoc `run_t7_chain.sh`-style scripts that
-     were hand-written and thrown away each time. Codifies the full
-     ingest→quality_tier DAG as 12 ordered rounds; two rounds pair genuinely
-     independent nodes via `run-many` instead of a strict waterfall: round 2
-     (`ingest.probe` + `lang_screen.auto`, both read `raw_files` only, write
-     disjoint tables) and round 11 (`g2p` + `tier.assign` + `speaker.cluster`,
-     the direct stand-in for the historically-stalled pairing — all three read
-     already-landed tables and write disjoint ones). `--only`/`--skip` (comma
-     round numbers), `--devices` (threaded to the 3 GPU rounds only), `--dry-run`.
-     Every round's discovery is an idempotent anti-join, so re-running the full
-     chain when a round has nothing to do just no-ops fast — safe default.
-     18 new tests in `tests/test_chain_runner.py` (command construction, ordering,
-     only/skip filtering, failure short-circuit, log file). Live-validated: full
-     `--dry-run` round plan correct, `--only 1` (`ingest.commit`) ran for real.
-  3. **Lever (4) built, NOT yet live-validated against a real GPU stage**:
-     `pipeline/tools/stream_drain.py` (`pipe chain stream`) — backgrounds the
-     upstream GPU node (e.g. `asr.transcribe`) via `Popen`, then re-invokes the
-     downstream node(s) (solo `pipe run` or `run-many` if more than one) on a
-     poll interval (default 300s) while the upstream process is still alive,
-     plus one final drain pass after it exits. Relies on the same idempotent-
-     anti-join property lever (3) does — no coordination between the two
-     processes beyond the catalog itself. 9 new tests in `tests/test_stream_drain.py`
-     (`FakePopen`-based, injectable `sleep_fn`, no real wall-clock sleeps) —
-     command construction and poll/drain sequencing verified, but this has
-     **not been run against a real long-running `asr.transcribe` pass yet** —
-     no large ASR backlog was queued this session (the new download round
-     hadn't reached segmentation/ASR by session end). **Live-validate the next
-     time a real multi-hour `asr.transcribe` pass is queued** — pair with
-     `asr.agreement` (or `asr.agreement g2p` once g2p has backlog again) and
-     confirm the poll loop actually drains mid-run, not just at the end.
-  - Historical context retained below (original problem statement + lever menu
-    + the lever (2) `filter.acoustic` tuning result, already concluded — leave
-    as-is, don't change).
-- **What**: measured during the T7 chain resume run — `asr.agreement` (CPU-only stage)
-  used only 471% CPU (4.7 of 48 cores, `load average` 7.06/48); during the preceding
-  `asr.transcribe` stage each GPU sat at pool `target=1` using only ~2.7GB/24GB VRAM per
-  model. The `run_t7_chain.sh`-style orchestration also runs every stage as a strict
-  waterfall (`ingest.probe` → ... → `tier.assign`, each fully blocking the next), so GPUs
-  are 100% idle during every CPU-only stage and CPU cores are ~90% idle during every
-  GPU-only stage — despite `pipe run-many` (all 23/23 node call sites have `conn=`
-  injection, confirmed done 2026-07-07 per `docs/ORCHESTRATOR_PLAN.md` line 3 — **T8 above
-  was stale, already fully done, moved to Done section below**) already providing the
-  mechanism to run independent nodes concurrently under one shared DuckDB connection.
-- **How** (four independent levers, can be landed separately):
-  1. **GPU pool `target` bump**: `asr.transcribe`/`segment.diarize`/`speaker.embed` VRAM
-     headroom (~11% used per model on a 24GB card) suggests 2+ concurrent workers per GPU
-     is safe — try e.g. `--devices cuda:0,cuda:0,cuda:1,cuda:1` (same device listed twice)
-     and measure real throughput gain vs. VRAM/compute contention.
-  2. **CPU-stage internal parallelism**: `filter.acoustic` already has `--workers` (mind
-     the DNSMOS onnxruntime thread-oversubscription trap from earlier sessions — set
-     `OMP_NUM_THREADS=1` per worker); `asr.agreement`, `g2p`, `filter.text`,
-     `speaker.cluster`, `tier.assign` appear to run as a single process with no
-     `--workers`/multiprocessing option — audit each and add worker-pool parallelism
-     where the per-item work is independent (most of these are pure-Python/DuckDB CPU
-     loops, good multiprocessing candidates).
-  3. **Overlap independent stages via `run-many` in the chain script**: rewrite
-     `run_t7_chain.sh`'s strict waterfall to pair genuinely independent nodes in the same
-     `run-many` invocation when their discovery sets don't conflict — e.g. next round's
-     `ingest.probe`/`lang_screen.auto` can run alongside this round's `asr.transcribe`
-     (disjoint catalog tables, no lock contention).
-  4. **(Bigger lift) Streaming pipeline via poll loop**: because every node's discovery
-     is an idempotent anti-join, downstream CPU stages (`asr.agreement` → `filter.*` →
-     `g2p`) could in principle drain newly-landed rows continuously while an upstream GPU
-     stage (`asr.transcribe`) is still running, instead of waiting for the entire GPU
-     stage to finish first. Needs a wrapper that re-invokes `run-many` for the downstream
-     nodes on an interval until the upstream stage's process exits, then a final drain
-     pass. Biggest potential wall-clock win (GPU+CPU already-idle window observed was a
-     large fraction of total chain time), but needs script engineering + testing to avoid
-     redundant no-op invocations spamming the log.
-- **Effort**: (1)+(2) are quick, low-risk, testable independently against the real
-  catalog with `--limit`; (3) is a script-only change; (4) is a half-day-plus design+build.
-- **Depends on**: nothing blocking; safe to pick off individually. Do (1)/(2) first since
-  they're cheapest to validate.
-- **Lever (2) tested live 2026-07-12 — CLI default is already the best config found,
-  do not change it.** Measured 3 configs against the real T7 `filter.acoustic` backlog,
-  each read via a proper steady-state sample (several deltas 40s+ after worker startup,
-  not the first minute — an early reading looked like +25% and was actually just
-  worker-startup transient, corrected after longer sampling):
-  - `--workers 4 --threads 4` (CLI default): steady-state **~38-43/s**, ~1993% CPU
-    (~20 cores), load average ~7-23 depending on what else is running. **Best of the 3.**
-  - `--workers 8 --threads 3`: steady-state **~17-19/s** (worse) — fewer threads/worker
-    slows each DNSMOS inference enough that 8 workers don't compensate; total CPU stayed
-    flat at ~19-20 cores (same budget, split into smaller/less-efficient units).
-  - `--workers 8 --threads 4`: steady-state **~11-12/s** (worst) — CPU shot up to
-    ~3459% (~35 cores), `load average` hit 42/48 — classic oversubscription/thrashing,
-    8 concurrent ONNX sessions contending for L3 cache/memory bandwidth. More cores used,
-    less work done.
-  - **Conclusion**: `filter.acoustic`'s bottleneck is not raw core count — it's
-    per-worker ONNX inference efficiency, which degrades if threads-per-worker drops
-    below the default, and CPU/cache contention, which appears fast if worker count
-    rises without a matching drop in total nominal threads. Leave `filter.acoustic` at
-    its CLI default; do not spend more time tuning this specific stage's own
-    workers/threads knobs. The bigger win is still lever (3)/(4) (stage-waterfall idle
-    time) — worth remembering as a general lesson before tuning any other CPU-pool node
-    in this codebase (`asr.agreement`, `g2p`, etc. if multiprocessing is added there
-    later): always verify with a steady-state sample, not the first 1-2 minutes.
-
----
-
-## 🟢 Tier 4 — optional / nice-to-have
-
-(none currently — T9/T10/T14 remaining levers are Tier 3, see above; T13 moved to Done)
-
----
-
-## Suggested execution order
-
-```
-Do now (independent):      T1 (human QA) + git commit backlog (review doc 07-13 Phase B)
-Once T15's ASR drains:     T15 remaining chain (agreement → filter → g2p → tier →
-                           speaker.cluster solo) → T6 (re-export + report.build)
-Right after that:          T16 (auto_gold gate rebuild — normalization fix FIRST,
-                           then backfill, then owner threshold decision)
-Before next new ASR model: T5 (re-eval mechanism)
-Cleanup (owner approves):  docs/PIPELINE_REVIEW_2026-07-13.md §3 Phase A (~13GB dead
-                           model weights) + Phase D items
-Schedule into P6 proper:   T9 (depends on T1), T10, T12, T14 levers (3)+(4)
-Pulled by training needs:  T13
-```
-
----
-
-## Done
-
-### T13. A/B TTS-quality tier axis (`docs/LABEL_FRAMEWORK_SPEC.md` §10) — done 2026-07-16
-- Pulled forward from Tier 4 by owner decision — canto-tts training is about to start,
-  scope narrowed to gold+auto_gold only (not the full manifest-eligible pool).
-- **Done**: new node `pipeline/nodes/quality_tier.py` (`quality_tier.assign`) + table
-  `quality_tiers (id, quality_tier, provenance)`. Tier A = full gold+auto_gold scope
-  (223,605 segs); Tier B (clean, strict bundle owner-picked after a 3-way loose/medium/
-  strict comparison against the real distribution) = `dnsmos>=3.7 AND music_prob<0.10
-  AND overlap_ratio<0.05` (55,580 segs / 152.1h). Explicitly a SEPARATE axis from
-  `tiers`/`tier.assign` — documented in both nodes' docstrings + CLAUDE.md's "Tier is
-  overloaded" section to prevent conflation.
-- `manifest.build`/`manifest.export` gained `--min-quality-tier {A,B}` (LEFT JOIN, so
-  silver/bronze/unscored rows stay included when unused). Exported
-  `metadata/manifest_tier_auto_gold_qualityB.jsonl` (55,594 entries/152.1h/1,860 speakers)
-  for the clean fine-tune stage; Tier A already covered by the existing
-  `manifest_tier_auto_gold.jsonl`.
-- Full backfill: 279,185 segments in 4s (validates the same-day upsert_rows() fix again).
-- **Tests**: 19 new in `tests/test_quality_tier_node.py`, 11 new in `tests/test_manifest_node.py`.
-  Full writeup: DECISIONS.md 2026-07-16.
-- **Not done**: no Tier A-only export file written (redundant with the existing
-  `manifest_tier_auto_gold.jsonl`); label coverage gap (~3-5% of the gold+auto_gold scope
-  has no `labels_music`/`labels_overlap` row yet) means a handful of segments fail closed
-  to Tier A that a full label.suite backfill might upgrade to Tier B later — not
-  re-triggered automatically (same structural gap as T5).
-
-### T12. Automate log retention (Issue #11 residual) — done 2026-07-16
-- Phase B2 cleaned `metadata/logs/` (1.7GB → 17M) but there's no mechanism preventing
-  regrowth. Most growth is ad-hoc shell-redirected batch logs (`t15_*.log` etc.), not
-  just the handful of nodes using `logging.FileHandler` directly — a Python-side
-  truncation hook wouldn't catch those, so went with a standalone prune script instead.
-- **Done**: `pipeline/tools/prune_logs.py` (`prune_logs()`) — gzips `*.log` older than
-  `--gzip-after-days` (default 7), deletes `*.log.gz` archives older than
-  `--delete-after-days` (default 60). Idempotent (already-gzipped files skipped,
-  operates on mtime). Wired as `pipe logs prune` (`--dry-run` supported) in
-  `pipeline/cli.py`. 7 new tests in `tests/test_prune_logs.py`.
-- **Automated**: added a real (not Claude-session-scoped) weekly crontab entry —
-  `0 3 * * 0` (Sun 3am) — running `pipe logs prune >> metadata/logs/prune_cron.log`.
-  Its own log is subject to the same pruning, self-limiting.
-- **Result**: first real run (not dry-run) gzipped 46 files, reclaimed 14.8MB
-  (`metadata/logs/` 70M → 56M — most of the remaining size is a handful of files
-  younger than the 7-day gzip threshold, e.g. the T15 batch64 run log, which will
-  compress on their next scheduled pass).
-
-### T11. Relocate dormant release data (Issue #16) — done 2026-07-16
-Moved `metadata/manifest_release.jsonl` (672MB) + `excluded_no_url.jsonl` (8.4MB) into
-`metadata/release_dormant/`, alongside the 3 dormant scripts already there. Zero risk
-difference (both `mv`d, not copied — no duplicate left behind); grepped first to confirm
-no code references the old root-level path, only prose in CLAUDE.md/DECISIONS.md/this
-file/the review doc — none of which are path-sensitive.
-
-### upsert_rows() performance fix — done 2026-07-16
-Not a numbered T-task (tracked only in `docs/UPSERT_PERFORMANCE_FIX_PLAN.md`, found
-mid-sweep while auditing the uncommitted backlog before commit) — closing the loop here
-so it doesn't fall through the cracks again. `upsert_rows()` (`pipeline/catalog/catalog.py`)
-switched from per-row `conn.executemany()` to a vectorised `pd.DataFrame` +
-`INSERT ... SELECT` bulk path above `UPSERT_BULK_THRESHOLD = 2_000` rows. Real-world
-validation: full 3-source `speaker.cluster` rerun (1,241,586 segments) — **104s total**
-vs. the historical ~78min for the podcast source's write alone (45×+ speedup), zero
-data drift (identical row/speaker counts). 357/357 tests passing (14 new in
-`tests/test_upsert_rows.py`). Full writeup: DECISIONS.md 2026-07-16. Side effect worth
-tracking under T14: removes the root cause of the `run-many`
-`asr.transcribe`+`speaker.cluster` pairing stall (T15 points 3-5) — worth a retry next
-time both have real backlogs queued.
-
-### T6. Re-export default manifest (Issue #2 + N3) — done 2026-07-15
-`pipe run manifest.export` re-run after T15's full chain landed (see T15 addendum below)
-and T16's auto_gold gate rebuild. `metadata/manifest.jsonl`/`train.jsonl`/`val.jsonl`
-regenerated 2026-07-15 21:35 (606,775 entries). `report.build` re-run 2026-07-16 00:03:
-1349.3h / 9,023 speakers / 3 sources / 6 domains, 11/12 acceptance criteria PASS (only
-`text_verified` fails, expected — see T1).
-
 ### T15 — addendum: full downstream chain confirmed drained, 2026-07-16
 Verified live (not just claimed) via `pipe catalog verify` (17/17 PASS) and direct catalog
 query: `asr_agreement`/`filters`/`tiers` all now sit at the `segments` ceiling
 (1,241,610 rows each) — the `asr.agreement → filter.text → filter.acoustic → filter.decide
 → tier.assign` chain (interrupted mid-session 2026-07-14 by the `filter.decide` OOM, see
 DECISIONS.md 2026-07-14) fully drained after that fix. `speaker.cluster` also re-ran:
-speakers 11,679 → 14,330. `g2p` still lags at 780,219/1,241,610 (pre-existing gap,
-unrelated to T15 — see T5). The T15 task-header text above (steps 1-17) still describes
-the investigation/fix history accurately; this addendum just closes out the "not yet run"
-status left dangling at the end of point 17.
+speakers 11,679 → 14,330. `g2p` sits at 780,219/1,241,610 — this LOOKS like a lag against
+`segments`, but is not one: g2p's real population is `filters.pass = TRUE` (also exactly
+780,219), not all segments (most segments legitimately fail some filter gate and never need
+g2p at all — see `pipeline/nodes/g2p.py`'s discovery SQL). **Correction 2026-07-17**: verified
+live via `discover()` — g2p backlog is genuinely **0**, fully caught up. The "lag" framing in
+the original addendum was a miscalculation (comparing against the wrong denominator), not a
+real gap; no g2p work is outstanding. T15 moved to Done in full this session (2026-07-17) —
+the DAG-drain work described above was already complete, this was purely a bookkeeping fix
+(the Tier 3 list still had prima facie the entire investigation/postmortem sitting there as
+if still open).
 
 ### T19. `calibrate.serve` — 'rejected' propagation fix + one-click Mandarin
 flag button — done 2026-07-15

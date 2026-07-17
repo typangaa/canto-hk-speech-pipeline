@@ -8,7 +8,9 @@ from pipeline.catalog.catalog import init_schema
 from pipeline.nodes.calibrate import (
     CODE_SWITCH_QA_MULTIPLIER,
     MANDARIN_FLAG_REASON,
+    NOT_SINGLE_SPEAKER_FLAG_REASON,
     QA_SAMPLE_RATE_BY_TIER,
+    WRONG_SPEAKER_ID_FLAG_REASON,
     _levenshtein,
     append_pending_decision,
     discover,
@@ -20,6 +22,7 @@ from pipeline.nodes.calibrate import (
     load_pending_decisions,
     next_pending,
     pending_queue_rows,
+    progress_report,
     queue_stats,
     record_decision,
     recommended_sample_n,
@@ -332,6 +335,50 @@ def test_record_decision_rejected_with_mandarin_reason_excludes_and_stores_reaso
     assert review == ("rejected", "mandarin")
     tier_row = conn.execute("SELECT tier FROM tiers WHERE id='s1'").fetchone()
     assert tier_row == ("excluded",)
+
+
+# ---------------------------------------------------------------------------
+# T9 speaker-purity buttons (2026-07-17) — two different failure modes,
+# two different consequences, both riding record_decision's existing
+# 'rejected'/'flagged' mechanics (no new decision type needed).
+# ---------------------------------------------------------------------------
+
+def test_record_decision_not_single_speaker_excludes_and_stores_reason(scratch_conn):
+    """The 'Multi-speaker' button -- a real audio defect (Hard Constraint #5
+    violation) -- must exclude the segment, same mechanism as Mandarin."""
+    conn = scratch_conn
+    _seed_segment(conn, "s1")
+    conn.execute("INSERT INTO calibration_review (id, decision) VALUES ('s1', 'pending')")
+
+    record_decision(conn, "s1", "rejected", None, flag_reason=NOT_SINGLE_SPEAKER_FLAG_REASON)
+
+    review = conn.execute(
+        "SELECT decision, flag_reason FROM calibration_review WHERE id='s1'"
+    ).fetchone()
+    assert review == ("rejected", "not_single_speaker")
+    tier_row = conn.execute("SELECT tier FROM tiers WHERE id='s1'").fetchone()
+    assert tier_row == ("excluded",)
+
+
+def test_record_decision_wrong_speaker_id_does_not_exclude(scratch_conn):
+    """The 'Wrong speaker ID' button -- a harmless metadata mislabel, audio is
+    fine -- must NOT exclude the segment and must NOT touch tiers/asr_agreement,
+    same as the generic 'flagged' decision."""
+    conn = scratch_conn
+    _seed_segment(conn, "s1")
+    conn.execute("INSERT INTO calibration_review (id, decision) VALUES ('s1', 'pending')")
+    conn.execute("INSERT INTO tiers (id, tier, provenance) VALUES ('s1', 'silver', 'tier_assign')")
+
+    record_decision(conn, "s1", "flagged", None, flag_reason=WRONG_SPEAKER_ID_FLAG_REASON)
+
+    review = conn.execute(
+        "SELECT decision, flag_reason FROM calibration_review WHERE id='s1'"
+    ).fetchone()
+    assert review == ("flagged", "wrong_speaker_id")
+    tier_row = conn.execute("SELECT tier, provenance FROM tiers WHERE id='s1'").fetchone()
+    assert tier_row == ("silver", "tier_assign")  # untouched
+    agreement_row = conn.execute("SELECT text_verified FROM asr_agreement WHERE id='s1'").fetchone()
+    assert agreement_row == (False,)  # untouched
 
 
 # ---------------------------------------------------------------------------
@@ -702,3 +749,43 @@ def test_run_calibrate_flush_pending_leaves_failed_entries_for_retry(scratch_con
     assert path.exists()  # left in place for retry, not archived
     remaining = load_pending_decisions(path)
     assert set(remaining) == {"bad1"}
+
+
+# ---------------------------------------------------------------------------
+# progress_report() — T1 QA-backlog tracker (2026-07-17)
+# ---------------------------------------------------------------------------
+
+def test_progress_report_splits_pure_and_code_switch(scratch_conn):
+    conn = scratch_conn
+    _seed_segment(conn, "a", tier="auto_gold", english_ratio=0.0)
+    _seed_segment(conn, "b", tier="auto_gold", english_ratio=0.2)
+    conn.execute("INSERT INTO calibration_review (id, decision) VALUES ('a', 'pending')")
+    conn.execute("INSERT INTO calibration_review (id, decision) VALUES ('b', 'pending')")
+
+    report = progress_report(conn)
+
+    assert report["totals"] == {"total": 2, "pending": 2, "reviewed": 0}
+    assert report["by_code_switch"]["pure"] == {"total": 1, "pending": 1}
+    assert report["by_code_switch"]["code_switch"] == {"total": 1, "pending": 1}
+    assert report["breakdown"]["auto_gold"]["pure"]["pending"] == 1
+    assert report["breakdown"]["auto_gold"]["code_switch"]["pending"] == 1
+
+
+def test_progress_report_counts_reviewed_separately_from_pending(scratch_conn):
+    conn = scratch_conn
+    _seed_segment(conn, "a", tier="silver", english_ratio=0.0)
+    conn.execute(
+        "INSERT INTO calibration_review (id, decision) VALUES ('a', 'verified')"
+    )
+
+    report = progress_report(conn)
+
+    assert report["totals"] == {"total": 1, "pending": 0, "reviewed": 1}
+    assert report["by_code_switch"]["pure"] == {"total": 1, "pending": 0}
+    assert report["breakdown"]["silver"]["pure"]["verified"] == 1
+
+
+def test_progress_report_empty_queue(scratch_conn):
+    report = progress_report(scratch_conn)
+    assert report["totals"] == {"total": 0, "pending": 0, "reviewed": 0}
+    assert report["breakdown"] == {}

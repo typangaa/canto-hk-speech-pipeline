@@ -116,6 +116,30 @@ CODE_SWITCH_QA_MULTIPLIER = 10.0
 # instead of being buried among free-text rejection notes.
 MANDARIN_FLAG_REASON = "mandarin"
 
+# Fixed flag_reasons for the two T9 speaker-purity buttons (added 2026-07-17,
+# pending_task.md T9 -- owner decision: two separate buttons, not one, because
+# these are two DIFFERENT failure modes that need different consequences:
+#
+#   NOT_SINGLE_SPEAKER_FLAG_REASON -- the audio itself contains more than one
+#   speaker (a genuine violation of CLAUDE.md Hard Constraint #5 -- "single
+#   speaker segments 100%"). Submitted as decision='rejected' (excludes from
+#   the manifest), same mechanism as the Mandarin button above.
+#
+#   WRONG_SPEAKER_ID_FLAG_REASON -- the audio IS single-speaker, but
+#   speaker.cluster assigned it the wrong speaker_id (a harmless metadata
+#   mislabel -- the clip is still fine for TTS training, just filed under the
+#   wrong speaker). Submitted as decision='flagged' (does NOT exclude, does
+#   NOT touch tiers/asr_agreement -- see record_decision's 'flagged' branch),
+#   purely for later triage/relabelling.
+#
+# Both land in summary_stats()'s top_flag_reasons leaderboard (which already
+# scopes to decision IN ('flagged', 'rejected') AND flag_reason IS NOT NULL --
+# no changes needed there) and are the ground-truth signal T9's
+# speaker-centroid cosine pruning threshold will eventually be calibrated
+# against.
+NOT_SINGLE_SPEAKER_FLAG_REASON = "not_single_speaker"
+WRONG_SPEAKER_ID_FLAG_REASON = "wrong_speaker_id"
+
 
 def recommended_sample_n(
     conn, tier: str, min_n: int = 50, *, code_switch: bool = False
@@ -627,6 +651,61 @@ def summary_stats(conn, sample_batch: str | None = None) -> dict:
         "verified_edit_sample_size": len(edits),
         "top_flag_reasons": [{"reason": r, "count": n} for r, n in flag_rows],
     }
+
+
+def progress_report(conn) -> dict:
+    """T1 QA-backlog tracker (added 2026-07-17, owner request): breaks the
+    whole `calibration_review` queue down by tier x code-switch status
+    (filters.english_ratio > 0) x decision, so the owner can see at a glance
+    how much of the backlog is reviewed vs pending, split by the axis that
+    actually matters for their review priority (2026-07-17 decision: focus
+    QA effort on code-switch segments, treat pure-Cantonese as already
+    adequate quality) rather than by sample_batch id, which carries no
+    quality-relevant meaning on its own."""
+    rows = conn.execute("""
+        SELECT
+            t.tier,
+            CASE WHEN f.english_ratio > 0 THEN 'code_switch' ELSE 'pure' END AS kind,
+            c.decision,
+            count(*)
+        FROM calibration_review c
+        JOIN filters f ON f.id = c.id
+        JOIN tiers t ON t.id = c.id
+        GROUP BY 1, 2, 3
+        ORDER BY 1, 2, 3
+    """).fetchall()
+
+    breakdown: dict[str, dict[str, dict[str, int]]] = {}
+    for tier, kind, decision, n in rows:
+        breakdown.setdefault(tier, {}).setdefault(kind, {})[decision] = n
+
+    totals = {"total": 0, "pending": 0, "reviewed": 0}
+    kind_totals = {"pure": {"total": 0, "pending": 0}, "code_switch": {"total": 0, "pending": 0}}
+    for tier, kinds in breakdown.items():
+        for kind, decisions in kinds.items():
+            for decision, n in decisions.items():
+                totals["total"] += n
+                kind_totals[kind]["total"] += n
+                if decision == "pending":
+                    totals["pending"] += n
+                    kind_totals[kind]["pending"] += n
+                else:
+                    totals["reviewed"] += n
+
+    return {"breakdown": breakdown, "totals": totals, "by_code_switch": kind_totals}
+
+
+def run_calibrate_progress(*, conn=None) -> dict:
+    """Read-only wrapper around progress_report() for `pipe calibrate progress`."""
+    from pipeline.catalog.catalog import CATALOG_PATH, connect_ro
+
+    owns_conn = conn is None
+    conn = conn or connect_ro(CATALOG_PATH)
+    try:
+        return progress_report(conn)
+    finally:
+        if owns_conn:
+            conn.close()
 
 
 _ORDER_SQL = {

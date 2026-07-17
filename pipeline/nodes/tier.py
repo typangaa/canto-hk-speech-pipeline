@@ -50,10 +50,33 @@ Legacy-row-collision note
 --------------------------
 The `tiers` table already contains 455,299 rows imported from the legacy pipeline
 (all tier IN ('gold','silver'), provenance IS NULL).  A bare row-existence anti-join
-would find zero unassigned work on every run.  Discovery therefore anti-joins
-specifically on ``provenance = 'tier_assign'`` -- the same fix pattern used by
-pipeline/nodes/filter.py (``filters.provenance = 'filter_decide'``) and
-pipeline/nodes/g2p.py (``g2p.provenance = 'g2p_node'``).
+would find zero unassigned work on every run.
+
+T5 re-evaluation + human-decision protection (added 2026-07-17, pending_task.md /
+Issue #4): discovery used to anti-join on ``t.provenance = 'tier_assign'`` alone (via
+the LEFT JOIN's ON clause), which had two problems: (1) a segment already tiered
+stayed stuck at its old tier forever even after a later ASR model improved its
+asr_agreement.agreement score -- the exact bug this task set out to fix; and (2) as a
+side effect of the same JOIN-condition trick, it ALSO re-discovered rows that
+calibrate.py's record_decision() had already written directly (provenance IN
+('calibrate_verify', 'calibrate_reject'), see that function's docstring) -- since
+those carry a different provenance value, they always looked like "not yet tiered by
+this node" and got silently re-processed by the very next tier.assign run. For a
+'verified' row this was harmless (text_verified=True deterministically re-computes
+'gold'), but for a 'rejected' row it was a live data-trust bug: assign_tier(False, ...)
+would recompute from agreement/dnsmos alone and could silently promote a
+human-rejected segment straight back into the manifest-eligible pool, undoing T19's
+'rejected' propagation fix. Fixed by snapshotting asr_agreement.model_count
+(tiers.asr_model_count) at tier-assign time and anti-joining on "no row OR stale
+model_count" for re-evaluation, AND unconditionally excluding provenance IN
+('calibrate_verify', 'calibrate_reject') rows from discovery regardless of model_count
+-- a human decision is terminal and must never be revisited by a statistical recompute
+(matches assign_tier()'s own stated invariant: text_verified "wins even if
+agreement/dnsmos would also qualify for auto_gold" -- that only holds if discovery
+never reaches these rows again). See tier.py's TIER_DISCOVER_SQL and
+pipeline/nodes/filter.py's matching filter.text/filter.decide fix (same task, same
+model_count-snapshot pattern -- filter.acoustic is unaffected, it never reads
+asr_agreement).
 
 Tier-axis disambiguation
 -------------------------
@@ -112,11 +135,12 @@ def assign_tier(text_verified: bool, agreement: float, dnsmos: float | None = No
 
 
 TIER_DISCOVER_SQL = """
-    SELECT a.id, a.text_verified, a.agreement, f.dnsmos
+    SELECT a.id, a.text_verified, a.agreement, f.dnsmos, a.model_count
     FROM asr_agreement a
     LEFT JOIN filters f ON a.id = f.id
-    LEFT JOIN tiers t ON a.id = t.id AND t.provenance = 'tier_assign'
-    WHERE t.id IS NULL
+    LEFT JOIN tiers t ON a.id = t.id
+    WHERE (t.id IS NULL OR t.asr_model_count IS DISTINCT FROM a.model_count)
+      AND (t.provenance IS NULL OR t.provenance NOT IN ('calibrate_verify', 'calibrate_reject'))
 """
 
 
@@ -152,9 +176,12 @@ async def run_tier_assign(*, conn=None, batch_size: int = 5000, limit: int | Non
     for i in range(0, len(rows), batch_size):
         batch = rows[i : i + batch_size]
         out_rows = []
-        for seg_id, text_verified, agreement, dnsmos in batch:
+        for seg_id, text_verified, agreement, dnsmos, model_count in batch:
             tier = assign_tier(bool(text_verified), float(agreement), dnsmos)
-            out_rows.append({"id": seg_id, "tier": tier, "provenance": "tier_assign"})
+            out_rows.append({
+                "id": seg_id, "tier": tier, "provenance": "tier_assign",
+                "asr_model_count": model_count,
+            })
             if tier == "gold":
                 gold += 1
             elif tier == "auto_gold":
