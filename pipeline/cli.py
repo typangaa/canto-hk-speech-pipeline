@@ -53,6 +53,58 @@ def cmd_logs_prune(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_chain_run(args: argparse.Namespace) -> int:
+    from pipeline.config import LOGS_DIR
+    from pipeline.tools.chain_runner import run_chain, _parse_round_set
+    from datetime import datetime, timezone
+
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    log_path = LOGS_DIR / f"chain_runner_{stamp}.log"
+
+    result = run_chain(
+        only=_parse_round_set(args.only),
+        skip=_parse_round_set(args.skip),
+        devices=args.devices,
+        dry_run=args.dry_run,
+        log_path=log_path,
+    )
+    failed = [r for r in result["rounds"] if r.get("returncode", 0) != 0]
+    print(f"\nChain {'(dry-run) ' if args.dry_run else ''}done: "
+          f"{len(result['rounds'])} round(s), {len(failed)} failed.")
+    if not args.dry_run:
+        print(f"Log: {log_path}")
+    return 1 if failed else 0
+
+
+def cmd_chain_stream(args: argparse.Namespace) -> int:
+    import shlex
+    from datetime import datetime, timezone
+
+    from pipeline.config import LOGS_DIR
+    from pipeline.tools.stream_drain import run_stream
+
+    downstream_args = {}
+    for pair in args.downstream_args:
+        node, _, raw = pair.partition("=")
+        downstream_args[node] = shlex.split(raw)
+
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    log_path = LOGS_DIR / f"stream_drain_{stamp}.log"
+
+    result = run_stream(
+        upstream=args.upstream,
+        upstream_args=shlex.split(args.upstream_args) if args.upstream_args else [],
+        downstream=args.downstream,
+        downstream_args=downstream_args,
+        poll_interval_s=args.poll_interval,
+        log_path=log_path,
+    )
+    print(f"\nStream done: upstream rc={result['upstream_returncode']}, "
+          f"{len(result['polls'])} poll(s), final drain rc={result['final_drain']['returncode']}")
+    print(f"Log: {log_path}")
+    return 0 if result["upstream_returncode"] == 0 else 1
+
+
 def cmd_run_ingest_download(args: argparse.Namespace) -> int:
     import asyncio
     import logging
@@ -62,6 +114,7 @@ def cmd_run_ingest_download(args: argparse.Namespace) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     result = asyncio.run(run_ingest_download(
         source=args.source, dry_run=args.dry_run, limit=args.limit,
+        cookies_from_browser=args.cookies_from_browser,
     ))
     print(f"\nDone: {result}")
     return 0
@@ -916,6 +969,22 @@ def main() -> int:
     p_logs_prune.add_argument("--dry-run", action="store_true")
     p_logs_prune.set_defaults(func=cmd_logs_prune)
 
+    p_chain = sub.add_parser("chain", help="T14: run the full ingest->tier DAG as ordered rounds, pairing independent nodes via run-many")
+    chain_sub = p_chain.add_subparsers(dest="chain_command", required=True)
+    p_chain_run = chain_sub.add_parser("run", help="run the chain (see pipeline/tools/chain_runner.py module docstring for the round design)")
+    p_chain_run.add_argument("--only", default=None, help="comma-separated round numbers to run, e.g. 2,11")
+    p_chain_run.add_argument("--skip", default=None, help="comma-separated round numbers to skip")
+    p_chain_run.add_argument("--devices", default=None, help="forwarded as --devices to GPU rounds (diarize/asr.transcribe/lang_screen.auto)")
+    p_chain_run.add_argument("--dry-run", action="store_true")
+    p_chain_run.set_defaults(func=cmd_chain_run)
+    p_chain_stream = chain_sub.add_parser("stream", help="T14 lever 4: drain downstream CPU nodes on a poll interval while an upstream GPU node is still running (see pipeline/tools/stream_drain.py)")
+    p_chain_stream.add_argument("--upstream", required=True, help="the long-running GPU node, e.g. asr.transcribe")
+    p_chain_stream.add_argument("--upstream-args", default=None, help="quoted extra argv for the upstream node, e.g. '--batch 64 --devices cuda:0,cuda:1'")
+    p_chain_stream.add_argument("--downstream", action="append", required=True, help="downstream node to drain on each poll; repeat for multiple (run together via run-many)")
+    p_chain_stream.add_argument("--downstream-args", action="append", default=[], help="'node=quoted argv' pairs, repeatable")
+    p_chain_stream.add_argument("--poll-interval", type=float, default=300)
+    p_chain_stream.set_defaults(func=cmd_chain_stream)
+
     p_calibrate = sub.add_parser("calibrate", help="Human text-verification calibration (see calibrate.sample DAG node for queuing)")
     calibrate_sub = p_calibrate.add_subparsers(dest="calibrate_command", required=True)
     p_calibrate_serve = calibrate_sub.add_parser("serve", help="Start the local browser review UI (blocks -- Ctrl-C to stop)")
@@ -946,6 +1015,8 @@ def main() -> int:
     p_run_download.add_argument("--source", default="all", choices=["rthk", "youtube", "podcast", "all"])
     p_run_download.add_argument("--dry-run", action="store_true")
     p_run_download.add_argument("--limit", type=int, default=None)
+    p_run_download.add_argument("--cookies-from-browser", default=None,
+                                 help="yt-dlp --cookies-from-browser value, e.g. 'chrome' or 'chrome:Profile 1' (needed since YouTube's 2026-07-16 bot-check)")
     p_run_download.set_defaults(func=cmd_run_ingest_download)
     p_run_commit = run_sub.add_parser("ingest.commit", help="land ingest.download's JSON-staged rows into raw_files (only ingest.* step that opens DuckDB); run whenever the writer lock is free")
     p_run_commit.set_defaults(func=cmd_run_ingest_commit)

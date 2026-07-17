@@ -349,6 +349,10 @@ def _snapshot_audio_files(out_dir: Path) -> set[str]:
 def _download_youtube_source(
     entry: dict, known_ids: set[str], args: argparse.Namespace,
 ) -> list[dict]:
+    """args.cookies_from_browser (e.g. 'chrome' or 'chrome:Profile 1'), when set,
+    is passed straight through as yt-dlp's --cookies-from-browser value. Added
+    2026-07-17 after YouTube's bot-check ("Sign in to confirm you're not a bot")
+    started blocking 100% of anonymous yt-dlp requests — see DECISIONS.md."""
     url = entry.get("url", "")
     if not url or url.startswith(("SKIP", "SEARCH", "PLACEHOLDER")):
         log.warning(f"Skipping {entry['name']}: no valid URL")
@@ -378,6 +382,9 @@ def _download_youtube_source(
         "--max-filesize", "500M",
         "--no-warnings", "--quiet", "--ignore-errors", "--no-part",
     ]
+    cookies_from_browser = getattr(args, "cookies_from_browser", None)
+    if cookies_from_browser:
+        cmd += ["--cookies-from-browser", cookies_from_browser]
     if args.limit:
         cmd += ["--max-downloads", str(args.limit)]
     max_age = entry.get("max_age_days")
@@ -432,16 +439,24 @@ def _download_youtube_source(
 
 async def run_ingest_download(
     *, source: str = "all", dry_run: bool = False, limit: int | None = None,
+    cookies_from_browser: str | None = None,
 ) -> dict:
     """Download phase — NEVER opens a DuckDB connection (see module
     docstring). Dedups against KNOWN_IDS_SNAPSHOT + STAGING_FILE, appends new
     rows to STAGING_FILE. Safe to run concurrently with any other
     catalog-writing node; run `ingest.commit` afterward (or anytime the
-    writer lock is free) to land the staged rows in `raw_files`."""
+    writer lock is free) to land the staged rows in `raw_files`.
+
+    cookies_from_browser: yt-dlp --cookies-from-browser value (e.g. 'chrome',
+    'chrome:Profile 1'), only consumed by the youtube/channel/playlist path —
+    needed since YouTube's bot-check started blocking 100% of anonymous
+    yt-dlp requests (2026-07-16, see DECISIONS.md)."""
     snapshot = load_known_ids_snapshot()
     targets = list(SOURCE_FILES) if source == "all" else [source]
 
-    args = argparse.Namespace(dry_run=dry_run, limit=limit)
+    args = argparse.Namespace(
+        dry_run=dry_run, limit=limit, cookies_from_browser=cookies_from_browser,
+    )
     total = 0
     for src_name in targets:
         entries = discover_active_entries(src_name)
@@ -542,11 +557,14 @@ def main() -> int:
     ap.add_argument("--source", default="all", choices=["rthk", "youtube", "podcast", "all"])
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument("--cookies-from-browser", default=None,
+                     help="yt-dlp --cookies-from-browser value, e.g. 'chrome' or 'chrome:Profile 1'")
     parsed = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     result = asyncio.run(run_ingest_download(
         source=parsed.source, dry_run=parsed.dry_run, limit=parsed.limit,
+        cookies_from_browser=parsed.cookies_from_browser,
     ))
     print(f"\nDone: {result}")
     return 0

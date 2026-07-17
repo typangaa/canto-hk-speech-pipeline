@@ -394,16 +394,52 @@ Source: round-2 post-execution review of `docs/PIPELINE_REVIEW_2026-07-11.md` §
   worth a `PROGRESS.md`/`DECISIONS.md` note either way.
 
 ### T14. Full CPU+GPU utilization during chained node runs (found 2026-07-12)
-- **Owner decision 2026-07-16**: wants levers (3)+(4) done — approved, not yet started
-  (large enough to warrant its own session; lever 4 alone was previously scoped as
-  "half-day-plus design+build"). The same-day `upsert_rows()` fix (see Done section)
-  removes the specific root cause that made the original `run-many`
-  `asr.transcribe`+`speaker.cluster` pairing attempt stall (T15 points 3-5), which was
-  the concrete motivating case for lever (3) — worth a quick re-test of that exact
-  pairing FIRST (cheap, uses code that already exists) before investing in the bigger
-  lever (4) streaming-poll-loop build. No large ASR backlog is queued right now to
-  benefit from either lever immediately (T15 fully drained) — next natural trigger is
-  whenever a new large ingest round needs the full chain run again.
+- **Owner decision 2026-07-16**: wants levers (3)+(4) done — approved.
+- **Progress 2026-07-17 — levers (3) and (4) both built, (3) live-validated, (4)
+  unit-tested but not yet live-validated against a real GPU stage:**
+  1. **Re-test of the original stall case (owner's recommended first step) —
+     CONFIRMED FIXED.** `pipe run-many ingest.probe -- speaker.cluster` (real
+     backlog: 4,086-row `ingest.probe` backlog from the same-day download round +
+     a full 3-source `speaker.cluster` recompute, 1,241,586 segments → 14,330
+     speakers) completed in **212s total, zero stalling** — both nodes' log lines
+     interleaved throughout, confirming genuine concurrency, not serialization.
+     This is the same class of pairing that stalled 30+ minutes in T15 points 3-5
+     before the 2026-07-16 `upsert_rows()` bulk-write fix. Lever (3)'s premise is
+     now viable.
+  2. **Lever (3) built**: `pipeline/tools/chain_runner.py` (`pipe chain run`) —
+     a committed replacement for the ad-hoc `run_t7_chain.sh`-style scripts that
+     were hand-written and thrown away each time. Codifies the full
+     ingest→quality_tier DAG as 12 ordered rounds; two rounds pair genuinely
+     independent nodes via `run-many` instead of a strict waterfall: round 2
+     (`ingest.probe` + `lang_screen.auto`, both read `raw_files` only, write
+     disjoint tables) and round 11 (`g2p` + `tier.assign` + `speaker.cluster`,
+     the direct stand-in for the historically-stalled pairing — all three read
+     already-landed tables and write disjoint ones). `--only`/`--skip` (comma
+     round numbers), `--devices` (threaded to the 3 GPU rounds only), `--dry-run`.
+     Every round's discovery is an idempotent anti-join, so re-running the full
+     chain when a round has nothing to do just no-ops fast — safe default.
+     18 new tests in `tests/test_chain_runner.py` (command construction, ordering,
+     only/skip filtering, failure short-circuit, log file). Live-validated: full
+     `--dry-run` round plan correct, `--only 1` (`ingest.commit`) ran for real.
+  3. **Lever (4) built, NOT yet live-validated against a real GPU stage**:
+     `pipeline/tools/stream_drain.py` (`pipe chain stream`) — backgrounds the
+     upstream GPU node (e.g. `asr.transcribe`) via `Popen`, then re-invokes the
+     downstream node(s) (solo `pipe run` or `run-many` if more than one) on a
+     poll interval (default 300s) while the upstream process is still alive,
+     plus one final drain pass after it exits. Relies on the same idempotent-
+     anti-join property lever (3) does — no coordination between the two
+     processes beyond the catalog itself. 9 new tests in `tests/test_stream_drain.py`
+     (`FakePopen`-based, injectable `sleep_fn`, no real wall-clock sleeps) —
+     command construction and poll/drain sequencing verified, but this has
+     **not been run against a real long-running `asr.transcribe` pass yet** —
+     no large ASR backlog was queued this session (the new download round
+     hadn't reached segmentation/ASR by session end). **Live-validate the next
+     time a real multi-hour `asr.transcribe` pass is queued** — pair with
+     `asr.agreement` (or `asr.agreement g2p` once g2p has backlog again) and
+     confirm the poll loop actually drains mid-run, not just at the end.
+  - Historical context retained below (original problem statement + lever menu
+    + the lever (2) `filter.acoustic` tuning result, already concluded — leave
+    as-is, don't change).
 - **What**: measured during the T7 chain resume run — `asr.agreement` (CPU-only stage)
   used only 471% CPU (4.7 of 48 cores, `load average` 7.06/48); during the preceding
   `asr.transcribe` stage each GPU sat at pool `target=1` using only ~2.7GB/24GB VRAM per
