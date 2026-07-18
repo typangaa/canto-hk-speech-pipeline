@@ -888,3 +888,19 @@ cases for english_audio/other_language_audio at threshold, `yue` explicitly excl
 even at high confidence, `cmn` still resolves to `mandarin_audio` not
 `other_language_audio` despite also being excluded from that branch's NOT IN list).
 461/461 full suite green before the production run; `catalog verify` 17/17 PASS after.
+
+**Re-export (owner requested same session)**: default manifest + all 6 derived cuts
+re-exported so every on-disk file reflects the 616 newly-excluded english_audio/
+other_language_audio segments:
+- default (`manifest.jsonl`/`train.jsonl`/`val.jsonl`): 596,577→**596,089** entries,
+  1332.1h→**1331.6h**
+- `--min-tier auto_gold`: **275,030** / 634.3h (unchanged hours at 1dp — the excluded
+  segments were a tiny fraction of this tier)
+- `--min-tier silver`: **428,434** / 960.6h
+- `--min-tier bronze`: **596,089** / 1331.6h (same population as default)
+- `--code-switch only`: **84,044** / 225.2h
+- `--code-switch exclude`: **512,045** / 1106.4h
+- `--min-tier auto_gold --min-quality-tier B`: **55,360** / 151.6h
+`report.build` re-run: 596,089 entries, 10/11 acceptance criteria pass (unchanged
+pattern, `text_verified` still the only failure). `grep -c "/mnt/Drive1/"` = 0 across
+manifest.jsonl/train.jsonl/val.jsonl. `catalog verify` 17/17 PASS.

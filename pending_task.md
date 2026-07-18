@@ -417,11 +417,15 @@ last written; see Done section for what actually landed and when.)
 - **Result**: 455,930 rows re-decided in 15s. New counts matched the pre-check prediction
   exactly: **70 english_audio, 546 other_language_audio** (616 total). `mandarin_audio`
   unchanged at 10,940. `catalog verify` 17/17 PASS. `manifest.build`/`export` need no code
-  change (already `filters.pass`-gated) — **not yet re-exported** given the tiny 0.75h
-  impact; the live catalog is correct, only the on-disk `.jsonl` exports lag by these 616
-  segments until the next scheduled `manifest.export` run.
+  change (already `filters.pass`-gated).
 - **Tests**: 6 new in `tests/test_filter_node.py`. 461/461 full suite green before the
   production run. Full detail: DECISIONS.md 2026-07-18.
+- **Re-export (owner requested same session)**: default + all 6 derived cuts re-exported
+  — default 596,577→**596,089** entries, 1332.1h→**1331.6h**; auto_gold 275,030/634.3h;
+  silver 428,434/960.6h; bronze 596,089/1331.6h; codeswitch_only 84,044/225.2h;
+  codeswitch_exclude 512,045/1106.4h; auto_gold+qualityB 55,360/151.6h. `report.build`
+  re-run (10/11 criteria, unchanged pattern). `catalog verify` 17/17 PASS. Full numbers:
+  DECISIONS.md 2026-07-18.
 
 ### T5. Filter/tier re-evaluation mechanism (Issue #4) — done 2026-07-17
 - **What**: `filter.text`/`filter.decide`/`tier.assign` discovery was a bare row-existence
