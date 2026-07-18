@@ -627,3 +627,76 @@ serves as the Tier A / pretrain export, so no separate Tier A file was written.
 discover() scope/idempotency/anti-join + `conn=` injection regression), 11 new in
 `tests/test_manifest_node.py` (`_quality_tiers_at_or_above`/`_export_tag`/`discover()`
 integration incl. the LEFT-JOIN-not-INNER-JOIN behavior). Full suite green throughout.
+
+## 2026-07-18 — T20: audio-based Mandarin gate wired into `filter.decide`; T21: low-agreement-first QA sampling order
+**Trigger**: owner asked, while reviewing the T1 QA queue, why so many high-agreement
+segments were being sampled and why Mandarin segments were showing up at all "given we
+have a language filter." Investigation (not a pre-planned task) found a real gap.
+
+**T20 finding**: two segment-level Mandarin gates existed, neither audio-based.
+`lang_screen.auto` screens whole RAW FILES before diarization and deliberately lets
+`mixed` files through (code-switched content shouldn't be thrown away wholesale).
+`filter.text`'s `mandarin_ratio()` is a TEXT heuristic over the ASR transcript
+(simplified-char / mainland-word-list scoring) — since HK ASR models emit standard
+written Traditional Chinese, genuine spoken Mandarin transcribed fluently often scores
+near 0 and clears the ≤0.15 threshold. Meanwhile `labels_lang` (mms-lid-126, computed by
+`label.suite` directly from AUDIO — the same model `lang_screen.auto` uses) is a strong
+per-segment signal but was never read by `filter.decide` or `tier.assign` at all — grepped
+confirmed zero references outside `label_store`/`golden.py`/quality-tier's unrelated axis.
+Live proof before the fix: 48 segments already sitting in the `calibrate.sample` QA queue
+were labeled `lang='cmn'` at 92-99% confidence by `labels_lang` yet had already cleared
+`filter.decide`.
+
+**Decision (owner confirmed via AskUserQuestion — "加做硬性 filter (推薦)")**: wire
+`labels_lang` into `filter.decide` as a hard gate — `lang='cmn' AND cmn_prob >= 0.8`
+(`MANDARIN_AUDIO_PROB_MIN`, `pipeline/nodes/filter.py`) now fails a segment with
+`fail_reason='mandarin_audio'`, checked last (after text/acoustic gates already passed),
+never overriding an existing failure. 0.8 chosen as a conservative floor so a segment that
+only briefly quotes a Mandarin speaker (the kind `lang_screen.auto`'s `mixed` band
+intentionally preserves) isn't false-positive-rejected. New `filters` columns:
+`lang_label_checked` (snapshots whether `labels_lang` had a row at decide time, so
+discovery can re-trigger once the asynchronous `label.suite` node catches up on a segment
+already decided without one — same versioned-re-evaluation shape as T5's `model_count`,
+applied to a second independent staleness source) and `mandarin_audio_prob` (stored for
+audit). `manifest.build`/`manifest.export` require no change — they already join on
+`filters.pass = TRUE`, so a `mandarin_audio` fail is automatically manifest-excluded.
+
+**T20 result — backfill run against the live catalog (`filter_decide_6af4cc9f708f`)**:
+455,894 rows re-decided in 18s (the full `labels_lang`-covered population, since every
+existing decided row had `lang_label_checked` unset). **10,940 currently-passing segments
+flipped to `pass=FALSE, fail_reason='mandarin_audio'`** (~1.4% of the 780,219 then-passing
+pool). `filters.pass=TRUE` count: 780,219 → 769,279. `catalog verify`: 17/17 PASS
+afterward. 44 of those 10,940 were already sitting in the pending QA queue (2,792 total,
+now effectively redundant to review since they're already manifest-excluded regardless of
+the human decision — left in the queue rather than pruned, since a human confirming the
+audio classifier's judgment is still useful QA signal for T1). This gate only fires going
+forward for segments `labels_lang` hasn't reached yet (label.suite coverage lags total
+segment count: 455,894 / 1,241,610 at the time of this run) — `manifest.export` should be
+re-run before the next training data pull to pick up the 10,940 exclusions (not done
+automatically as part of this fix).
+
+**T21 (companion finding, same investigation)**: `calibrate.sample`'s
+`SAMPLE_DISCOVER_SQL` always sampled uniformly at random (`ORDER BY random()`) within
+whatever tier/min-agreement/code-switch population was scoped — so an `auto_gold`-scoped
+batch skewed to agreement~0.95-1.0 simply because that's where most of the tier's mass
+sits, with no way to deliberately pull the segments closest to a tier's own agreement
+floor (the ones the gate trusted least). Note: `next_pending()`'s existing browsing
+`order` param (`agreement_asc`/`agreement_desc`) already let a reviewer re-sort items
+*already queued* — this is a distinct, earlier-stage control over which segments get
+*sampled into* the queue in the first place.
+
+**Decision (owner asked to check-then-implement, given the existing UI precedent)**: added
+`order_by` (`'random'` default / `'agreement_asc'`) to `calibrate.sample`'s
+`discover()`/`run_calibrate_sample()`, `pipe run calibrate.sample --order`, and a new
+"Sample:" panel dropdown (`sampleOrderSelect`) in `pipe calibrate serve`, wired through
+both the manual Refill button and the auto-refill-on-empty path — mirrors the existing
+tier/min-agreement/code-switch scoping controls exactly. Composable with all of them (e.g.
+`--tier bronze --code-switch only --order agreement_asc` concentrates a batch on the
+riskiest code-switch segments within bronze specifically).
+
+**Tests**: 9 new in `tests/test_filter_node.py` (T20: `decide_row`'s audio-gate boundary
+cases + `lang_label_checked` storage + `discover_decide`'s three-state re-trigger:
+never-decided / no-label-yet / label-landed-after-decision), 5 new in
+`tests/test_calibrate_node.py` (T21: `order_by` ordering, invalid-value rejection,
+composition with tier/code_switch, default-random regression guard). 453/453 full suite
+green before the production run; `catalog verify` 17/17 PASS after it.

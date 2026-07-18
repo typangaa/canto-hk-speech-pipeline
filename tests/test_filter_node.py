@@ -4,6 +4,7 @@ import pytest
 
 from pipeline.catalog.catalog import init_schema
 from pipeline.nodes.filter import (
+    MANDARIN_AUDIO_PROB_MIN,
     MAX_DUR,
     MAX_ENG_RATIO,
     MAX_MAN_RATIO,
@@ -321,3 +322,110 @@ def test_discover_decide_reevaluates_when_filters_text_advances(scratch_conn):
     _seed_decide_inputs(conn, "a", text_model_count=3, decided=True, decided_model_count=2)
     rows = discover_decide(conn)
     assert [r[0] for r in rows] == ["a"]
+
+
+# ---------------------------------------------------------------------------
+# T20 (2026-07-18): audio-based Mandarin gate (labels_lang.lang == 'cmn'), layered
+# on top of the text-heuristic mandarin_ratio() gate -- catches genuine spoken
+# Mandarin that gets transcribed into fluent standard written Chinese with no
+# simplified chars or mainland-specific words for mandarin_ratio() to key off.
+# ---------------------------------------------------------------------------
+
+def test_decide_row_rejects_high_confidence_audio_mandarin():
+    row = decide_row(
+        "id6", True, None, 0.1, 0.05, "yue", 0.9,
+        True, None, 30.0, 3.5, 3.2,
+        audio_lang="cmn", audio_cmn_prob=0.95, lang_label_present=True,
+    )
+    assert row["pass"] is False
+    assert row["fail_reason"] == "mandarin_audio"
+    assert row["mandarin_audio_prob"] == 0.95
+
+
+def test_decide_row_passes_low_confidence_audio_mandarin():
+    """Below MANDARIN_AUDIO_PROB_MIN -- e.g. a brief quoted Mandarin speaker inside
+    an otherwise-Cantonese segment -- must not trip the gate."""
+    row = decide_row(
+        "id7", True, None, 0.1, 0.05, "yue", 0.9,
+        True, None, 30.0, 3.5, 3.2,
+        audio_lang="cmn", audio_cmn_prob=MANDARIN_AUDIO_PROB_MIN - 0.01, lang_label_present=True,
+    )
+    assert row["pass"] is True
+    assert row["fail_reason"] is None
+
+
+def test_decide_row_passes_non_mandarin_audio_lang():
+    row = decide_row(
+        "id8", True, None, 0.1, 0.05, "yue", 0.9,
+        True, None, 30.0, 3.5, 3.2,
+        audio_lang="yue", audio_cmn_prob=0.01, lang_label_present=True,
+    )
+    assert row["pass"] is True
+    assert row["fail_reason"] is None
+
+
+def test_decide_row_passes_when_no_label_present_yet():
+    """label.suite hasn't reached this segment yet -- must not fail closed."""
+    row = decide_row(
+        "id9", True, None, 0.1, 0.05, "yue", 0.9,
+        True, None, 30.0, 3.5, 3.2,
+    )
+    assert row["pass"] is True
+    assert row["lang_label_checked"] is False
+
+
+def test_decide_row_stores_lang_label_checked_true():
+    row = decide_row(
+        "id10", True, None, 0.1, 0.05, "yue", 0.9,
+        True, None, 30.0, 3.5, 3.2,
+        audio_lang="yue", audio_cmn_prob=0.01, lang_label_present=True,
+    )
+    assert row["lang_label_checked"] is True
+
+
+def _seed_decide_inputs_with_label(conn, seg_id, *, has_label=False, label_lang="yue", label_prob=0.01):
+    _seed_decide_inputs(conn, seg_id, decided=False)
+    if has_label:
+        conn.execute(
+            "INSERT INTO labels_lang (id, lang, cmn_prob) VALUES (?, ?, ?)",
+            [seg_id, label_lang, label_prob],
+        )
+
+
+def test_discover_decide_picks_up_segment_with_no_label_yet(scratch_conn):
+    conn = scratch_conn
+    _seed_decide_inputs_with_label(conn, "a", has_label=False)
+    rows = discover_decide(conn)
+    assert [r[0] for r in rows] == ["a"]
+
+
+def test_discover_decide_excludes_when_decided_and_no_label_landed(scratch_conn):
+    """Already decided, still no labels_lang row for this id -- nothing changed,
+    must not re-trigger every run just because the label is still missing."""
+    conn = scratch_conn
+    _seed_decide_inputs(conn, "a", text_model_count=2, decided=True, decided_model_count=2)
+    assert discover_decide(conn) == []
+
+
+def test_discover_decide_reevaluates_once_label_lands_after_decision(scratch_conn):
+    """filter.decide already decided this id without a labels_lang row
+    (lang_label_checked left NULL/FALSE); label.suite has since landed one --
+    must re-decide so the audio-based Mandarin gate gets a chance to run."""
+    conn = scratch_conn
+    _seed_decide_inputs(conn, "a", text_model_count=2, decided=True, decided_model_count=2)
+    conn.execute("INSERT INTO labels_lang (id, lang, cmn_prob) VALUES ('a', 'cmn', 0.95)")
+    rows = discover_decide(conn)
+    assert [r[0] for r in rows] == ["a"]
+
+
+def test_discover_decide_excludes_once_lang_label_checked_true(scratch_conn):
+    """Once filter.decide has already accounted for an existing label
+    (lang_label_checked=TRUE), it must not re-trigger again on every run."""
+    conn = scratch_conn
+    _seed_decide_inputs(conn, "a", text_model_count=2)
+    conn.execute("INSERT INTO labels_lang (id, lang, cmn_prob) VALUES ('a', 'yue', 0.01)")
+    conn.execute(
+        "INSERT INTO filters (id, pass, provenance, text_model_count, lang_label_checked) "
+        "VALUES ('a', TRUE, 'filter_decide', 2, TRUE)"
+    )
+    assert discover_decide(conn) == []

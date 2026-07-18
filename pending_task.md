@@ -15,6 +15,17 @@ Source: round-2 post-execution review of `docs/PIPELINE_REVIEW_2026-07-11.md` §
 ## 🔴 Tier 1 — data-trust-critical, do first
 
 ### T1. Pilot QA batch review (Issue #15)
+- **Update 2026-07-18 (see T20/T21 in Done)**: found and fixed a real gap while reviewing
+  this queue — 44 of the currently-pending segments were already auto-excluded by T20's
+  new audio-based Mandarin gate (`filters.fail_reason='mandarin_audio'`) before you get to
+  them; reviewing them is no longer load-bearing for `text_verified` but still useful as a
+  sanity-check on the `labels_lang` classifier if you want to spot-check a few. New
+  batches can now be biased toward the riskiest segments instead of pure-random within a
+  tier: `pipe run calibrate.sample --order agreement_asc` (composable with
+  `--tier`/`--code-switch`), also exposed as a "Sample:" dropdown in `pipe calibrate
+  serve`. The browser UI's separate "Order" dropdown (`agreement_asc`/`agreement_desc`)
+  already let you re-sort items *already queued* — that was pre-existing, unrelated to
+  this fix.
 - **What**: **corrected 2026-07-17** — actual queue is **10 sample batches, 2,400 segments
   total** in `calibration_review` (the "3 queued 300-segment pilot batches (~900)" figure
   below was stale/undercounted; batches accumulated across several sessions via repeated
@@ -259,6 +270,43 @@ last written; see Done section for what actually landed and when.)
 ---
 
 ## Done
+
+### T20. Audio-based Mandarin gate wired into `filter.decide` — done 2026-07-18
+- **What**: found while the owner was reviewing the T1 QA queue and asked why Mandarin
+  segments were showing up despite "having a language filter." Both existing
+  segment-level gates were weak: `lang_screen.auto` is raw-FILE-level and deliberately
+  lets `mixed` files through; `filter.text`'s `mandarin_ratio()` is a TEXT heuristic over
+  the ASR transcript that under-detects genuine spoken Mandarin transcribed into fluent
+  standard written Chinese. `labels_lang` (mms-lid-126, computed by `label.suite` from
+  AUDIO) was a much stronger signal but was never read by `filter.decide`/`tier.assign` at
+  all — confirmed live: 48 segments already in the QA queue were `lang='cmn'` at 92-99%
+  confidence yet had already cleared `filter.decide`.
+- **Fix**: `filter.decide` now hard-fails `lang='cmn' AND cmn_prob >= 0.8`
+  (`MANDARIN_AUDIO_PROB_MIN`) as `fail_reason='mandarin_audio'`, checked last (after
+  text/acoustic gates). New `filters.lang_label_checked`/`mandarin_audio_prob` columns;
+  `manifest.build`/`manifest.export` need no change (already `filters.pass = TRUE`-gated).
+- **Result**: backfill against the live catalog — 455,894 rows re-decided in 18s,
+  **10,940 segments flipped from pass to `mandarin_audio` fail** (~1.4% of the
+  then-780,219-strong passing pool). `catalog verify` 17/17 PASS after. Gate only fires
+  going forward for segments `label.suite` has reached (455,894/1,241,610 at run time) —
+  re-run `manifest.export` before the next training data pull to actually drop the
+  10,940 newly-excluded rows from the exported files (not done automatically here). 44 of
+  the flipped rows were already sitting in the pending QA queue — left in place rather
+  than pruned (still useful as a human sanity-check on the audio classifier).
+- **Tests**: 9 new in `tests/test_filter_node.py`. Full detail: DECISIONS.md 2026-07-18.
+
+### T21. Low-agreement-first QA sampling order (`calibrate.sample --order`) — done 2026-07-18
+- **What**: companion finding from the same investigation — `calibrate.sample` always
+  sampled uniformly at random within its scoped tier/min-agreement/code-switch
+  population, so e.g. an `auto_gold`-scoped batch skewed to agreement~0.95-1.0 (where
+  most of the tier's mass sits) with no way to deliberately pull the riskiest
+  boundary-agreement segments into review. (Distinct from `next_pending()`'s pre-existing
+  browsing `order` param, which only re-sorts items already queued.)
+- **Fix**: added `order_by` (`'random'` default / `'agreement_asc'`) to `calibrate.sample`
+  (`discover()`/`run_calibrate_sample()`, CLI `--order`, and a new "Sample:" panel
+  dropdown in `pipe calibrate serve`), composable with tier/min-agreement/code-switch —
+  e.g. `--tier bronze --code-switch only --order agreement_asc`.
+- **Tests**: 5 new in `tests/test_calibrate_node.py`. Full detail: DECISIONS.md 2026-07-18.
 
 ### T5. Filter/tier re-evaluation mechanism (Issue #4) — done 2026-07-17
 - **What**: `filter.text`/`filter.decide`/`tier.assign` discovery was a bare row-existence

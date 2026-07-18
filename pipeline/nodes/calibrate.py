@@ -176,7 +176,7 @@ SAMPLE_DISCOVER_SQL = """
     WHERE c.id IS NULL
       {min_agreement_cond}
       {code_switch_cond}
-    ORDER BY random()
+    ORDER BY {order_sql}
     LIMIT ?
 """
 
@@ -186,6 +186,22 @@ _CODE_SWITCH_SAMPLE_CONDITIONS = {
     "exclude": "AND f.english_ratio = 0",
 }
 
+# T21 (added 2026-07-18): which segments get PICKED into the QA queue in the first
+# place -- distinct from next_pending()'s `order` param (_ORDER_SQL above), which only
+# re-orders items ALREADY queued for browsing. Before this, every scoped population
+# (tier/min_agreement/code_switch) was sampled uniformly at random -- e.g. an
+# auto_gold-scoped batch (agreement>=0.92 by tier definition) skewed heavily toward
+# agreement~0.97-1.0 purely because that's where most of the tier's mass sits, with no
+# way to deliberately pull the riskiest boundary cases (closest to the tier's own
+# agreement floor) into review instead. 'random' (default) reproduces the original
+# behaviour exactly; 'agreement_asc' orders the SAMPLED population lowest-agreement-first
+# before LIMIT ? truncates it, so a scoped batch concentrates on the segments the tier
+# gate trusted the least within its own band.
+_SAMPLE_ORDER_SQL = {
+    "random": "random()",
+    "agreement_asc": "a.agreement ASC",
+}
+
 
 def discover(
     conn,
@@ -193,6 +209,7 @@ def discover(
     tier: str | None = None,
     min_agreement: float | None = None,
     code_switch: str | None = None,
+    order_by: str = "random",
 ) -> list[tuple[str, str]]:
     """tier/min_agreement (added 2026-07-10) narrow the sample population for scoped QA:
       - tier='auto_gold' -- QA the statistical-confidence tier specifically
@@ -202,14 +219,18 @@ def discover(
         (pipeline/nodes/manifest.py), independent of tier labels.
     code_switch (added 2026-07-15, T18): 'only' scopes the sample to
     filters.english_ratio > 0 (pair with recommended_sample_n(..., code_switch=True) for
-    the matching oversampled `n`), 'exclude' scopes to english_ratio = 0. All three
-    default to None, reproducing the original unscoped behaviour exactly (random sample
-    of all filter-passing, not-yet-reviewed segments)."""
+    the matching oversampled `n`), 'exclude' scopes to english_ratio = 0. All four
+    default to unscoped/random, reproducing the original behaviour exactly (random sample
+    of all filter-passing, not-yet-reviewed segments).
+    order_by (added 2026-07-18, T21): 'random' (default) or 'agreement_asc' -- which
+    segments WITHIN the scoped population get picked, see _SAMPLE_ORDER_SQL above."""
     if code_switch not in _CODE_SWITCH_SAMPLE_CONDITIONS:
         raise ValueError(
             f"code_switch must be one of {sorted(k for k in _CODE_SWITCH_SAMPLE_CONDITIONS if k)}, "
             f"got {code_switch!r}"
         )
+    if order_by not in _SAMPLE_ORDER_SQL:
+        raise ValueError(f"order_by must be one of {sorted(_SAMPLE_ORDER_SQL)}, got {order_by!r}")
     params: list = []
     tier_join = ""
     if tier is not None:
@@ -224,6 +245,7 @@ def discover(
         tier_join=tier_join,
         min_agreement_cond=min_agreement_cond,
         code_switch_cond=_CODE_SWITCH_SAMPLE_CONDITIONS[code_switch],
+        order_sql=_SAMPLE_ORDER_SQL[order_by],
     )
     return conn.execute(sql, params).fetchall()
 
@@ -235,19 +257,21 @@ async def run_calibrate_sample(
     tier: str | None = None,
     min_agreement: float | None = None,
     code_switch: str | None = None,
+    order_by: str = "random",
 ) -> dict:
     """conn: optional pre-opened DuckDB connection (or cursor) -- pass one when
     running alongside other nodes under `pipe run-many` (see filter.py's
     run_filter_acoustic docstring for the rationale). Defaults to a fresh
     self-managed connect() for standalone `pipe run calibrate.sample` usage.
 
-    tier/min_agreement/code_switch: see discover()'s docstring -- scoped QA sampling,
-    added 2026-07-10 (tier/min_agreement) and 2026-07-15 (code_switch, T18)."""
+    tier/min_agreement/code_switch/order_by: see discover()'s docstring -- scoped QA
+    sampling, added 2026-07-10 (tier/min_agreement), 2026-07-15 (code_switch, T18) and
+    2026-07-18 (order_by, T21)."""
     from pipeline.catalog.catalog import connect, upsert_rows
     from pipeline.orchestrator.journal import new_run_id, record_batch
 
     conn = conn or connect()
-    picked = discover(conn, n, tier=tier, min_agreement=min_agreement, code_switch=code_switch)
+    picked = discover(conn, n, tier=tier, min_agreement=min_agreement, code_switch=code_switch, order_by=order_by)
     log.info(f"calibrate.sample: queuing {len(picked)} segments for human review")
     if not picked:
         return {"queued": 0, "run_id": None}

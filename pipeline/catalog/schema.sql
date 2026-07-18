@@ -114,6 +114,13 @@ ALTER TABLE filters ADD COLUMN IF NOT EXISTS provenance TEXT;
 -- from "already decided, but filters_text was re-evaluated under a newer ASR model since" --
 -- see filter.py's DECIDE_DISCOVER_SQL and pending_task.md T5.
 ALTER TABLE filters ADD COLUMN IF NOT EXISTS text_model_count INTEGER;
+-- T20 (added 2026-07-18): snapshots whether labels_lang had a row for this id at
+-- filter.decide time, so discovery can re-trigger a re-decide once label.suite (an
+-- independent, asynchronous node) lands a label for a segment already decided without
+-- one. mandarin_audio_prob is stored for audit/debugging alongside the mandarin_audio
+-- fail_reason it can produce -- see filter.py's MANDARIN_AUDIO_PROB_MIN and decide_row().
+ALTER TABLE filters ADD COLUMN IF NOT EXISTS lang_label_checked BOOLEAN;
+ALTER TABLE filters ADD COLUMN IF NOT EXISTS mandarin_audio_prob DOUBLE;
 
 -- P3 session 2 (pipeline/nodes/filter.py): filter.text's own raw output — gates that need
 -- only catalog columns + ASR text, no audio decode (sample_rate/duration/text-length/

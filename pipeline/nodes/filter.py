@@ -113,6 +113,22 @@ MAX_MAN_RATIO = 0.15
 MIN_CJK_CHARS = 5
 MAX_TEXT_CHARS = 150
 
+# T20 (added 2026-07-18): audio-based Mandarin gate, layered on top of the text-heuristic
+# mandarin_ratio() gate above. mandarin_ratio() infers language from the ASR TRANSCRIPT
+# (simplified-char / mainland-word-list heuristics) and under-detects genuine spoken
+# Mandarin that gets transcribed into fluent standard written Chinese with no simplified
+# chars or mainland-specific words to key off. labels_lang (mms-lid-126, computed by
+# label.suite directly from AUDIO — the same model lang_screen.auto uses at the raw-file
+# level) is a much stronger per-segment signal but was, until this fix, never read by
+# filter.decide at all. Confirmed live 2026-07-18: 48 segments already sitting in the
+# calibrate.sample QA queue (past both filter.text and filter.acoustic) were flagged
+# lang='cmn' at 92-99% confidence by labels_lang. 0.8 is a conservative floor, well above
+# the mms-lid top-1 argmax boundary, chosen to avoid false-positive-rejecting a segment
+# that only briefly quotes a Mandarin speaker (lang_screen.auto's raw-file 'mixed' band
+# already lets those files through on purpose — this gate must not silently undo that at
+# the segment level for a genuinely-Cantonese clip with a short Mandarin quote inside it).
+MANDARIN_AUDIO_PROB_MIN = 0.8
+
 CANTONESE_CHARS = set("係冇佢呢嗰嚟咁嘅囉喎啩咋啦啲喺唔咗嘢搵睇啱攞唞攰𠻹諗㗎喇乜哋俾俾瞓掟喐踎揸揼黐搣𠮶叻咪咩噏嘥嚿搲氹")
 
 # Only characters exclusive to simplified Chinese — never appear in traditional/Cantonese text.
@@ -721,12 +737,17 @@ DECIDE_DISCOVER_SQL = """
     SELECT ft.id, ft.pass, ft.fail_reason, ft.english_ratio, ft.mandarin_ratio,
            ft.detected_language, ft.language_confidence,
            fa.pass, fa.fail_reason, fa.snr_db, fa.dnsmos_sig, fa.dnsmos_ovrl,
-           ft.asr_model_count
+           ft.asr_model_count, ll.lang, ll.cmn_prob, (ll.id IS NOT NULL) AS lang_label_present
     FROM filters_text ft
     LEFT JOIN filters_acoustic fa ON ft.id = fa.id
+    LEFT JOIN labels_lang ll ON ft.id = ll.id
     LEFT JOIN filters f ON ft.id = f.id AND f.provenance = 'filter_decide'
     WHERE (ft.pass = FALSE OR fa.id IS NOT NULL)
-      AND (f.id IS NULL OR f.text_model_count IS DISTINCT FROM ft.asr_model_count)
+      AND (
+        f.id IS NULL
+        OR f.text_model_count IS DISTINCT FROM ft.asr_model_count
+        OR (COALESCE(f.lang_label_checked, FALSE) = FALSE AND ll.id IS NOT NULL)
+      )
 """
 
 
@@ -740,19 +761,31 @@ def decide_row(
     ac_pass: bool | None, ac_reason: str | None,
     snr: float | None, dnsmos_sig: float | None, dnsmos_ovrl: float | None,
     text_model_count: int | None = None,
+    audio_lang: str | None = None, audio_cmn_prob: float | None = None,
+    lang_label_present: bool = False,
 ) -> dict:
-    """Merges filters_text + filters_acoustic into the final pass/fail_reason.
-    Text gates always take priority (matches scripts/06_filter.py's cascading
-    gate order — text gates run before acoustic ones); ac_pass is None only if
+    """Merges filters_text + filters_acoustic + labels_lang into the final
+    pass/fail_reason. Gate order: text gates first (matches scripts/06_filter.py's
+    cascading gate order), then acoustic, then the T20 audio-based Mandarin gate
+    (labels_lang.lang == 'cmn' with confidence >= MANDARIN_AUDIO_PROB_MIN) — this
+    runs last, after a segment has already cleared every other gate, since it's an
+    independent trust signal layered on top rather than a replacement for
+    mandarin_ratio()'s text-based gate above. ac_pass is None only if
     filter.acoustic hasn't run yet, which discover_decide() already excludes for
     text_pass=True rows, so the "acoustic_pending" branch is a defensive guard,
-    not an expected path."""
+    not an expected path. lang_label_present (whether labels_lang had a row for
+    this id at decide time) is always stored regardless of pass/fail, so
+    discover_decide() can re-trigger a re-decide once label.suite — an
+    independent, asynchronous node — lands a label for a segment already decided
+    without one."""
     if not text_pass:
         final_pass, reason = False, text_reason
     elif ac_pass is None:
         final_pass, reason = False, "acoustic_pending"
     elif not ac_pass:
         final_pass, reason = False, ac_reason
+    elif audio_lang == "cmn" and (audio_cmn_prob or 0.0) >= MANDARIN_AUDIO_PROB_MIN:
+        final_pass, reason = False, "mandarin_audio"
     else:
         final_pass, reason = True, None
 
@@ -769,6 +802,8 @@ def decide_row(
         "fail_reason": reason,
         "provenance": "filter_decide",
         "text_model_count": text_model_count,
+        "lang_label_checked": lang_label_present,
+        "mandarin_audio_prob": audio_cmn_prob,
     }
 
 

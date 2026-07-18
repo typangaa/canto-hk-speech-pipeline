@@ -487,7 +487,7 @@ async def _run_many_adapt_calibrate_sample(args: argparse.Namespace, conn) -> di
     from pipeline.nodes.calibrate import run_calibrate_sample
     return await run_calibrate_sample(
         conn=conn, n=args.n, tier=args.tier, min_agreement=args.min_agreement,
-        code_switch=args.code_switch,
+        code_switch=args.code_switch, order_by=args.order,
     )
 
 
@@ -769,7 +769,8 @@ def cmd_run_calibrate_sample(args: argparse.Namespace) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     result = asyncio.run(
         run_calibrate_sample(
-            n=args.n, tier=args.tier, min_agreement=args.min_agreement, code_switch=args.code_switch
+            n=args.n, tier=args.tier, min_agreement=args.min_agreement, code_switch=args.code_switch,
+            order_by=args.order,
         )
     )
     print(f"\nDone: {result}")
@@ -1231,6 +1232,12 @@ def main() -> int:
                                           "recommended_sample_n(..., code_switch=True), for the intended "
                                           "10x oversampled QA batch), 'exclude' = english_ratio = 0; see "
                                           "pending_task.md T18")
+    p_run_calib_sample.add_argument("--order", default="random", choices=["random", "agreement_asc"],
+                                     help="which segments WITHIN the scoped tier/min-agreement/code-switch "
+                                          "population get picked -- 'random' (default) reproduces the "
+                                          "original unbiased sample, 'agreement_asc' concentrates the batch "
+                                          "on the lowest-agreement (highest-risk) segments in that population "
+                                          "instead of spreading uniformly across it; see pending_task.md T21")
     p_run_calib_sample.set_defaults(func=cmd_run_calibrate_sample)
     p_run_mbuild = run_sub.add_parser("manifest.build", help="P4: build manifest entries from the catalog (in-memory, no file write)")
     p_run_mbuild.add_argument("--limit", type=int, default=None)

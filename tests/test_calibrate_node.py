@@ -222,6 +222,62 @@ def test_discover_rejects_invalid_code_switch(scratch_conn):
         discover(scratch_conn, 10, code_switch="bogus")
 
 
+# ---------------------------------------------------------------------------
+# order_by (added 2026-07-18, T21): which segments WITHIN the scoped population
+# get picked -- distinct from tier/min_agreement/code_switch, which scope the
+# population itself. Default 'random' must reproduce pre-T21 behaviour exactly.
+# ---------------------------------------------------------------------------
+
+def test_discover_order_by_agreement_asc_picks_lowest_first(scratch_conn):
+    conn = scratch_conn
+    _seed_segment(conn, "high", agreement=0.99, tier="bronze")
+    _seed_segment(conn, "mid", agreement=0.80, tier="bronze")
+    _seed_segment(conn, "low", agreement=0.70, tier="bronze")
+
+    picked = discover(conn, 2, order_by="agreement_asc")
+    assert [seg_id for seg_id, _ in picked] == ["low", "mid"]
+
+
+def test_discover_order_by_defaults_to_random_unscoped(scratch_conn):
+    """Default order_by must not change WHICH segments are eligible, only
+    (nondeterministically) their order -- this just guards the population is
+    still all three, matching pre-T21 discover(conn, n) behaviour."""
+    conn = scratch_conn
+    _seed_segment(conn, "a", agreement=0.99, tier="bronze")
+    _seed_segment(conn, "b", agreement=0.80, tier="bronze")
+    _seed_segment(conn, "c", agreement=0.70, tier="bronze")
+
+    picked = {seg_id for seg_id, _ in discover(conn, 10)}
+    assert picked == {"a", "b", "c"}
+
+
+def test_discover_order_by_agreement_asc_combines_with_tier_and_code_switch(scratch_conn):
+    conn = scratch_conn
+    _seed_segment(conn, "br_cs_high", agreement=0.80, tier="bronze", english_ratio=0.2)
+    _seed_segment(conn, "br_cs_low", agreement=0.71, tier="bronze", english_ratio=0.2)
+    _seed_segment(conn, "br_mono_low", agreement=0.70, tier="bronze", english_ratio=0.0)
+
+    picked = discover(conn, 1, tier="bronze", code_switch="only", order_by="agreement_asc")
+    assert [seg_id for seg_id, _ in picked] == ["br_cs_low"]
+
+
+def test_discover_rejects_invalid_order_by(scratch_conn):
+    with pytest.raises(ValueError):
+        discover(scratch_conn, 10, order_by="bogus")
+
+
+def test_run_calibrate_sample_passes_through_order_by(scratch_conn):
+    conn = scratch_conn
+    _seed_segment(conn, "high", agreement=0.99)
+    _seed_segment(conn, "low", agreement=0.70)
+
+    result = asyncio.run(run_calibrate_sample(conn=conn, n=1, order_by="agreement_asc"))
+
+    assert result["queued"] == 1
+    row = conn.execute("SELECT id FROM calibration_review").fetchone()
+    assert row == ("low",)
+
+
 def test_recommended_sample_n_code_switch_applies_multiplier(scratch_conn):
     conn = scratch_conn
     for i in range(1000):

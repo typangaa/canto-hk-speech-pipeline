@@ -167,21 +167,23 @@ _VALID_QA_TIERS = ("auto_gold", "silver", "bronze")
 
 
 def _parse_sample_options(payload: dict) -> tuple:
-    """Shared tier/min_agreement/code_switch parsing for /api/refill (JSON body)
-    and /api/next's auto-refill (query string, flattened by the caller into the
-    same {tier, min_agreement, code_switch} shape first) -- the browser UI's
-    equivalent of `pipe run calibrate.sample --tier/--min-agreement/--code-switch`
-    (added 2026-07-15, mirrors calibrate.py's own discover()/run_calibrate_sample()
-    params). Raises ValueError on a malformed tier/min_agreement so the caller can
-    400 instead of silently sampling something the reviewer didn't ask for;
-    code_switch is validated downstream by calibrate.discover() itself."""
+    """Shared tier/min_agreement/code_switch/order_by parsing for /api/refill (JSON
+    body) and /api/next's auto-refill (query string, flattened by the caller into the
+    same {tier, min_agreement, code_switch, order_by} shape first) -- the browser UI's
+    equivalent of `pipe run calibrate.sample --tier/--min-agreement/--code-switch/--order`
+    (tier/min_agreement/code_switch added 2026-07-15, order_by added 2026-07-18 T21;
+    mirrors calibrate.py's own discover()/run_calibrate_sample() params). Raises
+    ValueError on a malformed tier/min_agreement so the caller can 400 instead of
+    silently sampling something the reviewer didn't ask for; code_switch/order_by are
+    validated downstream by calibrate.discover() itself."""
     tier = (payload.get("tier") or "").strip() or None
     if tier is not None and tier not in _VALID_QA_TIERS:
         raise ValueError(f"tier must be one of {_VALID_QA_TIERS}, got {tier!r}")
     raw_min_agreement = payload.get("min_agreement")
     min_agreement = float(raw_min_agreement) if raw_min_agreement not in (None, "") else None
     code_switch = (payload.get("code_switch") or "").strip() or None
-    return tier, min_agreement, code_switch
+    order_by = (payload.get("order_by") or "").strip() or "random"
+    return tier, min_agreement, code_switch, order_by
 
 
 def _write(fn, *args, **kwargs):
@@ -450,18 +452,21 @@ def _build_app(default_batch: str | None):
                     # reviewing instead of diluting it with an unscoped
                     # random sample -- see _parse_sample_options().
                     try:
-                        tier, min_agreement, code_switch = _parse_sample_options({
+                        tier, min_agreement, code_switch, order_by = _parse_sample_options({
                             "tier": qs.get("tier", [None])[0],
                             "min_agreement": qs.get("min_agreement", [None])[0],
                             "code_switch": qs.get("code_switch", [None])[0],
+                            "order_by": qs.get("order_by", [None])[0],
                         })
                     except ValueError:
                         tier = min_agreement = code_switch = None
+                        order_by = "random"
                     try:
                         result = _write(
                             lambda conn: asyncio.run(run_calibrate_sample(
                                 conn=conn, n=_AUTO_REFILL_N, tier=tier,
                                 min_agreement=min_agreement, code_switch=code_switch,
+                                order_by=order_by,
                             ))
                         )
                         if result["queued"]:
@@ -581,7 +586,7 @@ def _build_app(default_batch: str | None):
                 try:
                     payload = json.loads(self.rfile.read(length)) if length else {}
                     n = int(payload.get("n", 200))
-                    tier, min_agreement, code_switch = _parse_sample_options(payload)
+                    tier, min_agreement, code_switch, order_by = _parse_sample_options(payload)
                 except (json.JSONDecodeError, ValueError) as exc:
                     self._send_json({"error": f"malformed request body: {exc}"}, status=400)
                     return
@@ -589,7 +594,7 @@ def _build_app(default_batch: str | None):
                     result = _write(
                         lambda conn: asyncio.run(run_calibrate_sample(
                             conn=conn, n=n, tier=tier, min_agreement=min_agreement,
-                            code_switch=code_switch,
+                            code_switch=code_switch, order_by=order_by,
                         ))
                     )
                 except ValueError as exc:
@@ -861,8 +866,12 @@ _PAGE_HTML = r"""<!doctype html>
         <option value="only">code-switch only</option>
         <option value="exclude">no code-switch</option>
       </select>
+      <select id="sampleOrderSelect" title="Which segments WITHIN the scoped tier/min-agreement/code-switch population get picked into the queue -- distinct from the browsing 'Order' dropdown above, which only re-sorts items already queued.">
+        <option value="random">random sample</option>
+        <option value="agreement_asc">lowest agreement first</option>
+      </select>
     </span>
-    <button id="refillBtn" title="Queue another random sample using the Sample options above">↻ Refill</button>
+    <button id="refillBtn" title="Queue another sample using the Sample options above">↻ Refill</button>
   </div>
 </div>
 
@@ -958,6 +967,7 @@ function currentSampleOptions() {
     tier: document.getElementById('tierSelect').value,
     min_agreement: document.getElementById('minAgreementInput').value,
     code_switch: document.getElementById('codeSwitchSelect').value,
+    order_by: document.getElementById('sampleOrderSelect').value,
   };
 }
 
@@ -1246,8 +1256,8 @@ function undoInsert() {
 // ---- navigation ----
 async function loadNext() {
   const { batch, source, order } = currentFilters();
-  const { tier, min_agreement, code_switch } = currentSampleOptions();
-  const r = await fetch('/api/next?' + qs({ batch, source, order, tier, min_agreement, code_switch }));
+  const { tier, min_agreement, code_switch, order_by } = currentSampleOptions();
+  const r = await fetch('/api/next?' + qs({ batch, source, order, tier, min_agreement, code_switch, order_by }));
   const { item, refilled } = await r.json();
   reviewingFromHistory = false;
   if (refilled) {
