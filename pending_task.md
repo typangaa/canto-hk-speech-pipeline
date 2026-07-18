@@ -288,11 +288,22 @@ last written; see Done section for what actually landed and when.)
 - **Result**: backfill against the live catalog — 455,894 rows re-decided in 18s,
   **10,940 segments flipped from pass to `mandarin_audio` fail** (~1.4% of the
   then-780,219-strong passing pool). `catalog verify` 17/17 PASS after. Gate only fires
-  going forward for segments `label.suite` has reached (455,894/1,241,610 at run time) —
-  re-run `manifest.export` before the next training data pull to actually drop the
-  10,940 newly-excluded rows from the exported files (not done automatically here). 44 of
-  the flipped rows were already sitting in the pending QA queue — left in place rather
+  going forward for segments `label.suite` has reached (455,894/1,241,610 at run time). 44
+  of the flipped rows were already sitting in the pending QA queue — left in place rather
   than pruned (still useful as a human sanity-check on the audio classifier).
+- **Re-export 2026-07-18**: default manifest + all 6 derived cuts re-exported to actually
+  drop the 10,940 rows from every on-disk file that reads `filters.pass`:
+  - default: 606,775→**596,577** entries, 1349.3h→**1332.1h**
+  - `--min-tier auto_gold`: **275,064** / 634.3h (was the canto-tts pretrain input)
+  - `--min-tier silver`: **428,714** / 960.9h
+  - `--min-tier bronze`: **596,577** / 1332.1h (same population as default — bronze is the
+    manifest-eligibility floor)
+  - `--code-switch only`: **84,167** / 225.4h
+  - `--code-switch exclude`: **512,410** / 1106.8h
+  - `--min-tier auto_gold --min-quality-tier B`: **55,365** / 151.6h (the canto-tts clean
+    fine-tune input)
+  `report.build` also re-run: 596,577 entries, 10/11 acceptance criteria (unchanged —
+  `text_verified` still the only failure, expected, see T1).
 - **Tests**: 9 new in `tests/test_filter_node.py`. Full detail: DECISIONS.md 2026-07-18.
 
 ### T21. Low-agreement-first QA sampling order (`calibrate.sample --order`) — done 2026-07-18

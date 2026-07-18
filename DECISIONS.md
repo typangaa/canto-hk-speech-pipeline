@@ -700,3 +700,21 @@ never-decided / no-label-yet / label-landed-after-decision), 5 new in
 `tests/test_calibrate_node.py` (T21: `order_by` ordering, invalid-value rejection,
 composition with tier/code_switch, default-random regression guard). 453/453 full suite
 green before the production run; `catalog verify` 17/17 PASS after it.
+
+**Re-export (owner requested same day, "全部一齊 re-export" when asked which derived cuts
+needed refreshing)**: default manifest + all 6 derived cuts re-exported so every on-disk
+file actually drops the 10,940 `mandarin_audio` rows, not just the live catalog:
+- default (`manifest.jsonl`/`train.jsonl`/`val.jsonl`): 606,775→596,577 entries,
+  1349.3h→1332.1h
+- `--min-tier auto_gold` (`manifest_tier_auto_gold.jsonl`, the canto-tts pretrain input):
+  275,064 entries / 634.3h
+- `--min-tier silver`: 428,714 / 960.9h
+- `--min-tier bronze`: 596,577 / 1332.1h (same population as default — bronze is the
+  manifest-eligibility floor)
+- `--code-switch only`: 84,167 / 225.4h
+- `--code-switch exclude`: 512,410 / 1106.8h
+- `--min-tier auto_gold --min-quality-tier B` (`manifest_tier_auto_gold_qualityB.jsonl`,
+  the canto-tts clean fine-tune input): 55,365 / 151.6h
+
+`report.build` re-run: 596,577 entries, 10/11 acceptance criteria pass (`text_verified`
+still the only failure, expected pending T1). All exports' `grep -c "/mnt/Drive1/"` = 0.
