@@ -7,8 +7,10 @@ import pytest
 from pipeline.catalog.catalog import init_schema
 from pipeline.nodes.calibrate import (
     CODE_SWITCH_QA_MULTIPLIER,
+    ENGLISH_ONLY_FLAG_REASON,
     MANDARIN_FLAG_REASON,
     NOT_SINGLE_SPEAKER_FLAG_REASON,
+    OTHER_LANGUAGE_FLAG_REASON,
     QA_SAMPLE_RATE_BY_TIER,
     WRONG_SPEAKER_ID_FLAG_REASON,
     _levenshtein,
@@ -435,6 +437,41 @@ def test_record_decision_wrong_speaker_id_does_not_exclude(scratch_conn):
     assert tier_row == ("silver", "tier_assign")  # untouched
     agreement_row = conn.execute("SELECT text_verified FROM asr_agreement WHERE id='s1'").fetchone()
     assert agreement_row == (False,)  # untouched
+
+
+# ---------------------------------------------------------------------------
+# "Not HK Cantonese" language-purity buttons (2026-07-18) — English-only and
+# other-language segments, same mechanism as the Mandarin button.
+# ---------------------------------------------------------------------------
+
+def test_record_decision_english_only_excludes_and_stores_reason(scratch_conn):
+    conn = scratch_conn
+    _seed_segment(conn, "s1")
+    conn.execute("INSERT INTO calibration_review (id, decision) VALUES ('s1', 'pending')")
+
+    record_decision(conn, "s1", "rejected", None, flag_reason=ENGLISH_ONLY_FLAG_REASON)
+
+    review = conn.execute(
+        "SELECT decision, flag_reason FROM calibration_review WHERE id='s1'"
+    ).fetchone()
+    assert review == ("rejected", "english_only")
+    tier_row = conn.execute("SELECT tier FROM tiers WHERE id='s1'").fetchone()
+    assert tier_row == ("excluded",)
+
+
+def test_record_decision_other_language_excludes_and_stores_reason(scratch_conn):
+    conn = scratch_conn
+    _seed_segment(conn, "s1")
+    conn.execute("INSERT INTO calibration_review (id, decision) VALUES ('s1', 'pending')")
+
+    record_decision(conn, "s1", "rejected", None, flag_reason=OTHER_LANGUAGE_FLAG_REASON)
+
+    review = conn.execute(
+        "SELECT decision, flag_reason FROM calibration_review WHERE id='s1'"
+    ).fetchone()
+    assert review == ("rejected", "other_language")
+    tier_row = conn.execute("SELECT tier FROM tiers WHERE id='s1'").fetchone()
+    assert tier_row == ("excluded",)
 
 
 # ---------------------------------------------------------------------------

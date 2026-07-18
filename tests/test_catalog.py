@@ -313,12 +313,19 @@ def test_manifest_build_matches_expected_corpus_totals(catalog_conn):
     Update this baseline only after an intentional, verified manifest.export re-run."""
     from pipeline.nodes.manifest import run_manifest_build
 
-    BASELINE_COUNT = 606775
-    BASELINE_SPEAKERS = 9023
-    BASELINE_GOLD = 58
-    BASELINE_AUTO_GOLD = 279195
-    BASELINE_SILVER = 158087
-    BASELINE_BRONZE = 169435
+    # Baseline dropped 2026-07-18 (T20): the `mandarin_audio` gate flipped 10,940
+    # segments from pass to fail (audio-based Mandarin detection wired into
+    # filter.decide, see DECISIONS.md 2026-07-18), which legitimately shrinks the
+    # manifest-eligible pool -- this is not the "never shrink" case the floor is
+    # meant to guard, it's an intentional, verified re-export (matches this
+    # docstring's own update policy above). gold rose 58->149 from the T1 review
+    # session recovered the same day (see DECISIONS.md's "Near-incident" entry).
+    BASELINE_COUNT = 596571
+    BASELINE_SPEAKERS = 8715
+    BASELINE_GOLD = 149
+    BASELINE_AUTO_GOLD = 274965
+    BASELINE_SILVER = 153628
+    BASELINE_BRONZE = 167829
     TIER_DEPLETION_TOLERANCE = 1000
 
     result = run_manifest_build()

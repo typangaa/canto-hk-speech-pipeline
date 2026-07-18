@@ -718,3 +718,173 @@ file actually drops the 10,940 `mandarin_audio` rows, not just the live catalog:
 
 `report.build` re-run: 596,577 entries, 10/11 acceptance criteria pass (`text_verified`
 still the only failure, expected pending T1). All exports' `grep -c "/mnt/Drive1/"` = 0.
+
+## 2026-07-18 — Near-incident: bulk `calibration_review` pending-queue cleanup deleted
+## 113 unflushed human review decisions; caught before flush, fully recovered
+
+**Trigger**: owner noticed the T1 QA queue had grown to 3,392 `pending` rows across 16
+accumulated `calibrate.sample` batches (manual Refill clicks + `/api/next` auto-refill)
+and asked to empty it, willing to have those segments get re-sampled later. Owner
+explicitly said "we should not do hard delete" while asking whether marking rows
+`decision='skipped'` would let them be re-sampled.
+
+**Why soft-mark doesn't work**: `calibrate.sample`'s `discover()` anti-joins on ROW
+EXISTENCE in `calibration_review` (`LEFT JOIN ... WHERE c.id IS NULL`), not on
+`decision`'s value — a `skipped` row blocks re-sampling exactly as permanently as
+`pending`/`verified`/`rejected` do. Only deleting the row frees the id for
+re-sampling. Since the 3,392 rows were all `decision='pending'` (never reviewed, zero
+recorded judgement), deleting them loses no review data by construction — this was
+explained to the owner, who then approved `DELETE FROM calibration_review WHERE
+decision='pending'`.
+
+**What went wrong**: `calibrate_server.py`'s offline-buffer design (2026-07-13, see
+above) means every browser-submitted decision is appended to
+`metadata/calibration_pending_decisions.jsonl` and NOT written to `calibration_review`
+until `pipe calibrate flush-pending` runs. At delete time, 113 unique ids (94 verified +
+21 rejected + 1 flagged, from the day's active review session) had a real human decision
+sitting in that unflushed buffer while their `calibration_review` row still read
+`decision='pending'` — the bulk delete removed those 113 rows along with the genuinely
+untouched ones. `record_decision()` (what `flush-pending` calls) is a plain `UPDATE ...
+WHERE id = ?` with no upsert fallback — replaying the buffer against a missing row
+silently affects 0 rows, so running `flush-pending` at that point would have discarded
+all 113 decisions with no error surfaced anywhere.
+
+**Caught before any data was lost**: the discrepancy was noticed because a fresh
+`connect()` query of `calibration_review` (58 verified) didn't match the live server's
+`/api/stats` (149 verified) — the difference is exactly the overlay `_stats_with_overlay()`
+applies from the in-memory `_local_decisions` buffer. Cross-checked against
+`calibration_pending_decisions.jsonl` (116 lines / 113 unique ids after last-write-wins
+dedup) before calling `flush-pending`, so recovery happened pre-replay, not post-loss.
+
+**Recovery**: re-inserted 113 placeholder `pending` rows (id, `sample_batch` from the
+buffer entry, `original_best_text` reconstructed from `asr_agreement.best_text` — still
+accurate since the real `verified` decision had never actually overwritten it), then ran
+`pipe calibrate flush-pending` (113/113 flushed, 0 errors). Verified against the schema's
+actual side effects, not just row counts: all 149 `verified` rows have
+`asr_agreement.text_verified=TRUE` and `tiers.tier='gold'`; all 21 `rejected` rows have
+`tiers.tier='excluded'` — full pre-incident state reproduced exactly (149/21/1/171,
+matching the server's own pre-delete `/api/stats` reading).
+
+**Residual bug found and fixed in passing**: `calibrate_server.py`'s `_local_decisions`
+module global (line ~208) is loaded once at process start and only ever updated by that
+same process's own `/api/submit` handler — it has no way to notice an external
+`flush-pending` run and kept double-counting the same 113 decisions in
+`_stats_with_overlay()` (displaying 240/42/2/284) even after the DB itself was correct.
+Not a data issue, purely a stale in-memory cache in the long-running `calibrate serve`
+process (PID had been up since 14:21). Fixed by restarting the server (`kill` +
+relaunch) so `_local_decisions = load_pending_decisions()` reloads from the
+now-archived-empty buffer file; `/api/stats` confirmed correct after restart
+(149/21/1/171, pending=0).
+
+**Final state**: `calibration_review` — 171 total rows, 0 `pending`, 149 `verified` / 21
+`rejected` / 1 `flagged`, all with correct downstream `asr_agreement`/`tiers` side
+effects. Buffer archived to
+`metadata/calibration_pending_decisions.flushed_20260718T145757.jsonl`. Queue is now
+genuinely empty and ready for fresh `calibrate.sample` batches.
+
+**Lesson for future bulk `calibration_review` writes**: never delete/bulk-mutate rows in
+this table without first checking `metadata/calibration_pending_decisions.jsonl` for
+unflushed decisions against the same id set (or just running `flush-pending` first,
+before any bulk cleanup, so there is nothing left unflushed to collide with).
+
+## 2026-07-18 — "English only" / "Other language" one-click reject buttons
+(same pattern as the Mandarin button)
+
+**Trigger**: owner reported some queued segments are English-only or another
+non-Cantonese language (neither Mandarin nor English) — asked for one-click buttons
+matching the existing "Mandarin" button (2026-07-15).
+
+**Fix**: mirrors `MANDARIN_FLAG_REASON` exactly. Two new constants in
+`pipeline/nodes/calibrate.py`: `ENGLISH_ONLY_FLAG_REASON = "english_only"`,
+`OTHER_LANGUAGE_FLAG_REASON = "other_language"`. Both submitted as `decision='rejected'`
+(excludes from the manifest via `tiers.tier='excluded'`, same mechanism as Mandarin/
+not_single_speaker) — these are CLAUDE.md Hard Constraint #1 language-purity violations,
+not text-quality issues, so `'flagged'` (no exclusion) would be the wrong mechanism.
+`pipeline/tools/calibrate_server.py`: two new buttons ("English only (E)" / "Other
+language (O)") next to Mandarin, same red/`--bad` styling, same one-click
+`submit('rejected', <reason>)` JS handler, same keyboard shortcuts (`E`/`O`, both
+previously unused — full shortcut list is now Enter/S/D/M/E/O/N/W/F/Space/B/1-4). No
+schema change needed — `flag_reason` is already a free TEXT column and
+`summary_stats()`'s `top_flag_reasons` leaderboard already scopes to
+`decision IN ('flagged','rejected') AND flag_reason IS NOT NULL`, so both reasons show up
+there automatically.
+
+**Result**: live `pipe calibrate serve` process restarted to serve the updated HTML/JS
+(confirmed via `curl` that both `id="englishOnly"`/`id="otherLanguage"` buttons are
+present in the served page). 2 new tests in `tests/test_calibrate_node.py`
+(`test_record_decision_english_only_excludes_and_stores_reason`,
+`test_record_decision_other_language_excludes_and_stores_reason`), mirroring the existing
+Mandarin/T9 test pattern — 66/66 passing in that file, full suite re-run to confirm no
+regressions.
+
+## 2026-07-18 — T22: audio-based English/other-language gate wired into `filter.decide`
+
+**Trigger**: same-day follow-up to the English-only/Other-language calibrate_server
+buttons — owner asked whether an automated filter equivalent to T20's Mandarin gate
+already existed for these two cases.
+
+**Finding**: no. `filter.text`'s `english_ratio()` is a TEXT heuristic (English-word
+proportion in the ASR transcript) and has no "other language" concept at all.
+`lang_screen.auto` (raw-file level, pre-diarization) incidentally rejects a whole file
+if its audio-based Cantonese ratio is too low, but that's a side effect of a
+Cantonese-ratio floor, not an intentional English/other detector, and it's file-level,
+not segment-level. `filter.decide`'s only audio-based language gate was T20's
+`lang == 'cmn'` check — nothing else.
+
+**Impact check before building**: `labels_lang` (mms-lid-126, same source T20 used)
+already has real per-segment top-1 labels across all 126 languages. Queried live:
+634 segments have `lang NOT IN ('yue','cmn')` at `lang_prob >= 0.8`, of which 616 were
+currently passing `filter.decide` (169 vie, 147 tha, 125 kor, 70 eng, 32 jpn, 28 mya,
+plus a long tail of near-certainly-noise exotic-language misclassifications on short
+3-20s clips — Welsh/Manx/Hawaiian etc. at n<=10 each). Critically, for the 70
+high-confidence audio-English segments, `english_ratio()` missed **all 70**
+(avg 0.039, far below `MAX_ENG_RATIO=0.30`) — ASR hallucinated fluent Chinese text over
+English audio, the identical blind spot T20 found for Mandarin. Total impact: only
+0.75h out of 1332.1h — small, low risk. None were already sitting in the QA queue
+(unlike T20's 44).
+
+**Decision (owner confirmed via AskUserQuestion)**: build the gate.
+- **fail_reason split**: two reasons, `english_audio` and `other_language_audio`
+  (not one shared reason), to match the two calibrate_server.py buttons added the same
+  day — keeps the automated-gate and human-review taxonomies aligned for future triage.
+- **Threshold**: `NON_CANTONESE_AUDIO_PROB_MIN = 0.8`, same value as
+  `MANDARIN_AUDIO_PROB_MIN`, for consistency.
+
+**Fix**: `pipeline/nodes/filter.py` — `decide_row()` gains two new `elif` branches after
+the existing `mandarin_audio` check: `audio_lang == "eng"` → `english_audio`;
+`audio_lang not in (None, "yue", "cmn", "eng")` → `other_language_audio`, both gated on
+`labels_lang.lang_prob >= NON_CANTONESE_AUDIO_PROB_MIN` (the general top-1 confidence,
+since English/other don't get a dedicated probability column the way yue/cmn do — only
+`cmn_prob`/`yue_prob` exist). `DECIDE_DISCOVER_SQL` gained `ll.lang_prob` in its SELECT
+list (positionally threaded through to `decide_row(*r)`'s new `audio_lang_prob` param).
+New `filters.audio_lang_prob` column (audit trail, stored regardless of pass/fail, same
+rationale as `mandarin_audio_prob`). No new discovery-SQL logic needed — the existing
+`lang_label_checked` versioning (built for T20) already re-triggers a re-decide whenever
+a fresh `labels_lang` row lands for an already-decided id, and covers this gate too.
+
+**Production backfill — a real operational subtlety**: since T20's original run already
+set `lang_label_checked=TRUE` for all 455,894 rows with a label at the time, simply
+deploying the new `decide_row()` logic and running `filter.decide` normally would NOT
+retroactively apply the new gate to those rows — discovery would skip them as
+"already checked". Fix: one-time `UPDATE filters SET lang_label_checked = FALSE WHERE
+lang_label_checked = TRUE` (455,894 rows) to force re-discovery, then ran `filter.decide`
+fresh. Reuses the exact same mechanism T20 already built — no new code needed for the
+backfill itself, just leveraging the existing versioning column a second time.
+
+**Result**: 455,930 rows re-decided in 15s (67k rows/s). New fail_reason counts matched
+the pre-check prediction exactly: **70 `english_audio`, 546 `other_language_audio`**
+(616 total, matching the 616-currently-passing figure from the impact check).
+`mandarin_audio` unchanged at 10,940 (re-decide is idempotent for inputs that didn't
+change). Overall: 768,663 pass / 472,947 fail. `catalog verify` 17/17 PASS.
+`manifest.build`/`manifest.export` need no code change — already gated on
+`filters.pass = TRUE`. Given the tiny hour impact (0.75h), a full re-export of the
+default manifest + 6 derived cuts (as was done for T20) was not run immediately — left
+for the next scheduled re-export rather than a dedicated pass for this alone; the
+live catalog itself is fully correct now, only the already-exported `.jsonl` files lag
+behind by these 616 segments until the next `manifest.export` run.
+
+**Tests**: 6 new in `tests/test_filter_node.py` (`decide_row` accept/reject boundary
+cases for english_audio/other_language_audio at threshold, `yue` explicitly excluded
+even at high confidence, `cmn` still resolves to `mandarin_audio` not
+`other_language_audio` despite also being excluded from that branch's NOT IN list).
+461/461 full suite green before the production run; `catalog verify` 17/17 PASS after.

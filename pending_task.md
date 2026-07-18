@@ -15,6 +15,14 @@ Source: round-2 post-execution review of `docs/PIPELINE_REVIEW_2026-07-11.md` §
 ## 🔴 Tier 1 — data-trust-critical, do first
 
 ### T1. Pilot QA batch review (Issue #15)
+- **Update 2026-07-18 (queue reset — see "Near-incident" in Done)**: owner asked to empty
+  the accumulated pending queue so `calibrate.sample`/Refill can re-sample fresh going
+  forward. `calibration_review` is now **171 total rows, 0 pending** (149 `verified` / 21
+  `rejected` / 1 `flagged` — all prior review decisions preserved intact, see the
+  Near-incident writeup for why a bulk delete of `pending` rows nearly discarded 113 of
+  them and how it was recovered). All the tier/code-switch progress numbers below (2,342
+  pending, code-switch 1,237, etc.) are now **stale** — the queue starts fresh from here;
+  run `pipe calibrate progress` for current numbers before resuming review.
 - **Update 2026-07-18 (see T20/T21 in Done)**: found and fixed a real gap while reviewing
   this queue — 44 of the currently-pending segments were already auto-excluded by T20's
   new audio-based Mandarin gate (`filters.fail_reason='mandarin_audio'`) before you get to
@@ -318,6 +326,102 @@ last written; see Done section for what actually landed and when.)
   dropdown in `pipe calibrate serve`), composable with tier/min-agreement/code-switch —
   e.g. `--tier bronze --code-switch only --order agreement_asc`.
 - **Tests**: 5 new in `tests/test_calibrate_node.py`. Full detail: DECISIONS.md 2026-07-18.
+
+### Near-incident: `calibration_review` pending-queue cleanup — caught + recovered, done 2026-07-18
+- **What happened**: owner asked to empty the 3,392-row `pending` backlog (16 accumulated
+  `calibrate.sample` batches), OK with those segments being re-sampled later, explicitly
+  **not** wanting a hard delete. Explained that `discover()`'s anti-join is on row
+  EXISTENCE, not `decision` value, so soft-marking rows `skipped` would block re-sampling
+  exactly as permanently as leaving them `pending` — only an actual `DELETE` frees the id
+  for re-sampling, and since all 3,392 rows were undecided (`pending`), deleting them loses
+  zero review data by construction. Owner approved on that basis.
+- **What went wrong**: `calibrate_server.py`'s offline-decision buffer
+  (`metadata/calibration_pending_decisions.jsonl`, see DECISIONS.md 2026-07-13) meant 113
+  unique ids from the day's active review session had a real verified/rejected/flagged
+  decision sitting unflushed in that buffer while their `calibration_review` row still
+  read `pending` — the bulk `DELETE FROM calibration_review WHERE decision='pending'`
+  removed those 113 rows too. `record_decision()` (what `flush-pending` replays through) is
+  a plain `UPDATE ... WHERE id = ?`; against a missing row it silently affects 0 rows, so a
+  `flush-pending` run at that point would have discarded all 113 decisions with zero error
+  output anywhere.
+- **Caught pre-loss**: a fresh DB query (58 verified) didn't match the live server's
+  `/api/stats` (149 verified) — the gap was `_stats_with_overlay()`'s in-memory buffer
+  overlay. Cross-checked against the still-intact JSONL buffer *before* calling
+  `flush-pending`, so nothing was actually lost.
+- **Recovery**: reinserted 113 placeholder `pending` rows (id + `sample_batch` from the
+  buffer + `original_best_text` reconstructed from `asr_agreement.best_text`, still
+  accurate since the real flush had never run), then `pipe calibrate flush-pending`
+  (113/113, 0 errors). Verified actual side effects, not just counts: 149 `verified` rows
+  all have `text_verified=TRUE`+`tiers.tier='gold'`, 21 `rejected` all have
+  `tiers.tier='excluded'` — exact pre-incident state reproduced.
+- **Residual bug fixed in passing**: `calibrate_server.py`'s `_local_decisions` module
+  global loads once at process start and never learns about an externally-run
+  `flush-pending`, so the long-running `pipe calibrate serve` process kept double-counting
+  the same 113 decisions in `/api/stats` (showing 240/42/2/284) even after the DB was
+  correct. Not a data bug — fixed by restarting the server process so it reloads the
+  (now-empty) buffer file. **Not yet fixed at the code level** — if this bites again,
+  `_local_decisions` should be diffed/reconciled against the DB periodically, or the
+  server should re-`load_pending_decisions()` after every `flush-pending`-capable write
+  path, rather than relying on a manual restart. Low priority: only matters when
+  `flush-pending` is run from a process other than the server itself while the server stays
+  up, which is a maintenance-script pattern, not the normal owner workflow.
+- **Final state**: `calibration_review` — 171 rows, 0 pending, 149 verified / 21 rejected /
+  1 flagged, all downstream side effects correct. Full writeup: DECISIONS.md 2026-07-18.
+
+### "English only" / "Other language" one-click reject buttons — done 2026-07-18
+- **What**: owner reported some queued segments are English-only or another
+  non-Cantonese/non-Mandarin language; asked for one-click buttons matching the existing
+  Mandarin button (T19, 2026-07-15).
+- **Done**: `ENGLISH_ONLY_FLAG_REASON`/`OTHER_LANGUAGE_FLAG_REASON` constants in
+  `pipeline/nodes/calibrate.py`, same pattern as `MANDARIN_FLAG_REASON` exactly — both
+  submit `decision='rejected'` (excludes via `tiers.tier='excluded'`, same as Mandarin —
+  CLAUDE.md Hard Constraint #1 language-purity violations, not text-quality issues). Two
+  new buttons in `pipe calibrate serve` ("English only (E)" / "Other language (O)"), same
+  red styling, keyboard shortcuts `E`/`O`. No schema change — reused the existing
+  `flag_reason` TEXT column and `top_flag_reasons` leaderboard (already scoped to
+  `rejected`+`flagged` with a reason). 2 new tests in `tests/test_calibrate_node.py`
+  (66/66 in that file). Live `calibrate serve` process restarted to pick up the new
+  buttons — confirmed present in the served HTML.
+- **Also fixed same session**: `tests/test_catalog.py`'s
+  `test_manifest_build_matches_expected_corpus_totals` baseline was stale from before
+  T20's `mandarin_audio` gate (the earlier T20 work in this same session dropped the
+  manifest-eligible pool below the old floor-only `BASELINE_COUNT`, which the test's own
+  docstring anticipates: "Update this baseline only after an intentional, verified
+  manifest.export re-run" — exactly what T20's re-export was). Refreshed all 6 baselines
+  to today's live-catalog numbers (count 606,775→596,571; speakers 9,023→8,715; gold
+  58→149 from the recovered T1 review session; auto_gold/silver/bronze similarly down from
+  the mandarin_audio exclusions). Full suite green after (455/455).
+
+### T22. Audio-based English/other-language gate wired into `filter.decide` — done 2026-07-18
+- **What**: same-day follow-up to the English-only/Other-language buttons above — checked
+  whether an automated filter equivalent to T20's Mandarin gate existed for these two
+  cases. It didn't: `english_ratio()` is TEXT-only and has no "other language" concept at
+  all; `lang_screen.auto`'s low-Cantonese-ratio reject band incidentally catches
+  non-Cantonese raw files as a side effect, but is file-level, not segment-level, and not
+  an intentional English/other detector.
+- **Impact check before building**: 634 segments have `labels_lang.lang NOT IN
+  ('yue','cmn')` at `lang_prob >= 0.8`, 616 of them currently passing `filter.decide`
+  (169 vie, 147 tha, 125 kor, 70 eng, 32 jpn, 28 mya, long noisy tail of exotic-language
+  misclassifications on short clips). For the 70 audio-English segments, `english_ratio()`
+  missed all 70 (avg 0.039) — ASR hallucinated fluent Chinese text over English audio,
+  same blind spot as the pre-T20 Mandarin gap. Only 0.75h impact, 0 already in QA queue.
+- **Fix**: `decide_row()` gains `english_audio`/`other_language_audio` fail reasons (split,
+  not merged — matches the two new buttons, per owner decision), gated on
+  `labels_lang.lang_prob >= NON_CANTONESE_AUDIO_PROB_MIN` (0.8, same as
+  `MANDARIN_AUDIO_PROB_MIN`). New `filters.audio_lang_prob` audit column.
+- **Production backfill subtlety**: T20's `lang_label_checked` versioning column was
+  already `TRUE` for all 455,894 rows with a label, so a plain `filter.decide` re-run
+  would NOT have retroactively applied the new gate — had to
+  `UPDATE filters SET lang_label_checked = FALSE WHERE lang_label_checked = TRUE` first to
+  force re-discovery (reused T20's existing mechanism, no new code needed).
+- **Result**: 455,930 rows re-decided in 15s. New counts matched the pre-check prediction
+  exactly: **70 english_audio, 546 other_language_audio** (616 total). `mandarin_audio`
+  unchanged at 10,940. `catalog verify` 17/17 PASS. `manifest.build`/`export` need no code
+  change (already `filters.pass`-gated) — **not yet re-exported** given the tiny 0.75h
+  impact; the live catalog is correct, only the on-disk `.jsonl` exports lag by these 616
+  segments until the next scheduled `manifest.export` run.
+- **Tests**: 6 new in `tests/test_filter_node.py`. 461/461 full suite green before the
+  production run. Full detail: DECISIONS.md 2026-07-18.
 
 ### T5. Filter/tier re-evaluation mechanism (Issue #4) — done 2026-07-17
 - **What**: `filter.text`/`filter.decide`/`tier.assign` discovery was a bare row-existence

@@ -121,6 +121,12 @@ ALTER TABLE filters ADD COLUMN IF NOT EXISTS text_model_count INTEGER;
 -- fail_reason it can produce -- see filter.py's MANDARIN_AUDIO_PROB_MIN and decide_row().
 ALTER TABLE filters ADD COLUMN IF NOT EXISTS lang_label_checked BOOLEAN;
 ALTER TABLE filters ADD COLUMN IF NOT EXISTS mandarin_audio_prob DOUBLE;
+-- T22 (added 2026-07-18): audit column for the english_audio/other_language_audio gates,
+-- same rationale as mandarin_audio_prob above -- labels_lang.lang_prob (the general top-1
+-- confidence, since English/other languages don't get their own dedicated probability
+-- column the way yue/cmn do) at filter.decide time, stored regardless of pass/fail. See
+-- filter.py's NON_CANTONESE_AUDIO_PROB_MIN and decide_row().
+ALTER TABLE filters ADD COLUMN IF NOT EXISTS audio_lang_prob DOUBLE;
 
 -- P3 session 2 (pipeline/nodes/filter.py): filter.text's own raw output — gates that need
 -- only catalog columns + ASR text, no audio decode (sample_rate/duration/text-length/

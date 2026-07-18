@@ -11,6 +11,7 @@ from pipeline.nodes.filter import (
     MAX_TEXT_CHARS,
     MIN_CJK_CHARS,
     MIN_DUR,
+    NON_CANTONESE_AUDIO_PROB_MIN,
     TARGET_SR,
     cjk_count,
     compute_snr,
@@ -381,6 +382,83 @@ def test_decide_row_stores_lang_label_checked_true():
         audio_lang="yue", audio_cmn_prob=0.01, lang_label_present=True,
     )
     assert row["lang_label_checked"] is True
+
+
+# ---------------------------------------------------------------------------
+# T22 (2026-07-18): audio-based English-only / other-language gate, same
+# mechanism as the T20 Mandarin gate above -- catches genuine English/other-
+# language audio that ASR hallucinates into fluent Chinese text, which the
+# text-heuristic english_ratio() gate structurally cannot detect (confirmed
+# live: 70 high-confidence audio-English segments all had english_ratio
+# averaging 0.039, far below MAX_ENG_RATIO).
+# ---------------------------------------------------------------------------
+
+def test_decide_row_rejects_high_confidence_audio_english():
+    row = decide_row(
+        "id11", True, None, 0.02, 0.0, "yue", 0.9,
+        True, None, 30.0, 3.5, 3.2,
+        audio_lang="eng", audio_lang_prob=0.9, lang_label_present=True,
+    )
+    assert row["pass"] is False
+    assert row["fail_reason"] == "english_audio"
+    assert row["audio_lang_prob"] == 0.9
+
+
+def test_decide_row_rejects_high_confidence_audio_other_language():
+    row = decide_row(
+        "id12", True, None, 0.1, 0.05, "yue", 0.9,
+        True, None, 30.0, 3.5, 3.2,
+        audio_lang="vie", audio_lang_prob=0.85, lang_label_present=True,
+    )
+    assert row["pass"] is False
+    assert row["fail_reason"] == "other_language_audio"
+    assert row["audio_lang_prob"] == 0.85
+
+
+def test_decide_row_passes_low_confidence_audio_english():
+    """Below NON_CANTONESE_AUDIO_PROB_MIN -- e.g. a brief English loanword/quote
+    inside an otherwise-Cantonese segment -- must not trip the gate."""
+    row = decide_row(
+        "id13", True, None, 0.1, 0.05, "yue", 0.9,
+        True, None, 30.0, 3.5, 3.2,
+        audio_lang="eng", audio_lang_prob=NON_CANTONESE_AUDIO_PROB_MIN - 0.01, lang_label_present=True,
+    )
+    assert row["pass"] is True
+    assert row["fail_reason"] is None
+
+
+def test_decide_row_passes_low_confidence_audio_other_language():
+    row = decide_row(
+        "id14", True, None, 0.1, 0.05, "yue", 0.9,
+        True, None, 30.0, 3.5, 3.2,
+        audio_lang="tha", audio_lang_prob=NON_CANTONESE_AUDIO_PROB_MIN - 0.01, lang_label_present=True,
+    )
+    assert row["pass"] is True
+    assert row["fail_reason"] is None
+
+
+def test_decide_row_passes_high_confidence_audio_yue():
+    """yue is explicitly excluded from the non-Cantonese gate regardless of
+    lang_prob -- this is the normal, expected case, not an edge case."""
+    row = decide_row(
+        "id15", True, None, 0.1, 0.05, "yue", 0.9,
+        True, None, 30.0, 3.5, 3.2,
+        audio_lang="yue", audio_lang_prob=0.99, lang_label_present=True,
+    )
+    assert row["pass"] is True
+    assert row["fail_reason"] is None
+
+
+def test_decide_row_passes_high_confidence_audio_cmn_without_other_language_reason():
+    """A high-confidence 'cmn' label must be caught by mandarin_audio (checked
+    first), never mislabelled as other_language_audio even though 'cmn' is
+    also excluded from the other_language_audio branch's NOT IN list."""
+    row = decide_row(
+        "id16", True, None, 0.1, 0.05, "yue", 0.9,
+        True, None, 30.0, 3.5, 3.2,
+        audio_lang="cmn", audio_cmn_prob=0.95, audio_lang_prob=0.95, lang_label_present=True,
+    )
+    assert row["fail_reason"] == "mandarin_audio"
 
 
 def _seed_decide_inputs_with_label(conn, seg_id, *, has_label=False, label_lang="yue", label_prob=0.01):

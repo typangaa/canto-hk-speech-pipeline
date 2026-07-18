@@ -7,11 +7,13 @@ step. It reads the sample queue that `pipe run calibrate.sample` writes into
 candidates, and record a verified/skipped/rejected/flagged decision. See
 pipeline/nodes/calibrate.py's module docstring for why this exists (owner
 decision 2026-07-10: text_verified/gold was structurally dead in the DAG).
-A dedicated one-click "Mandarin" button (2026-07-15) submits a 'rejected'
-decision with a fixed flag_reason ("mandarin", MANDARIN_FLAG_REASON) for
-segments that surface for text QA but turn out to be non-HK-Cantonese --
-'rejected' now also excludes the segment from the manifest (tiers.tier is
-set to 'excluded', see record_decision() in pipeline/nodes/calibrate.py).
+Dedicated one-click language-purity buttons submit a 'rejected' decision with
+a fixed flag_reason for segments that surface for text QA but turn out to be
+non-HK-Cantonese -- "Mandarin" (2026-07-15, MANDARIN_FLAG_REASON), "English
+only" and "Other language" (2026-07-18, ENGLISH_ONLY_FLAG_REASON /
+OTHER_LANGUAGE_FLAG_REASON). 'rejected' now also excludes the segment from
+the manifest (tiers.tier is set to 'excluded', see record_decision() in
+pipeline/nodes/calibrate.py).
 
 Usage:
     .venv/bin/python -m pipeline.tools.calibrate_server [--port 8420] [--batch <sample_batch id>]
@@ -760,6 +762,8 @@ _PAGE_HTML = r"""<!doctype html>
   #skip { background: var(--panel-2); color: var(--text); border: 1px solid var(--border) !important; }
   #reject { background: var(--bad); color: white; }
   #mandarin { background: var(--bad); color: white; border: 2px solid #7a0000 !important; }
+  #englishOnly { background: var(--bad); color: white; border: 2px solid #7a0000 !important; }
+  #otherLanguage { background: var(--bad); color: white; border: 2px solid #7a0000 !important; }
   #multiSpeaker { background: var(--bad); color: white; border: 2px solid #7a0000 !important; }
   #wrongSpeakerId { background: var(--warn); color: #1c1300; border: 2px solid #7a5c00 !important; }
   #flag { background: var(--warn); color: #1c1300; }
@@ -902,6 +906,8 @@ _PAGE_HTML = r"""<!doctype html>
         <button class="action" id="skip">Skip (S)</button>
         <button class="action" id="reject">Reject (D)</button>
         <button class="action" id="mandarin" title="Not HK Cantonese -- rejects and records the reason">Mandarin (M)</button>
+        <button class="action" id="englishOnly" title="Segment is English-only, not Cantonese -- rejects and records the reason">English only (E)</button>
+        <button class="action" id="otherLanguage" title="Not HK Cantonese, not Mandarin/English (e.g. another dialect/language) -- rejects and records the reason">Other language (O)</button>
         <button class="action" id="multiSpeaker" title="Audio has more than one speaker -- rejects and records the reason (T9)">Multi-speaker (N)</button>
         <button class="action" id="wrongSpeakerId" title="Audio is single-speaker but filed under the wrong speaker_id -- flags only, does NOT exclude (T9)">Wrong speaker ID (W)</button>
         <button class="action" id="flag">Flag issue (F)</button>
@@ -1329,6 +1335,13 @@ document.getElementById('reject').onclick = () => submit('rejected');
 // (reason recorded for the top_flag_reasons triage leaderboard) and drops
 // the segment, in one click -- no free-text box needed.
 document.getElementById('mandarin').onclick = () => submit('rejected', 'mandarin');
+// "Not HK Cantonese" language-purity buttons (added 2026-07-18, same pattern as
+// Mandarin above -- must match ENGLISH_ONLY_FLAG_REASON / OTHER_LANGUAGE_FLAG_REASON
+// in pipeline/nodes/calibrate.py). Both submit decision='rejected' directly, excluding
+// the segment from the manifest, same as Mandarin -- these are language-purity
+// violations (CLAUDE.md Hard Constraint #1), not text-quality issues.
+document.getElementById('englishOnly').onclick = () => submit('rejected', 'english_only');
+document.getElementById('otherLanguage').onclick = () => submit('rejected', 'other_language');
 // T9 speaker-purity buttons (added 2026-07-17, must match NOT_SINGLE_SPEAKER_FLAG_REASON /
 // WRONG_SPEAKER_ID_FLAG_REASON in pipeline/nodes/calibrate.py): two separate buttons for two
 // different failure modes -- "multi-speaker" is a real audio defect (excludes, same as
@@ -1486,6 +1499,8 @@ document.addEventListener('keydown', (e) => {
   else if (e.key.toLowerCase() === 's' && !inBox) { submit('skipped'); }
   else if (e.key.toLowerCase() === 'd' && !inBox) { submit('rejected'); }
   else if (e.key.toLowerCase() === 'm' && !inBox) { submit('rejected', 'mandarin'); }
+  else if (e.key.toLowerCase() === 'e' && !inBox) { submit('rejected', 'english_only'); }
+  else if (e.key.toLowerCase() === 'o' && !inBox) { submit('rejected', 'other_language'); }
   else if (e.key.toLowerCase() === 'n' && !inBox) { submit('rejected', 'not_single_speaker'); }
   else if (e.key.toLowerCase() === 'w' && !inBox) { submit('flagged', 'wrong_speaker_id'); }
   else if (e.key.toLowerCase() === 'f' && !inBox) { openFlagBox(); }

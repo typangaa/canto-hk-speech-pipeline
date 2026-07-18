@@ -140,6 +140,20 @@ MANDARIN_FLAG_REASON = "mandarin"
 NOT_SINGLE_SPEAKER_FLAG_REASON = "not_single_speaker"
 WRONG_SPEAKER_ID_FLAG_REASON = "wrong_speaker_id"
 
+# Fixed flag_reasons for the two "not HK Cantonese" one-click buttons (added
+# 2026-07-18, same pattern as MANDARIN_FLAG_REASON above -- CLAUDE.md Hard
+# Constraint #1: "Reject audio that is primarily Mandarin, Guangzhou
+# Cantonese, or overseas Cantonese" -- English-only and other-language
+# segments are the same violation by a different route, spotted during T1
+# text QA rather than caught upstream by lang_screen.auto/labels_lang
+# (both tuned for Cantonese-vs-Mandarin, not Cantonese-vs-everything-else).
+# Both submitted as decision='rejected' (excludes from the manifest via
+# tiers.tier='excluded'), same mechanism as the Mandarin button -- these are
+# language-purity violations, not text-quality issues or pipeline bugs, so
+# 'flagged' (no exclusion) would be wrong here.
+ENGLISH_ONLY_FLAG_REASON = "english_only"
+OTHER_LANGUAGE_FLAG_REASON = "other_language"
+
 
 def recommended_sample_n(
     conn, tier: str, min_n: int = 50, *, code_switch: bool = False
