@@ -270,7 +270,33 @@ Source: round-2 post-execution review of `docs/archive/PIPELINE_REVIEW_2026-07-1
 
 ## 🟢 Tier 4 — optional / nice-to-have
 
-(none currently — T9/T10/T14 remaining levers are Tier 3, see above; T13 moved to Done)
+### T28. Report `tied`-confidence Jyutping tokens upstream to canto-hk-g2p — deferred, waiting on more human-verified data
+
+**What**: canto-hk-g2p v2.0.0's `convert_candidates()` exposes per-token `confidence`
+("certain"/"ranked"/"tied") + `source`. `"tied"` = a rime-cantonese arbitrary tie-break with
+no real context-aware disambiguation signal — the highest-risk case for a wrong reading.
+
+**Decision (2026-07-19)**: disambiguation logic belongs in canto-hk-g2p itself, not as a
+pipeline-local `user_dict` patch (would duplicate/drift from upstream dictionary data). Any
+genuine gap gets reported as a GitHub issue on `typangaa/canto-hk-g2p` — problem listing
+only (token + example sentences + candidates), no suggested "correct" reading claimed.
+
+**Status**: ran a one-time offline audit (scanned `asr_agreement` where `text_verified=true`,
+collected every `tied`-confidence token via `_G2P.convert_candidates()`). Only **189**
+human-verified segments exist right now (gold tier via `pipe calibrate serve` — small,
+calibration is still early) — found 46 distinct tied tokens, 9 of them seen 2+ times
+(`嗰個` 9x, `呢啲` 7x, `使用` 3x, plus `成日`/`同行`/`立場`/`人物`/`教堂`/`入邊` 2x each).
+Owner decided to **wait for more human-verified data** before opening the issue — 189
+sentences is too small a sample to be confident which findings are real vs. noise.
+
+**To resume**: the audit script + full report + a draft GitHub issue body were written to
+the session scratchpad (ephemeral, not in this repo) — the script is short and reruns in
+seconds even against the full corpus (read-only via `connect_ro()`, no catalog writes), so
+just re-ask for the audit once the gold-tier verified count has grown meaningfully. No code
+changes needed in this repo either way — this is a reporting-only task, not an
+implementation.
+
+**Not done**: GitHub issue not opened, no `user_dict` override added anywhere (by design).
 
 ---
 
