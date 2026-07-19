@@ -86,6 +86,19 @@ Deliberately NOT adopted here: v1.8.0's `Pipeline(user_dict=...)` override
 `calibrate.sample` QA rejects first) and v1.9.0's `convert_candidates()`
 (a calibration-UI feature, not a g2p-node concern) — both tracked as
 follow-ups in pending_task.md rather than spec-first-guessed here.
+
+Library upgrade to v2.0.0 (2026-07-19, same day): BREAKING — `convert_detailed()`
+gained two new trailing tuple fields (`confidence`, `source`), so the fixed-arity
+`for _, jp, lang in tokens` unpack in `_convert_for_moss()` below raised
+`ValueError: too many values to unpack` on every call. Fixed with a starred
+catch-all (`for _, jp, lang, *_ in tokens`), per the library's own CHANGELOG
+migration guide — this node still has no use for `confidence`/`source`
+(same "calibration-UI feature, not a g2p-node concern" reasoning as
+`convert_candidates()` above), so they're discarded rather than threaded
+through. Reinstalled the editable package to pick up the matching version
+metadata (`uv pip install -e ~/Documents/canto-g2p` — the compiled extension
+and pyproject.toml version had already moved to 2.0.0, but the installed
+dist-info was stale at 1.9.0 until reinstall).
 """
 
 import logging
@@ -108,7 +121,7 @@ _G2P = _Pipeline()
 def _convert_for_moss(text: str) -> str:
     """Return space-separated Jyutping for Cantonese tokens only (no English/punct)."""
     tokens = _G2P.convert_detailed(text)
-    parts = [jp for _, jp, lang in tokens if lang == "yue"]
+    parts = [jp for _, jp, lang, *_ in tokens if lang == "yue"]
     return " ".join(parts)
 
 

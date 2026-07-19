@@ -295,6 +295,35 @@ what actually landed and when.)
 
 > Entries dated 2026-07-16 and earlier rotated out to `DECISIONS.md` (2026-07-19 cleanup pass) to keep this file to the recent working window — same rotation `PROGRESS.md` uses. Full history is in `DECISIONS.md`, chronological, nothing lost.
 
+### T26. Upgrade `canto-hk-g2p` 1.9.0 → 2.0.0 (breaking tuple-arity change) — done 2026-07-19
+- **What**: upstream `canto-hk-g2p` v2.0.0 (closes
+  [#12](https://github.com/typangaa/canto-hk-g2p/issues/12) and
+  [#13](https://github.com/typangaa/canto-hk-g2p/issues/13), both filed during T24) added
+  two new trailing fields — `confidence`, `source` — to `convert_detailed()`'s per-token
+  tuples, `(token, jyutping, lang)` → `(token, jyutping, lang, confidence, source)`.
+  `pipeline/nodes/g2p.py`'s `_convert_for_moss()` unpacked that tuple by fixed arity
+  (`for _, jp, lang in tokens`), so every `g2p_one()` call started raising
+  `ValueError: too many values to unpack (expected 3)` — caught internally and logged,
+  degrading silently to `jyutping="" / valid_fraction=0.0` (a hard reject) for every
+  segment, not a crash. Surfaced via 4 failing tests
+  (`test_g2p_node.py::test_text_to_jyutping_basic` /
+  `test_text_to_jyutping_excludes_english` / `test_g2p_one_valid_cantonese_text`,
+  `test_calibrate_node.py::test_jyutping_preview_valid_cantonese_text`).
+- **Fix (`pipeline/nodes/g2p.py`)**: unpack with a starred catch-all —
+  `for _, jp, lang, *_ in tokens` — per the library's own CHANGELOG migration guide.
+  `confidence`/`source` are not consumed here; same "calibration-UI feature, not a
+  `g2p`-node concern" scoping as `convert_candidates()` in T24 (surfacing polyphone
+  confidence to a human reviewer is a `pipe calibrate serve` UI feature, still not
+  started — see T24's "Not done" list). Module docstring updated with a dated note.
+- **Reinstall**: `uv pip install -e ~/Documents/canto-g2p` — the source repo's compiled
+  extension and `pyproject.toml` version had already moved to 2.0.0, but the `.venv`'s
+  editable-install dist-info metadata was stale at 1.9.0 until reinstalled;
+  `canto_hk_g2p.__version__` now correctly reads `"2.0.0"`.
+- **Verified**: full suite 472 passed / 0 failed (was 468 passed / 4 failed before this
+  fix). No corpus-wide reprocess needed this round — this was a pure regression fix
+  restoring prior behaviour, not a data-quality improvement like T24's tie-break/
+  phonology changes, so there's no `provenance` reset to run.
+
 ### T25. Prune stale excluded-tier rows from the QA queue + web UI button — done 2026-07-19
 - **What**: T23+T24 follow-up's `filter.decide` re-run (5,288 newly-excluded segments)
   left the `calibration_review` queue with rows still `decision='pending'` whose segment
@@ -734,7 +763,7 @@ what actually landed and when.)
   backfill needed to ship it safely).
 
 ### T15. Drain the reingest.pending backlog through the full DAG (found 2026-07-12) — done 2026-07-17
-- **What**: `docs/IO_OPTIMIZATION_PLAN.md` diagnosed Drive4's file-count skew (2.55M
+- **What**: `docs/archive/IO_OPTIMIZATION_PLAN.md` diagnosed Drive4's file-count skew (2.55M
   files, dentry-cache thrashing was the real `speaker.cluster` I/O bottleneck, not
   clustering compute or GPU availability — see that doc §1-2). Phase 0
   (`vm.vfs_cache_pressure=50`) and Phase 1 (archive-then-delete 1,310,284 dead legacy
