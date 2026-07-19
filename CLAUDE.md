@@ -30,6 +30,9 @@ Update `PROGRESS.md` at the end of every session (format at the bottom of this f
 🔴 data-trust-critical → 🟠 functional gaps → 🟡 engineering cleanup → 🟢 optional.
 **When a task completes, move it into the file's "Done" section (with date + commit) in
 the same session** — don't just delete it; the file is the record of fixed vs. open.
+**Done section rotation**: once it holds more than ~2 weeks of entries, move the older
+ones verbatim into a new dated `DECISIONS.md` section (nothing lost, just relocated) so
+the file stays to the recent working window — same pattern `PROGRESS.md` uses.
 
 If touching pipeline internals, also check the living status docs:
 `docs/REARCHITECTURE_IMPLEMENTATION_PLAN.md` §8 (milestones) and `docs/ORCHESTRATOR_PLAN.md`.
@@ -50,14 +53,15 @@ canto-hk-speech-pipeline/
 ├── DECISIONS.md             ← technical decision log — all project history lives here
 │
 ├── docs/
-│   ├── REARCHITECTURE_IMPLEMENTATION_PLAN.md  ← DAG node list, milestone status — most authoritative
+│   ├── REARCHITECTURE_IMPLEMENTATION_PLAN.md  ← milestone status (§8) — most authoritative
 │   ├── ORCHESTRATOR_PLAN.md                   ← `pipe run-many` concurrency design + status
 │   ├── LABEL_FRAMEWORK_SPEC.md                ← label tables + the A/B TTS-quality tier axis
 │   ├── QUALITY_SPEC.md                        ← filtering thresholds and rationale
 │   ├── MANIFEST_SCHEMA.md                     ← manifest field definitions + examples
 │   ├── KNOWN_ISSUES.md                        ← all known failure modes from prior attempts
 │   ├── SOURCE_GUIDE.md                        ← how to research and add new sources
-│   └── (others: JOURNAL_FIRST_PLAN, PIPELINE_SPEC, G2P_MIGRATION_NOTE, review docs …)
+│   ├── (others: PIPELINE_SPEC, G2P_MIGRATION_NOTE, IO_OPTIMIZATION_PLAN …)
+│   └── archive/                                ← executed/superseded plan+review docs — historical, not maintained
 │
 ├── sources/                 ← rthk_sources.yaml / youtube_channels.yaml / podcast_sources.yaml
 ├── config/
@@ -86,6 +90,16 @@ container); **segments** → 3-way sharded `/mnt/Drive{2,3,4}/canto/segments/` (
 Constraint 4). The repo-local `data/` directory is not the SSOT — `config/storage_layout.yaml` is.
 
 ---
+
+## Subtask delegation(agy via weir)
+
+Subtask please use **agy through weir**:
+
+```bash
+weir -c ~/.config/weir/weir.toml chat agy-gemini "<prompt>"   # online search
+weir -c ~/.config/weir/weir.toml chat agy-sonnet "<prompt>"   # coding tasks
+```
+agy report may appear in `~/.gemini/antigravity-cli/brain/<uuid>/<name>.md`
 
 ## Pipeline Architecture
 

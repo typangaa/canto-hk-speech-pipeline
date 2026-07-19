@@ -12,7 +12,7 @@
 > 一個 supervisor 入面)先再評估。
 >
 > **狀態**:草擬,等 owner 拍板先執行(2026-07-03)
-> **上游文件**:`REARCHITECTURE_IMPLEMENTATION_PLAN.md` §3.2(「Journal + catalog」已經畫咗個
+> **上游文件**:`docs/archive/REARCHITECTURE_IMPLEMENTATION_PLAN_DESIGN_DETAIL.md` §3.2(「Journal + catalog」已經畫咗個
 > 願景,呢份文件將佢寫成可執行嘅具體設計 + milestone + gate)
 > **觸發原因**:P2 backlog(2026-07-03)證實咗 DuckDB single-writer 唔止擋 GPU-vs-GPU,
 > 連 GPU-vs-CPU、任何兩個 `pipe run <node>` process 都唔可以同時攞 RW connection —— 依家
@@ -287,7 +287,7 @@ batch 會被重新 discover、重新處理一次。**呢個係刻意接受嘅代
    find-replace 為主),但每個 apply 之後自己驗證(唔係 hard-constraint 但係
    crash-safety-critical,跟 P1/P2 一貫「delegate mechanical、自己 review」嘅做法)。
 4. **更新 `test_orchestrator.py`** 反映新嘅 resume 語義(§5.3)。
-5. **Retire 直寫 code path**、更新 memory/`REARCHITECTURE_IMPLEMENTATION_PLAN.md` §3.2
+5. **Retire 直寫 code path**、更新 memory/`docs/archive/REARCHITECTURE_IMPLEMENTATION_PLAN_DESIGN_DETAIL.md` §3.2
    標記做已執行,呢個 pattern 成為之後所有 P3/P4 新 node(`filter.*`/`g2p`/`speaker.*`/
    `segment.*`)嘅預設寫法。
 
@@ -327,4 +327,4 @@ batch 會被重新 discover、重新處理一次。**呢個係刻意接受嘅代
 ---
 
 ## Related
-[[canto-corpus-rearchitecture]] · `docs/REARCHITECTURE_IMPLEMENTATION_PLAN.md` §3.2 · `docs/PIPELINE_REARCHITECTURE_PLAN.md`
+[[canto-corpus-rearchitecture]] · `docs/archive/REARCHITECTURE_IMPLEMENTATION_PLAN_DESIGN_DETAIL.md` §3.2 · `docs/PIPELINE_REARCHITECTURE_PLAN.md`

@@ -14,7 +14,7 @@
 > 任何要碰 catalog 嘅動作(§3 Phase C 全部)必須等佢完;純磁碟動作(Phase A)同
 > git 動作(Phase B)唔受影響。
 >
-> 上一份:`docs/PIPELINE_REVIEW_2026-07-11.md`(EXECUTED,16 issues 中 11 RESOLVED)。
+> 上一份:`docs/archive/PIPELINE_REVIEW_2026-07-11.md`(EXECUTED,16 issues 中 11 RESOLVED)。
 > 本 doc 嘅 issue 編號由 **#17** 起,同上份唔重疊,方便交叉引用。
 
 ---
@@ -89,7 +89,7 @@ punctuation-blind agreement)。
 
 **B1 — canto_ft 退役 + throughput 修正**(今日嘅工作):
 `pipeline/nodes/asr.py`、`pipeline/cli.py`、`tests/test_asr_node.py`、`DECISIONS.md`、
-`pending_task.md`、`CLAUDE.md`、本 doc + `docs/PIPELINE_REVIEW_2026-07-11.md` 嘅
+`pending_task.md`、`CLAUDE.md`、本 doc + `docs/archive/PIPELINE_REVIEW_2026-07-11.md` 嘅
 pointer 更新、`PROGRESS.md`。建議 message:
 `Retire canto_ft ASR backend; fix qwen3_asr batch starvation (2.4x); 2026-07-13 review docs`
 
@@ -225,4 +225,4 @@ proxy 同 CTC entropy 留作第二階段(如 precision 唔達標先加)。
 | `DECISIONS.md` | 2026-07-13 entry 補 addendum:batch-size mismatch 發現 + 修正(17.4→42.6/s)|
 | `pending_task.md` | T15 point 13 補實測數;新 point 14(batch64);新 **T16** task(auto_gold gate 重建,引用本 doc §5)|
 | `PROGRESS.md` | 補返缺咗嘅 Session 2026-07-12 entry(T15 admission/embed/IO plan)+ 新 Session 2026-07-13 entry(canto_ft 退役 + throughput 調查 + 本 review)|
-| `docs/PIPELINE_REVIEW_2026-07-11.md` | 頂部加 pointer 指向本 doc(status line 唔改 — 嗰份係已完成嘅歷史記錄)|
+| `docs/archive/PIPELINE_REVIEW_2026-07-11.md` | 頂部加 pointer 指向本 doc(status line 唔改 — 嗰份係已完成嘅歷史記錄)|

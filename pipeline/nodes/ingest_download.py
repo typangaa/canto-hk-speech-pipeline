@@ -513,6 +513,15 @@ def _read_staged_rows() -> list[dict]:
     return rows
 
 
+def _prune_old_snapshots(pattern: str, keep: int = 5) -> None:
+    """Keep only the `keep` most recent archived staging snapshots matching
+    `pattern` under METADATA_DIR; older ones are just committed history and
+    unbounded accumulation is pure disk clutter."""
+    snapshots = sorted(METADATA_DIR.glob(pattern), key=lambda p: p.stat().st_mtime)
+    for stale in snapshots[:-keep]:
+        stale.unlink()
+
+
 async def run_ingest_commit(*, conn=None) -> dict:
     """conn: optional pre-opened DuckDB connection (or cursor) — pass one when
     running alongside other nodes under `pipe run-many` (see filter.py's
@@ -539,6 +548,7 @@ async def run_ingest_commit(*, conn=None) -> dict:
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         archived_to = METADATA_DIR / f"ingest_download_staging.committed-{stamp}.jsonl"
         STAGING_FILE.rename(archived_to)
+        _prune_old_snapshots("ingest_download_staging.committed-*.jsonl")
 
     log.info(
         f"ingest.commit DONE: {len(rows)} row(s) landed in raw_files, "

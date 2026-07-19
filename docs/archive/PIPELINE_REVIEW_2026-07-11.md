@@ -1,6 +1,6 @@
 # Pipeline Comprehensive Review + Cleanup Plan — 2026-07-11
 
-> **➡️ 後繼版本:`docs/PIPELINE_REVIEW_2026-07-13.md`**(canto_ft 退役後嘅新一輪 review;
+> **➡️ 後繼版本:`docs/archive/PIPELINE_REVIEW_2026-07-13.md`**(canto_ft 退役後嘅新一輪 review;
 > issue 編號 #17 起接續本 doc 嘅 #1–16;本 doc 唔再更新,只作歷史記錄)。
 >
 > **Status**: **EXECUTED + PUSHED 2026-07-11**。全部四個 phase(A/B/C/D)已完成並逐一驗證

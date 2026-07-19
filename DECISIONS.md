@@ -60,8 +60,8 @@
 **Decision**: New segments going forward are written as **FLAC** (lossless), not 16-bit PCM WAV. Hard Constraint #6 is reworded from "48 kHz mono master, never lower" to "48 kHz mono **lossless** master, never lower, never lossy" — WAV and FLAC are both acceptable containers, Opus/MP3/any lossy codec is never acceptable as a segment master. Existing 843G of legacy WAV segments are **not** re-encoded (no re-transcoding of an existing master, per the §3 non-destructive discipline already established for raw audio) — the decode layer already reads FLAC natively via `soundfile`, so mixed WAV+FLAC masters are transparent to every downstream consumer (filter, G2P, manifest export, canto-tts training).
 **Alternatives considered**:
   - Stay on WAV (rejected): under the current "keep Stage-6-rejected candidate clips" retention policy (see [[canto-corpus-rearchitecture]] memory, 2026-07-04 capacity investigation), every new raw file segmented continues to produce ~2.46× more physical bytes than its catalog-tracked hours (Stage 3 writes every candidate clip; Stage 6 only promotes the QC-passing subset). Projected forward against the ~4.3 TiB of free space expected after the P5 raw→opus transcode, WAV realistically yields only ~5,300 new catalog-hours (~6,300h total with the existing 1,004.5h) — clears the 5× scale target but **not** the 10× target (10,000h).
-  - Opus (lossy) as segment master (rejected): would trivially clear any realistic scale target (~31,800 new catalog-hours even after the 2.46× overhead), but a lossy-compressed **master** risks vocoder/codec training degradation (see `docs/REARCHITECTURE_IMPLEMENTATION_PLAN.md` §13.1 — EURASIP MP3-vocoder findings, Valin SSW 2019 LPCNet+low-bitrate-opus, arXiv:2111.02380) and would permanently foreclose ever re-deriving a truly lossless master. Opus remains the right choice for **raw** (P5), which is a re-downloadable/re-segmentable intermediate, not a training master.
-**Rationale**: FLAC yields ~9,650 new catalog-hours even after applying the 2.46× reject-clip overhead (~10,650h total) — the only format among the three that reliably clears the 10× (10,000h) scale target under the current retention policy, while remaining fully lossless. This closes `docs/REARCHITECTURE_IMPLEMENTATION_PLAN.md` §10 Q1 ("10× segments format leans FLAC, confirm with P6 projection data before finalizing") — the 2026-07-04 capacity investigation numbers serve as that confirming projection. Owner sign-off given 2026-07-04. See CLAUDE.md Hard Constraint #6 (reworded) and `docs/REARCHITECTURE_IMPLEMENTATION_PLAN.md` §10 Q1.
+  - Opus (lossy) as segment master (rejected): would trivially clear any realistic scale target (~31,800 new catalog-hours even after the 2.46× overhead), but a lossy-compressed **master** risks vocoder/codec training degradation (see `docs/archive/REARCHITECTURE_IMPLEMENTATION_PLAN_DESIGN_DETAIL.md` §13.1 — EURASIP MP3-vocoder findings, Valin SSW 2019 LPCNet+low-bitrate-opus, arXiv:2111.02380) and would permanently foreclose ever re-deriving a truly lossless master. Opus remains the right choice for **raw** (P5), which is a re-downloadable/re-segmentable intermediate, not a training master.
+**Rationale**: FLAC yields ~9,650 new catalog-hours even after applying the 2.46× reject-clip overhead (~10,650h total) — the only format among the three that reliably clears the 10× (10,000h) scale target under the current retention policy, while remaining fully lossless. This closes `docs/archive/REARCHITECTURE_IMPLEMENTATION_PLAN_DESIGN_DETAIL.md` §10 Q1 ("10× segments format leans FLAC, confirm with P6 projection data before finalizing") — the 2026-07-04 capacity investigation numbers serve as that confirming projection. Owner sign-off given 2026-07-04. See CLAUDE.md Hard Constraint #6 (reworded) and `docs/archive/REARCHITECTURE_IMPLEMENTATION_PLAN_DESIGN_DETAIL.md` §10 Q1.
 
 ## 2026-07-04 — Raw backlog format: FLAC confirmed by owner; new-download policy clarified
 **Decision (owner confirmed)**: the existing ~1.6T raw WAV backlog transcodes to **FLAC**, not Opus — reversing §7.1's original opus choice for this one item. Owner's rationale: consistency with the segments FLAC decision and zero additional generation loss outweighs the ~420GB extra space (FLAC ~570GiB vs opus's estimated ~150GiB, both measured/estimated 2026-07-04).
@@ -70,7 +70,7 @@
 **Scope note**: the FLAC-vs-opus question only ever applied to the existing WAV backlog, never to future downloads (§7.1 already routed future downloads around this choice via the native-container policy) — this was confirmed, not new information, but worth restating since it resolves the "is this pipeline only handling historical data" concern raised when this was reopened.
 
 ## 2026-07-04 — Raw master format: FLAC vs Opus reopened, then RESOLVED (see entry above)
-**Status**: RESOLVED — owner confirmed FLAC for the existing backlog (see "Raw backlog format" entry above, which also covers the new-download-policy follow-up question). Kept below for the full tradeoff analysis that led to that confirmation. Originally this entry asserted FLAC as settled without checking prior context first — recorded here as-is as the analysis trail. This entry originally asserted FLAC as settled; on closer reading of `docs/REARCHITECTURE_IMPLEMENTATION_PLAN.md` §7.1 ("Raw → opus — owner 已拍板壓縮路線"), the opus choice was **already an explicit, deliberated 2026-07-02 owner decision** (see that plan's header: "已拍板決定 ... 4. Raw 容量策略 = 壓縮保留(opus;唔行 transient-delete)") that already weighed the exact "second lossy generation" risk raised below (§7.1's own "誠實 caveat" paragraph) and accepted it explicitly, while separately solving the future-ingest problem (new downloads keep native bestaudio container, never round-trip through WAV at all — so this tradeoff never applies to anything downloaded from 2026-07-02 onward, regardless of which way this reopened question resolves). This correction should not have been declared unilaterally without weighing §7.1's existing reasoning; it is presented here as a reopened question with new measured data, for the owner to re-confirm or reaffirm the original opus call.
+**Status**: RESOLVED — owner confirmed FLAC for the existing backlog (see "Raw backlog format" entry above, which also covers the new-download-policy follow-up question). Kept below for the full tradeoff analysis that led to that confirmation. Originally this entry asserted FLAC as settled without checking prior context first — recorded here as-is as the analysis trail. This entry originally asserted FLAC as settled; on closer reading of `docs/archive/REARCHITECTURE_IMPLEMENTATION_PLAN_DESIGN_DETAIL.md` §7.1 ("Raw → opus — owner 已拍板壓縮路線"), the opus choice was **already an explicit, deliberated 2026-07-02 owner decision** (see that plan's header: "已拍板決定 ... 4. Raw 容量策略 = 壓縮保留(opus;唔行 transient-delete)") that already weighed the exact "second lossy generation" risk raised below (§7.1's own "誠實 caveat" paragraph) and accepted it explicitly, while separately solving the future-ingest problem (new downloads keep native bestaudio container, never round-trip through WAV at all — so this tradeoff never applies to anything downloaded from 2026-07-02 onward, regardless of which way this reopened question resolves). This correction should not have been declared unilaterally without weighing §7.1's existing reasoning; it is presented here as a reopened question with new measured data, for the owner to re-confirm or reaffirm the original opus call.
 
 **The tradeoff, with both existing (§7.1) and new (this session) reasoning**: `raw_files` currently has 5,065.1 raw-hours; no deletion of raw after segmentation has ever been implemented (grepped `pipeline/` — no `unlink`/`rmtree` tied to raw exists), so despite `config/storage_layout.yaml`'s "raw policy: TRANSIENT" comment, raw is in practice retained indefinitely — for the same reason rejected segment candidate clips are kept (§ above): to allow future re-derivation (better diarization/VAD models, revised clipping policy) without re-downloading. Any audio kept for future re-derivation is functionally a master and must follow Hard Constraint #6 (lossless, never lossy) — the same logic that put segments on FLAC applies to raw.
 **New evidence** (measured via `ffprobe` on real files, not assumed): YouTube-sourced raw's original codec is already **Opus** (48kHz stereo — YouTube's own delivery format), RTHK-sourced raw's original codec is **AAC 32kHz/64kbps** (even lower quality). Our "raw" WAV is therefore *never* a first-generation lossless master — it is already a decode of lossy source audio. Re-compressing it to Opus again would stack a **second lossy generation** on top (lossy→PCM→lossy is not bit-identical; artifacts compound) — a form of generation loss the project already flagged as a risk for the 246 never-segmented raw files, which turns out to generalize to *all* retained raw, not just those 246. FLAC avoids this entirely: it freezes the current (already source-lossy, but stable) bit content with zero additional loss.
@@ -91,7 +91,7 @@
   - Dataset engineering guides (SpeechBrain/Kaldi/Emilia-Pipe practice) explicitly say: run segmentation/diarization/VAD on the original, highest-quality source **before** any re-compression (compression-induced temporal smearing shifts boundaries). This also answers the owner's earlier "why not harmonize then segment?" question with an external, citable norm — though with point 3 (no transcode at all) the sequencing question is now moot.
 **Cost accepted**: native containers ≈ ~62GB/1000h raw at current source mix (podcast 44% @192kbps MP3, YouTube 42% @~106kbps opus stereo, RTHK 14% @64kbps AAC) vs ~22GB/1000h if harmonized — i.e. ~40GB extra per 1000 raw-hours. Accepted because the binding storage constraint is the segments tier (2.46× reject-clip overhead), not raw; even +10,000 raw-hours costs only ~400GB extra.
 **Alternatives considered**: (a) harmonize all three sources to mono opus 48kbps after segmentation (max savings, rejected — violates archival practice, poisons any future re-segmentation, adds segment-state tracking complexity); (b) hybrid harmonize-podcast-only (captures ~70% of savings from the fattest source, rejected — same risks in kind, and the savings don't matter given raw isn't the bottleneck).
-**Follow-through**: `docs/REARCHITECTURE_IMPLEMENTATION_PLAN.md` §6 `ingest.download` row updated to "all native, zero transcode"; `segment.vad_cut` row updated WAV→FLAC. The implementation gap (yaml still hardcodes `audio_format: "wav"`, no `ingest.download` node) remains open and is now the concrete next fix.
+**Follow-through**: `docs/archive/REARCHITECTURE_IMPLEMENTATION_PLAN_DESIGN_DETAIL.md` §6 `ingest.download` row updated to "all native, zero transcode"; `segment.vad_cut` row updated WAV→FLAC. The implementation gap (yaml still hardcodes `audio_format: "wav"`, no `ingest.download` node) remains open and is now the concrete next fix.
 
 ## 2026-07-10 — whisper_v3 retired; `auto_gold` statistical-confidence tier added; `--min-agreement` manifest cuts
 **Decision (owner confirmed via AskUserQuestion)**: `Systran/faster-whisper-large-v3+zh` (`whisper_v3`) is retired from the ASR pipeline — `ASR_MODELS["whisper_v3"]["enabled"] = False` in `pipeline/nodes/asr.py`, `pipeline/cli.py` refuses to dispatch it, and `asr.agreement` excludes its `asr_results` text from both the cross-model agreement score and `best_text` candidacy. Its ~618,695 historical rows are kept for audit only, never read by any live node. `tiers.tier` gains a 4th value, `auto_gold`: `agreement >= 0.90 AND canto_ft_confidence > 0.8`, computed 3-way (`canto_ft`/`qwen3_asr`/`sense_voice`) — a **statistical-confidence** tier, explicitly NOT equivalent to human-verified `gold` (`asr_agreement.text_verified` is untouched by it), sample-QA'd via `calibrate.sample(tier='auto_gold')` rather than exhaustively reviewed. `manifest.build`/`export` gained an optional `--min-agreement` cut (writes to separate `manifest_agreeNNN.jsonl` files, never overwriting the default export — hard constraint #9 preserved) for producing smaller, higher-confidence dataset subsets on demand.
@@ -122,11 +122,11 @@
 **Rationale**: the owner judged the 2026-07-10 bars too permissive for what should count as gold-equivalent/manifest-eligible without human review; tightening them (and adding a dedicated `bronze` floor tier that gets the heaviest QA scrutiny) trades corpus size for higher average per-tier trustworthiness, while the risk-scaled QA rate concentrates human review effort on the tier most likely to contain errors instead of spreading it flat across all three.
 
 ## 2026-07-11 — Repo hygiene cleanup: HC#9 remediation, legacy script retirement, requirements.txt removal
-**Decision (owner confirmed via `docs/PIPELINE_REVIEW_2026-07-11.md`, four premises confirmed via AskUserQuestion)**: executed Phase C of the cleanup plan in one commit — (1) `reconstruct.py`, `reconstruct_dead_sources.txt`, and `scripts/10_enrich_manifest.py` removed from the public repo tip via `git rm` (Hard Constraint #9 violation — these are dataset-reconstruction-recipe tooling, which the zero-risk policy explicitly forbids publishing, even though they contain no source URLs or audio themselves); a local-only copy is kept in `metadata/release_dormant/` (gitignored, never committed) for if the dormant release policy is ever reactivated. (2) 17 further legacy `scripts/*.py` removed via `git rm` — all fully superseded by ported `pipeline/nodes/` DAG nodes (00_reingest, 01_discover, 02_download, 03_segment, 03b_acoustic_pregate, 04_transcribe, 05_calibrate, 06_filter, 07_g2p, 08_speaker_id, 09_manifest, 11_audio_tag, 12_language_id, 13_overlap_detect, backfill_downloaded_jsonl, fix_stale_asr_model_manifest, fix_stale_paths, test_sensevoice) — one-off backfill/hotfix scripts already verified complete in prior sessions, ported stages already running in production. `scripts/10_report.py` is explicitly **kept** — no `report.build` node exists yet (Issue #3 in the review doc), so it remains as the port reference until that node lands. (3) `requirements.txt` removed via `git rm` — it was stale (missing duckdb/qwen-asr/funasr/opencc) and dual-tracked against `pyproject.toml`+`uv.lock`, a genuine risk of environment breakage if someone installed from it. `README.md` updated to point installation/usage at `uv pip install -e .` and `python -m pipeline.cli run <node>` instead.
+**Decision (owner confirmed via `docs/archive/PIPELINE_REVIEW_2026-07-11.md`, four premises confirmed via AskUserQuestion)**: executed Phase C of the cleanup plan in one commit — (1) `reconstruct.py`, `reconstruct_dead_sources.txt`, and `scripts/10_enrich_manifest.py` removed from the public repo tip via `git rm` (Hard Constraint #9 violation — these are dataset-reconstruction-recipe tooling, which the zero-risk policy explicitly forbids publishing, even though they contain no source URLs or audio themselves); a local-only copy is kept in `metadata/release_dormant/` (gitignored, never committed) for if the dormant release policy is ever reactivated. (2) 17 further legacy `scripts/*.py` removed via `git rm` — all fully superseded by ported `pipeline/nodes/` DAG nodes (00_reingest, 01_discover, 02_download, 03_segment, 03b_acoustic_pregate, 04_transcribe, 05_calibrate, 06_filter, 07_g2p, 08_speaker_id, 09_manifest, 11_audio_tag, 12_language_id, 13_overlap_detect, backfill_downloaded_jsonl, fix_stale_asr_model_manifest, fix_stale_paths, test_sensevoice) — one-off backfill/hotfix scripts already verified complete in prior sessions, ported stages already running in production. `scripts/10_report.py` is explicitly **kept** — no `report.build` node exists yet (Issue #3 in the review doc), so it remains as the port reference until that node lands. (3) `requirements.txt` removed via `git rm` — it was stale (missing duckdb/qwen-asr/funasr/opencc) and dual-tracked against `pyproject.toml`+`uv.lock`, a genuine risk of environment breakage if someone installed from it. `README.md` updated to point installation/usage at `uv pip install -e .` and `python -m pipeline.cli run <node>` instead.
 
 **Owner-confirmed parameters**: `git rm` + preserve git history — no `git filter-repo` purge. Old versions of `reconstruct.py`/`reconstruct_dead_sources.txt`/`scripts/10_enrich_manifest.py` remain retrievable from history (`git show <sha>:path`); the owner is aware of and accepts this (a full history purge was considered and explicitly rejected as unnecessary — the actual leaked surface is a reconstruction *methodology*, not source URLs or audio, which were never committed). Legacy scripts handled with tiered treatment (not a blanket wipe) — only fully-ported, verified-complete files were removed.
 
-**Not done in this commit**: **push** — the commit is local only; `docs/PIPELINE_REVIEW_2026-07-11.md` §4 requires owner review of the diff before pushing (this also carries Issue #14's pre-existing 8-commit-behind-origin backlog along with it). Phase D (`.venv_ina/` 6.8GB removal, a pure-disk operation with no git or catalog impact) was executed separately in the same session, immediately after this commit — zero-reference confirmed by a final `grep -r venv_ina|inaSpeech` across the codebase before deletion.
+**Not done in this commit**: **push** — the commit is local only; `docs/archive/PIPELINE_REVIEW_2026-07-11.md` §4 requires owner review of the diff before pushing (this also carries Issue #14's pre-existing 8-commit-behind-origin backlog along with it). Phase D (`.venv_ina/` 6.8GB removal, a pure-disk operation with no git or catalog impact) was executed separately in the same session, immediately after this commit — zero-reference confirmed by a final `grep -r venv_ina|inaSpeech` across the codebase before deletion.
 
 **Rationale**: closes the one High-severity finding from the 2026-07-11 pipeline review (public repo carrying reconstruction tooling that contradicts the project's own zero-risk data policy) while using the same "port verified, delete source, rely on git history as archive" discipline the project already uses for one-off backfill scripts — consistent with the external best-practice research cited in the review doc (§5: "one-off backfill scripts: verify then delete from git, rely on history as archive").
 
@@ -151,7 +151,7 @@ Given both a hard architectural speed ceiling and comparably poor accuracy, owne
 
 **Rationale**: `canto_ft` was both the throughput bottleneck (hard architectural ceiling, not fixable by scheduling/batching changes explored this session) and a comparably poor accuracy performer — the same combination that justified `whisper_v3`'s retirement 3 days earlier. Removing it and fixing the newly-discovered `sense_voice` starvation bug together should bring T15's ETA down substantially from the originally-projected ~51h; real throughput to be confirmed once the sequential `qwen3_asr` → `sense_voice` run settles.
 
-**Addendum (same day, later) — third throughput bug: CLI `--batch` default starved `qwen3_asr`'s tuned batch capacity (fixed, 2.4× gain)**: with the sequential-exclusive script running at the CLI default `--batch 8`, `qwen3_asr` on both GPUs measured only **~17.4/s combined** with 5-6GB/24.5GB VRAM and ~30-43% SM per GPU — suspiciously under-utilized. Code trace: the CLI's `--batch` flag sets the supervisor's per-dispatch chunk size (`_batches()` in `pipeline/nodes/asr.py`), while `Qwen3ASRWorker.load_model()` sets `max_inference_batch_size=64` with a 2026-07-07 empirical tuning curve in the comment (8≈8.7/s/GPU, 64=30.1/s/GPU) — i.e. the supervisor was only ever feeding 8-item chunks to a model tuned for 64. Fix: added `--batch 64` to both invocations in `run_t15_asr_sequential.sh` and relaunched. Measured result: **42.6/s combined steady-state** (2.4× the batch-8 rate, above the 36.3/s historical dual-GPU benchmark), VRAM 18-21GB/GPU, 50-62% SM, zero errors/OOM over 100k+ segments. T15's qwen3_asr pass ETA dropped to ~3.5-4h. Follow-up (tracked in `docs/PIPELINE_REVIEW_2026-07-13.md` Issue #19): make this structural — per-model `dispatch_batch` in `ASR_MODELS` or raise the CLI default, so a future bare `pipe run asr.transcribe` doesn't silently run 2.4× slower.
+**Addendum (same day, later) — third throughput bug: CLI `--batch` default starved `qwen3_asr`'s tuned batch capacity (fixed, 2.4× gain)**: with the sequential-exclusive script running at the CLI default `--batch 8`, `qwen3_asr` on both GPUs measured only **~17.4/s combined** with 5-6GB/24.5GB VRAM and ~30-43% SM per GPU — suspiciously under-utilized. Code trace: the CLI's `--batch` flag sets the supervisor's per-dispatch chunk size (`_batches()` in `pipeline/nodes/asr.py`), while `Qwen3ASRWorker.load_model()` sets `max_inference_batch_size=64` with a 2026-07-07 empirical tuning curve in the comment (8≈8.7/s/GPU, 64=30.1/s/GPU) — i.e. the supervisor was only ever feeding 8-item chunks to a model tuned for 64. Fix: added `--batch 64` to both invocations in `run_t15_asr_sequential.sh` and relaunched. Measured result: **42.6/s combined steady-state** (2.4× the batch-8 rate, above the 36.3/s historical dual-GPU benchmark), VRAM 18-21GB/GPU, 50-62% SM, zero errors/OOM over 100k+ segments. T15's qwen3_asr pass ETA dropped to ~3.5-4h. Follow-up (tracked in `docs/archive/PIPELINE_REVIEW_2026-07-13.md` Issue #19): make this structural — per-model `dispatch_batch` in `ASR_MODELS` or raise the CLI default, so a future bare `pipe run asr.transcribe` doesn't silently run 2.4× slower.
 
 ## 2026-07-13 — `calibrate serve` offline mode: JSON snapshot reads + JSONL decision buffer (never blocks on the catalog)
 **Problem**: `pipe calibrate serve` crashed outright at startup (`connect_ro(CATALOG_PATH).close()` in `cmd_calibrate_serve`, no retry) whenever a long batch node (e.g. T15's `asr.transcribe`) held the DuckDB writer lock — confirmed live against the real catalog while T15 was mid-run. Worse, even the 2026-07-10 per-request-connection redesign (short-lived connections instead of one held for the whole server session) only helps with *brief* overlaps: DuckDB's file lock is per-process and held for a batch node's ENTIRE runtime (hours), so `connect_ro()` fails for every single read too, not just writes, for the whole duration.
@@ -166,10 +166,10 @@ Given both a hard architectural speed ceiling and comparably poor accuracy, owne
 
 **Rationale**: the owner's proposed shape (buffer decisions to JSON, push to DB whenever free) was the right fix for the actual constraint — a multi-hour writer hold, not a brief race — and unifying "always buffer" (rather than "buffer only when busy") keeps the write path simple and consistent regardless of catalog availability, matching the project's general preference for one code path over conditional branches where the cost is low.
 
-**Addendum (same day, later) — third throughput bug: CLI `--batch` default starved `qwen3_asr`'s tuned batch capacity (fixed, 2.4× gain)**: with the sequential-exclusive script running at the CLI default `--batch 8`, `qwen3_asr` on both GPUs measured only **~17.4/s combined** with 5-6GB/24.5GB VRAM and ~30-43% SM per GPU — suspiciously under-utilized. Code trace: the CLI's `--batch` flag sets the supervisor's per-dispatch chunk size (`_batches()` in `pipeline/nodes/asr.py`), while `Qwen3ASRWorker.load_model()` sets `max_inference_batch_size=64` with a 2026-07-07 empirical tuning curve in the comment (8≈8.7/s/GPU, 64=30.1/s/GPU) — i.e. the supervisor was only ever feeding 8-item chunks to a model tuned for 64. Fix: added `--batch 64` to both invocations in `run_t15_asr_sequential.sh` and relaunched. Measured result: **42.6/s combined steady-state** (2.4× the batch-8 rate, above the 36.3/s historical dual-GPU benchmark), VRAM 18-21GB/GPU, 50-62% SM, zero errors/OOM over 100k+ segments. T15's qwen3_asr pass ETA dropped to ~3.5-4h. Follow-up (tracked in `docs/PIPELINE_REVIEW_2026-07-13.md` Issue #19): make this structural — per-model `dispatch_batch` in `ASR_MODELS` or raise the CLI default, so a future bare `pipe run asr.transcribe` doesn't silently run 2.4× slower.
+**Addendum (same day, later) — third throughput bug: CLI `--batch` default starved `qwen3_asr`'s tuned batch capacity (fixed, 2.4× gain)**: with the sequential-exclusive script running at the CLI default `--batch 8`, `qwen3_asr` on both GPUs measured only **~17.4/s combined** with 5-6GB/24.5GB VRAM and ~30-43% SM per GPU — suspiciously under-utilized. Code trace: the CLI's `--batch` flag sets the supervisor's per-dispatch chunk size (`_batches()` in `pipeline/nodes/asr.py`), while `Qwen3ASRWorker.load_model()` sets `max_inference_batch_size=64` with a 2026-07-07 empirical tuning curve in the comment (8≈8.7/s/GPU, 64=30.1/s/GPU) — i.e. the supervisor was only ever feeding 8-item chunks to a model tuned for 64. Fix: added `--batch 64` to both invocations in `run_t15_asr_sequential.sh` and relaunched. Measured result: **42.6/s combined steady-state** (2.4× the batch-8 rate, above the 36.3/s historical dual-GPU benchmark), VRAM 18-21GB/GPU, 50-62% SM, zero errors/OOM over 100k+ segments. T15's qwen3_asr pass ETA dropped to ~3.5-4h. Follow-up (tracked in `docs/archive/PIPELINE_REVIEW_2026-07-13.md` Issue #19): make this structural — per-model `dispatch_batch` in `ASR_MODELS` or raise the CLI default, so a future bare `pipe run asr.transcribe` doesn't silently run 2.4× slower.
 
 ## 2026-07-13 — Issue #20 fix: `char_agreement()` punctuation/digit normalization (T16 step 1)
-**Problem**: `char_agreement()` (`pipeline/nodes/asr.py`) compared raw ASR text with zero normalization. `qwen3_asr` (AR, transformers) infers punctuation from LM context; `sense_voice` (CTC, funasr) never emits punctuation. Comparing the two raw strings systematically deflated cross-model agreement on punctuation alone — confirmed as the top AR-vs-CTC comparison pitfall by the targeted external research in `docs/PIPELINE_REVIEW_2026-07-13.md` §5 Q3. With only 2 active models post-`canto_ft`-retirement, agreement is the sole trust signal feeding `tier.assign`, so this bias directly skews the tier distribution. T16 (rebuilding the `auto_gold` gate) requires this fixed *before* the agreement-distribution analysis, or the analysis itself is biased.
+**Problem**: `char_agreement()` (`pipeline/nodes/asr.py`) compared raw ASR text with zero normalization. `qwen3_asr` (AR, transformers) infers punctuation from LM context; `sense_voice` (CTC, funasr) never emits punctuation. Comparing the two raw strings systematically deflated cross-model agreement on punctuation alone — confirmed as the top AR-vs-CTC comparison pitfall by the targeted external research in `docs/archive/PIPELINE_REVIEW_2026-07-13.md` §5 Q3. With only 2 active models post-`canto_ft`-retirement, agreement is the sole trust signal feeding `tier.assign`, so this bias directly skews the tier distribution. T16 (rebuilding the `auto_gold` gate) requires this fixed *before* the agreement-distribution analysis, or the analysis itself is biased.
 
 **Decision**: added `_normalize_for_agreement()` in `pipeline/nodes/asr.py`, called from inside `char_agreement()` only — strips all Unicode punctuation (`unicodedata.category(ch).startswith("P")`, covers ASCII and CJK marks alike without a hand-maintained charset) and folds Arabic/full-width digits to CJK numerals (`0-9` and full-width `０-９` → `〇一二三四五六七八九` via `str.translate`) before running `difflib.SequenceMatcher`. Comparison-only: `compute_agreement_row()`'s `best_text` and the stored `asr_results`/`asr_agreement` text are unaffected — normalization never touches what gets persisted, only what gets compared.
 
@@ -360,7 +360,7 @@ under a large backlog (would need a large-N synthetic catalog fixture to be mean
 `canto_ft` retired 2026-07-13 (see that day's entry above) — `canto_ft_confidence` is
 always `NULL` for every segment processed since, so the gate failed closed and new
 segments capped at silver/bronze regardless of how good their ASR agreement was
-(`docs/PIPELINE_REVIEW_2026-07-13.md` Issue #17). Separately, `char_agreement()` compared
+(`docs/archive/PIPELINE_REVIEW_2026-07-13.md` Issue #17). Separately, `char_agreement()` compared
 raw ASR text with no punctuation/digit normalization, systematically deflating agreement
 between `qwen3_asr` (AR, infers punctuation) and `sense_voice` (CTC, emits none) — fixed
 2026-07-13 in code (`_normalize_for_agreement()`, Issue #20) but not yet applied to
@@ -527,7 +527,7 @@ throughout, unaffected by this change.
 
 ## 2026-07-16 — `upsert_rows()` performance fix: closed out, verified live at real scale (45×+)
 
-Completed the last blocked steps of `docs/UPSERT_PERFORMANCE_FIX_PLAN.md` (started
+Completed the last blocked steps of `docs/archive/UPSERT_PERFORMANCE_FIX_PLAN.md` (started
 2026-07-15, code+tests done that day but validation blocked on a live `speaker.cluster`
 run holding the writer lock — see that file's prior status line). The lock freed
 overnight; re-ran `pytest tests/ -q` clean at **357/357** (all 3 previously-blocked
@@ -950,3 +950,285 @@ holds pre-reprocess (un-tie-broken) `jyutping` strings for every already-shipped
 Folded into T23's existing pending `filter.decide` re-run + manifest re-export
 follow-up (see `pending_task.md`) rather than re-exporting twice for two separate
 catalog changes landing the same week. Full detail: `pending_task.md` T24.
+
+---
+
+## 2026-07-19 — Documentation/folder cleanup pass: `pending_task.md` Done-section rotation
+
+`pending_task.md`'s Done section had grown to 1017 lines (78% of the file) with no
+retention — same problem `PROGRESS.md` hit. Owner approved (via a folder-structure review
+session) periodically moving old Done entries here instead, mirroring how `PROGRESS.md`
+now rotates to `PROGRESS_archive_*.md`. Cutoff for this rotation: Done entries dated
+2026-07-16 and earlier moved below verbatim (content unchanged, only relocated); entries
+dated 2026-07-17 onward stay in `pending_task.md` as the active recent-work window. Same
+files also had a related cleanup this session: `docs/PIPELINE_REVIEW_2026-07-11.md`,
+`docs/PIPELINE_REVIEW_2026-07-13.md`, `docs/UPSERT_PERFORMANCE_FIX_PLAN.md`, and
+`docs/JOURNAL_FIRST_PLAN.md` (all fully executed/superseded) moved to `docs/archive/`;
+`run_t15_asr_sequential.sh` (one-time T15 script, T15 done 2026-07-17) deleted.
+
+### T13. A/B TTS-quality tier axis (`docs/LABEL_FRAMEWORK_SPEC.md` §10) — done 2026-07-16
+- Pulled forward from Tier 4 by owner decision — canto-tts training is about to start,
+  scope narrowed to gold+auto_gold only (not the full manifest-eligible pool).
+- **Done**: new node `pipeline/nodes/quality_tier.py` (`quality_tier.assign`) + table
+  `quality_tiers (id, quality_tier, provenance)`. Tier A = full gold+auto_gold scope
+  (223,605 segs); Tier B (clean, strict bundle owner-picked after a 3-way loose/medium/
+  strict comparison against the real distribution) = `dnsmos>=3.7 AND music_prob<0.10
+  AND overlap_ratio<0.05` (55,580 segs / 152.1h). Explicitly a SEPARATE axis from
+  `tiers`/`tier.assign` — documented in both nodes' docstrings + CLAUDE.md's "Tier is
+  overloaded" section to prevent conflation.
+- `manifest.build`/`manifest.export` gained `--min-quality-tier {A,B}` (LEFT JOIN, so
+  silver/bronze/unscored rows stay included when unused). Exported
+  `metadata/manifest_tier_auto_gold_qualityB.jsonl` (55,594 entries/152.1h/1,860 speakers)
+  for the clean fine-tune stage; Tier A already covered by the existing
+  `manifest_tier_auto_gold.jsonl`.
+- Full backfill: 279,185 segments in 4s (validates the same-day upsert_rows() fix again).
+- **Tests**: 19 new in `tests/test_quality_tier_node.py`, 11 new in `tests/test_manifest_node.py`.
+  Full writeup: DECISIONS.md 2026-07-16.
+- **Not done**: no Tier A-only export file written (redundant with the existing
+  `manifest_tier_auto_gold.jsonl`); label coverage gap (~3-5% of the gold+auto_gold scope
+  has no `labels_music`/`labels_overlap` row yet) means a handful of segments fail closed
+  to Tier A that a full label.suite backfill might upgrade to Tier B later — not
+  re-triggered automatically (same structural gap as T5).
+
+### T12. Automate log retention (Issue #11 residual) — done 2026-07-16
+- Phase B2 cleaned `metadata/logs/` (1.7GB → 17M) but there's no mechanism preventing
+  regrowth. Most growth is ad-hoc shell-redirected batch logs (`t15_*.log` etc.), not
+  just the handful of nodes using `logging.FileHandler` directly — a Python-side
+  truncation hook wouldn't catch those, so went with a standalone prune script instead.
+- **Done**: `pipeline/tools/prune_logs.py` (`prune_logs()`) — gzips `*.log` older than
+  `--gzip-after-days` (default 7), deletes `*.log.gz` archives older than
+  `--delete-after-days` (default 60). Idempotent (already-gzipped files skipped,
+  operates on mtime). Wired as `pipe logs prune` (`--dry-run` supported) in
+  `pipeline/cli.py`. 7 new tests in `tests/test_prune_logs.py`.
+- **Automated**: added a real (not Claude-session-scoped) weekly crontab entry —
+  `0 3 * * 0` (Sun 3am) — running `pipe logs prune >> metadata/logs/prune_cron.log`.
+  Its own log is subject to the same pruning, self-limiting.
+- **Result**: first real run (not dry-run) gzipped 46 files, reclaimed 14.8MB
+  (`metadata/logs/` 70M → 56M — most of the remaining size is a handful of files
+  younger than the 7-day gzip threshold, e.g. the T15 batch64 run log, which will
+  compress on their next scheduled pass).
+
+### T11. Relocate dormant release data (Issue #16) — done 2026-07-16
+Moved `metadata/manifest_release.jsonl` (672MB) + `excluded_no_url.jsonl` (8.4MB) into
+`metadata/release_dormant/`, alongside the 3 dormant scripts already there. Zero risk
+difference (both `mv`d, not copied — no duplicate left behind); grepped first to confirm
+no code references the old root-level path, only prose in CLAUDE.md/DECISIONS.md/this
+file/the review doc — none of which are path-sensitive.
+
+### upsert_rows() performance fix — done 2026-07-16
+Not a numbered T-task (tracked only in `docs/archive/UPSERT_PERFORMANCE_FIX_PLAN.md`, found
+mid-sweep while auditing the uncommitted backlog before commit) — closing the loop here
+so it doesn't fall through the cracks again. `upsert_rows()` (`pipeline/catalog/catalog.py`)
+switched from per-row `conn.executemany()` to a vectorised `pd.DataFrame` +
+`INSERT ... SELECT` bulk path above `UPSERT_BULK_THRESHOLD = 2_000` rows. Real-world
+validation: full 3-source `speaker.cluster` rerun (1,241,586 segments) — **104s total**
+vs. the historical ~78min for the podcast source's write alone (45×+ speedup), zero
+data drift (identical row/speaker counts). 357/357 tests passing (14 new in
+`tests/test_upsert_rows.py`). Full writeup: DECISIONS.md 2026-07-16. Side effect worth
+tracking under T14: removes the root cause of the `run-many`
+`asr.transcribe`+`speaker.cluster` pairing stall (T15 points 3-5) — worth a retry next
+time both have real backlogs queued.
+
+### T6. Re-export default manifest (Issue #2 + N3) — done 2026-07-15
+`pipe run manifest.export` re-run after T15's full chain landed (see T15 addendum below)
+and T16's auto_gold gate rebuild. `metadata/manifest.jsonl`/`train.jsonl`/`val.jsonl`
+regenerated 2026-07-15 21:35 (606,775 entries). `report.build` re-run 2026-07-16 00:03:
+1349.3h / 9,023 speakers / 3 sources / 6 domains, 11/12 acceptance criteria PASS (only
+`text_verified` fails, expected — see T1).
+
+### T15 — addendum: full downstream chain confirmed drained, 2026-07-16
+Verified live (not just claimed) via `pipe catalog verify` (17/17 PASS) and direct catalog
+query: `asr_agreement`/`filters`/`tiers` all now sit at the `segments` ceiling
+(1,241,610 rows each) — the `asr.agreement → filter.text → filter.acoustic → filter.decide
+→ tier.assign` chain (interrupted mid-session 2026-07-14 by the `filter.decide` OOM, see
+DECISIONS.md 2026-07-14) fully drained after that fix. `speaker.cluster` also re-ran:
+speakers 11,679 → 14,330. `g2p` sits at 780,219/1,241,610 — this LOOKS like a lag against
+`segments`, but is not one: g2p's real population is `filters.pass = TRUE` (also exactly
+780,219), not all segments (most segments legitimately fail some filter gate and never need
+g2p at all — see `pipeline/nodes/g2p.py`'s discovery SQL). **Correction 2026-07-17**: verified
+live via `discover()` — g2p backlog is genuinely **0**, fully caught up. The "lag" framing in
+the original addendum was a miscalculation (comparing against the wrong denominator), not a
+real gap; no g2p work is outstanding. T15 moved to Done in full this session (2026-07-17) —
+the DAG-drain work described above was already complete, this was purely a bookkeeping fix
+(the Tier 3 list still had prima facie the entire investigation/postmortem sitting there as
+if still open).
+
+### T19. `calibrate.serve` — 'rejected' propagation fix + one-click Mandarin
+flag button — done 2026-07-15
+- **What**: found while implementing the Mandarin flag request — `record_decision('rejected',
+  ...)` was recorded in `calibration_review` but never read by `manifest.py`'s eligibility
+  join (`segments`/`asr_agreement`/`g2p`/`filters`/`tiers` only). A human "Reject" click had
+  zero effect on what shipped in the manifest.
+- **Done**:
+  1. `record_decision()`: `decision == 'rejected'` now also directly upserts
+     `tiers.tier='excluded'` (provenance `calibrate_reject`), mirroring the existing
+     `'verified'`→`'gold'` direct write and its rationale (sidesteps `tier.assign`'s
+     `provenance='tier_assign'`-scoped anti-join). Applies to every rejection, not just
+     Mandarin-flagged ones.
+  2. `pipe calibrate serve`: new one-click **Mandarin** button (`M` key) submits
+     `decision='rejected', flag_reason='mandarin'` (`MANDARIN_FLAG_REASON` constant) — for
+     segments that surface for QA but are actually non-HK-Cantonese. Both excludes (via the
+     fix above) and records the reason in one click.
+  3. `summary_stats()`'s `top_flag_reasons` leaderboard broadened to include `'rejected'`
+     rows with a reason, not just `'flagged'`, so Mandarin rejections surface in triage.
+  4. `'flagged'` (generic pipeline-bug report) unchanged — still non-exclusionary, free text.
+  5. (2026-07-16 follow-up, same task) **Sample-options controls added to the browser UI**
+     itself — a new "Sample:" control group in the topbar (tier / min-agreement / code-switch),
+     the web equivalent of `pipe run calibrate.sample --tier/--min-agreement/--code-switch`.
+     Scopes both the manual "↻ Refill" button and the auto-refill-on-empty-queue path (so a
+     reviewer's focused session, e.g. tier=auto_gold + code-switch=only, doesn't get diluted
+     by an unscoped auto top-up once they run dry). New `_parse_sample_options()` helper
+     (shared by `/api/refill` POST body and `/api/next`'s query params) validates tier against
+     `_VALID_QA_TIERS` and min_agreement as a float, returning a JSON 400 on bad input instead
+     of silently sampling something unintended. Distinct from the existing batch/source/order
+     controls, which only filter browsing of already-queued items, not what gets queued.
+- **Also done same session**: deleted the two T16 backfill safety-net DB backups
+  (`corpus.duckdb.pre_agreement_t16_backup` / `.pre_tier_t16_backup`, 8.6GB) — not
+  git-tracked, T16 already verified and documented, no further use.
+- **Tests**: 3 new in `tests/test_calibrate_node.py` (357/357 total). Sample-options controls
+  verified via a live smoke test against a scratch catalog (page renders the new controls,
+  scoped refill queues the correct tier/code-switch population, invalid tier/min-agreement
+  return a 400 with a JSON error body) — no dedicated pytest suite exists for
+  `calibrate_server.py`'s HTTP layer (it's an interactive tool, tested live per CLAUDE.md).
+- **Not done**: no retroactive re-tiering of any segment already 'rejected' before this fix
+  landed (none exist yet — T1 pilot QA, the main consumer of this UI, hasn't started).
+
+### T18. Code-switching-aware export cut + QA oversampling — done 2026-07-15
+- **What**: T16's distribution analysis found code-switched segments (`filters.english_ratio
+  > 0`, 220,364 segments / 17.7% of the corpus) clear ASR-agreement thresholds far less
+  often than pure-Cantonese segments (e.g. 18.8% vs 48.5% at agreement≥0.90) — a systematic
+  AR-vs-CTC English-token transliteration divergence, not necessarily a quality signal.
+  Owner decision (AskUserQuestion): keep ONE unified corpus (no physical fork), add
+  on-demand tooling for training-side filtering + QA focus, with a **10x** QA oversampling
+  multiplier (owner-specified) for code-switch segments.
+- **Done**:
+  1. `pipeline/nodes/manifest.py`: `--code-switch {only|exclude}` cut flag added to
+     `manifest.build`/`manifest.export` (`discover()`/`build_manifest()`/
+     `run_manifest_build()`/`run_manifest_export()`/`_export_tag()` all threaded through;
+     `CODE_SWITCH_CONDITIONS` dict maps `only`→`english_ratio > 0`, `exclude`→`= 0`).
+     Combinable with `--min-tier`/`--min-agreement`. 8 new tests in
+     `tests/test_manifest_node.py`. Real exports produced: `manifest_codeswitch_only.jsonl`
+     (84,770 entries / 226.6h / 3,692 speakers) and `manifest_codeswitch_exclude.jsonl`
+     (522,005 / 1,122.7h / 8,728 speakers) — sums to the full 606,775-entry pool.
+  2. `pipeline/nodes/calibrate.py`: `CODE_SWITCH_QA_MULTIPLIER = 10.0`;
+     `recommended_sample_n(..., code_switch=True)` scopes population to
+     `english_ratio > 0` AND multiplies the tier's base QA rate by 10x (capped at 100%);
+     `discover()`/`run_calibrate_sample()` gained a matching `code_switch` param
+     (`'only'`/`'exclude'`), wired into `pipe run calibrate.sample --code-switch
+     {only|exclude}` and the `run-many` adapter. 8 new tests in `tests/test_calibrate_node.py`.
+  3. CLI: both `manifest.build`/`manifest.export`/`calibrate.sample` subcommands expose
+     `--code-switch`.
+- **Result** (not yet acted on — no QA batch queued this session, left for the owner since
+  it consumes real review time): recommended code-switch-scoped QA sample sizes —
+  auto_gold 1,250 (15% of 8,332), silver 10,366 (40% of 25,907), **bronze 50,524 (100% —
+  the 10x multiplier hits the rate cap exactly at bronze's 10% base rate, i.e.
+  "review all of them," not realistically a near-term QA target as a full pass; a smaller
+  pilot batch like the 2026-07-11 precedent's 300-per-tier is the practical next step).
+- **Tests**: 354/354 passing (16 new: 8 manifest + 8 calibrate).
+- **Not done**: no QA batch actually queued (deliberately left to the owner to trigger via
+  `pipe run calibrate.sample --tier <t> --code-switch only --n <N>`).
+
+### T16. Rebuild the `auto_gold` gate for the 2-model era — done 2026-07-15
+- **What**: `tier.assign`'s `auto_gold` gate required `canto_ft_confidence > 0.8` — always
+  `NULL` for new segments since canto_ft's 2026-07-13 retirement, failing closed. All 5
+  steps completed same session: (1) normalization fix (done 2026-07-13, see Issue #20),
+  (2) full-corpus `asr_agreement` backfill (1,241,610 ids, canto_ft excluded + normalized
+  text, `scratchpad/backfill_agreement_t16.py`, 84.8s, `text_verified` preserved for all
+  58 pre-existing gold rows), (3) distribution analysis (agreement × dnsmos crosstab +
+  code-switch-split breakdown, presented to owner), (4) owner picked the "Balanced"
+  bundle via AskUserQuestion: `AUTO_GOLD_AGREE_MIN` 0.95→**0.92**, confidence gate
+  replaced with `AUTO_GOLD_DNSMOS_MIN=3.5` (new, `filters.dnsmos`), silver/bronze
+  unchanged (0.85/0.70) — `pipeline/nodes/tier.py`'s `assign_tier()` signature changed
+  `canto_ft_confidence` param → `dnsmos`, 13/13 tests updated+passing in
+  `tests/test_tier_node.py`, (5) `tiers` re-derived corpus-wide
+  (`scratchpad/backfill_tier_thresholds_t16.py`, 5.6s, 0 human-gold rows touched).
+- **Result** (manifest-eligible pool, filters.pass=TRUE): `auto_gold` 73,252→**279,195**
+  segments (151.9h→**640.9h**, +322%), `silver` 158,087 (333.9h), `bronze` 169,435
+  (374.4h), `gold` unchanged at 58. Full pool 606,775 entries/1,349.3h/9,023 speakers
+  (up from 590,410/1,317.0h — normalization alone recovered ~32h even before the gate
+  change). `manifest.export`/`report.build` re-run (default + `--min-tier
+  auto_gold/silver/bronze` cuts, each also copied to `metadata/DATASET_REPORT_<tier>.md`).
+  `tests/test_catalog.py`'s `test_manifest_build_matches_expected_corpus_totals` baseline
+  updated per its own docstring's "update only after an intentional, verified re-run" rule.
+- **Provisional**: T1 pilot QA (still 0/~900 reviewed) has NOT yet validated this gate's
+  real precision — owner explicitly chose to unblock now rather than wait, revisit the
+  0.92/3.5 numbers once T1 ground truth exists.
+- **Follow-up spun out as T18** (done same day, see T18 below): code-switching handling —
+  segments with `english_ratio > 0` clear agreement thresholds far less often (e.g. 18.8%
+  vs 48.5% pure-Cantonese at agreement≥0.90) since the two ASR backends diverge on
+  English-token transliteration, not necessarily quality.
+
+### T17. `filter.acoustic` GPU offload via onnxruntime-gpu — done 2026-07-14
+- **What**: `filter.acoustic` (SNR+DNSMOS) was CPU-only and had hit a scaling wall —
+  `--workers 4→8` doubled CPU usage (~18.8→~35.3 cores) for almost no throughput gain
+  (~21→~21.6/s), while both RTX 4090s sat idle. Swapped in `onnxruntime-gpu` (system had
+  only CPU `onnxruntime` installed) so DNSMOS ONNX inference runs on GPU.
+- **How**: `uv pip uninstall onnxruntime && uv pip install onnxruntime-gpu`; new
+  `--gpu 0,1` flag on `pipe run filter.acoustic` (comma-separated CUDA device ids,
+  round-robinned across the worker pool; omitted = unchanged CPU-only path, so this is
+  backward compatible). `LD_LIBRARY_PATH` for worker subprocesses points at torch's
+  pip-bundled CUDA 13 runtime (no separate system CUDA toolkit needed). Code:
+  `pipeline/nodes/filter.py` (`_build_capped_dnsmos`, `AcousticWorker`, `worker_main`,
+  `run_filter_acoustic`) + `pipeline/cli.py`. Full detail + correctness verification
+  (GPU vs CPU sig_mos/ovrl_mos exact match on 5 real segments, |Δ|=0.0) in
+  `DECISIONS.md` 2026-07-14.
+- **Result**: `--workers 8 --gpu 0,1` → ~115-122/s (~5.5× the CPU baseline). Tried
+  `--workers 16 --gpu 0,1` — no further gain (~115/s, same ballpark), GPU util stayed
+  low (10-25%) at both worker counts — the bottleneck past 8 workers is the supervisor's
+  asyncio dispatch loop / IPC round-trip, not GPU or CPU compute. **8 workers is the
+  practical ceiling for the current dispatch pattern.**
+- **Follow-up not done**: no regression test yet for the `--gpu` code path (add once a
+  default-on-GPU decision is made for future runs — currently opt-in only). If the
+  asyncio dispatch loop is ever revisited for other worker-pool nodes, this is a second
+  data point (after label_prosody-style nodes) that per-batch IPC overhead caps
+  throughput around ~8 concurrent workers regardless of backend speed.
+
+### T7. Drain the 2026-07-11 ingest round's downstream backlog (N3) — done 2026-07-12
+`run_t7_chain.sh` (resumed #4) ran the full waterfall — `filter.decide` (44,026 decided,
+32,834 passed) → `g2p` (32,834 converted, 100% accepted) → `speaker.embed` (44,026
+GPU-computed, 0 legacy-reused, 417s) → `speaker.cluster` (whole-source recompute, 3
+sources, 662,697 segments → 11,679 speakers, 6,117s) → `tier.assign` (44,084 tiered:
+gold=58, auto_gold=4, silver=640, bronze=16,921, excluded=26,461). Completed
+2026-07-12T14:22:39. See `metadata/logs/t7_chain_20260711.log`. **Note**: this run's
+`speaker.cluster` pass predates T15's reingest admission (which finished 15:57, after
+this chain completed) — it does NOT include any of the 578,889 re-admitted segments;
+those still need their own `speaker.embed` pass before the next `speaker.cluster` run.
+T6 (manifest re-export) is now unblocked.
+
+### T8. Finish `conn=` injection on remaining nodes (Issue #5) — done 2026-07-07
+Found already fully complete while investigating T14 (2026-07-12) — this entry was stale.
+Per `docs/ORCHESTRATOR_PLAN.md` line 3: **23/23 call sites done**, `pipe run-many`
+validated live at full backlog scale same day (`label.music`+`filter.acoustic`, then
+`asr.transcribe`+`filter.acoustic`). All 23 registered in `RUN_MANY_ADAPTERS`
+(`pipeline/cli.py`), regression-tested in `tests/test_run_many.py` (29 tests). No
+remaining nodes need `conn=` injection.
+
+### T2. Re-baseline `catalog verify` row_count checks (Issue N1) — done 2026-07-11
+`pipeline/catalog/verify.py`'s `check_row_counts()` now does floor-only (or floor+ceiling
+for the three tables that are 1:1-with-segments: `asr_agreement`/`filters`/`tiers`) checks
+against live-queried 2026-07-11 baselines, replacing the old exact-match `EXPECTED` dict —
+same pattern already established in `tests/test_catalog.py`'s `*_monotonic_growth` tests.
+Verified: `pipe catalog verify` now shows 17/17 PASS (was 10/17 FAIL). See
+`docs/archive/PIPELINE_REVIEW_2026-07-11.md` §6 Issue N1 disposition.
+
+### T3. Fix flaky snapshot test (Issue N2) — done 2026-07-11
+`tests/test_catalog.py::test_manifest_build_matches_expected_corpus_totals` converted
+from hardcoded `==` to tolerant floor/ceiling/tolerance-window assertions (count/n_speakers:
+floor + generous ceiling; gold: floor only, expected to trend up; auto_gold/silver/bronze:
+±1,000-row tolerance window, since they deplete as rows promote to gold). Landed in the
+same batch as T2. Verified: full suite green (304 passed), including this test, while a
+live `calibrate serve` review session was actively drifting `gold` in the background.
+
+### T4. Port `report.build` node (Issue #3) — done 2026-07-11
+New `pipeline/nodes/report.py`: `run_report_build(*, min_tier=None)` reuses
+`manifest.py`'s `run_manifest_build()` to read the manifest-eligible pool LIVE from the
+catalog on every call (never a stale file), computes all 12 CLAUDE.md Acceptance Criteria
+(fixing a legacy bug where the old script silently never checked 2 of its 11 declared
+thresholds), and writes `metadata/DATASET_REPORT.md`. `text_verified` and single-speaker
+are reported honestly (not faked to pass) — see the node's module docstring. Registered as
+`pipe run report.build` (`--min-tier` scoping, matching `manifest.build`/`manifest.export`'s
+convention). `scripts/10_report.py` retired via `git rm` per its own documented condition —
+`scripts/` is now empty. Live run against the real catalog: 458,844 entries / 1018.9h /
+8,817 speakers, 10/11 criteria PASS (only `text_verified` fails, correctly — see T1).
+CLAUDE.md/README.md updated to match. See `docs/archive/PIPELINE_REVIEW_2026-07-11.md` §6 Issue #3
+disposition.

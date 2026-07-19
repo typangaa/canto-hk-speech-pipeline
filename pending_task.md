@@ -2,12 +2,12 @@
 
 > **Maintenance rule**: this file must be updated whenever a task here is completed —
 > move it to the "Done" section (with the completion date + commit/ref if applicable)
-> instead of deleting it, and update `docs/PIPELINE_REVIEW_2026-07-11.md` §6 disposition
+> instead of deleting it, and update `docs/archive/PIPELINE_REVIEW_2026-07-11.md` §6 disposition
 > table if the task closes one of that doc's numbered issues. Keep this file's Tier
 > ordering current if priorities shift. See `CLAUDE.md` for the standing instruction to
 > keep this file in sync.
 
-Source: round-2 post-execution review of `docs/PIPELINE_REVIEW_2026-07-11.md` §6,
+Source: round-2 post-execution review of `docs/archive/PIPELINE_REVIEW_2026-07-11.md` §6,
 2026-07-11. Re-derive priorities from that doc if this file and it ever disagree.
 
 ---
@@ -292,6 +292,8 @@ what actually landed and when.)
 ---
 
 ## Done
+
+> Entries dated 2026-07-16 and earlier rotated out to `DECISIONS.md` (2026-07-19 cleanup pass) to keep this file to the recent working window — same rotation `PROGRESS.md` uses. Full history is in `DECISIONS.md`, chronological, nothing lost.
 
 ### T25. Prune stale excluded-tier rows from the QA queue + web UI button — done 2026-07-19
 - **What**: T23+T24 follow-up's `filter.decide` re-run (5,288 newly-excluded segments)
@@ -731,76 +733,6 @@ what actually landed and when.)
   this was purely the mechanism + a preventative correctness fix + the version-column
   backfill needed to ship it safely).
 
-### T13. A/B TTS-quality tier axis (`docs/LABEL_FRAMEWORK_SPEC.md` §10) — done 2026-07-16
-- Pulled forward from Tier 4 by owner decision — canto-tts training is about to start,
-  scope narrowed to gold+auto_gold only (not the full manifest-eligible pool).
-- **Done**: new node `pipeline/nodes/quality_tier.py` (`quality_tier.assign`) + table
-  `quality_tiers (id, quality_tier, provenance)`. Tier A = full gold+auto_gold scope
-  (223,605 segs); Tier B (clean, strict bundle owner-picked after a 3-way loose/medium/
-  strict comparison against the real distribution) = `dnsmos>=3.7 AND music_prob<0.10
-  AND overlap_ratio<0.05` (55,580 segs / 152.1h). Explicitly a SEPARATE axis from
-  `tiers`/`tier.assign` — documented in both nodes' docstrings + CLAUDE.md's "Tier is
-  overloaded" section to prevent conflation.
-- `manifest.build`/`manifest.export` gained `--min-quality-tier {A,B}` (LEFT JOIN, so
-  silver/bronze/unscored rows stay included when unused). Exported
-  `metadata/manifest_tier_auto_gold_qualityB.jsonl` (55,594 entries/152.1h/1,860 speakers)
-  for the clean fine-tune stage; Tier A already covered by the existing
-  `manifest_tier_auto_gold.jsonl`.
-- Full backfill: 279,185 segments in 4s (validates the same-day upsert_rows() fix again).
-- **Tests**: 19 new in `tests/test_quality_tier_node.py`, 11 new in `tests/test_manifest_node.py`.
-  Full writeup: DECISIONS.md 2026-07-16.
-- **Not done**: no Tier A-only export file written (redundant with the existing
-  `manifest_tier_auto_gold.jsonl`); label coverage gap (~3-5% of the gold+auto_gold scope
-  has no `labels_music`/`labels_overlap` row yet) means a handful of segments fail closed
-  to Tier A that a full label.suite backfill might upgrade to Tier B later — not
-  re-triggered automatically (same structural gap as T5).
-
-### T12. Automate log retention (Issue #11 residual) — done 2026-07-16
-- Phase B2 cleaned `metadata/logs/` (1.7GB → 17M) but there's no mechanism preventing
-  regrowth. Most growth is ad-hoc shell-redirected batch logs (`t15_*.log` etc.), not
-  just the handful of nodes using `logging.FileHandler` directly — a Python-side
-  truncation hook wouldn't catch those, so went with a standalone prune script instead.
-- **Done**: `pipeline/tools/prune_logs.py` (`prune_logs()`) — gzips `*.log` older than
-  `--gzip-after-days` (default 7), deletes `*.log.gz` archives older than
-  `--delete-after-days` (default 60). Idempotent (already-gzipped files skipped,
-  operates on mtime). Wired as `pipe logs prune` (`--dry-run` supported) in
-  `pipeline/cli.py`. 7 new tests in `tests/test_prune_logs.py`.
-- **Automated**: added a real (not Claude-session-scoped) weekly crontab entry —
-  `0 3 * * 0` (Sun 3am) — running `pipe logs prune >> metadata/logs/prune_cron.log`.
-  Its own log is subject to the same pruning, self-limiting.
-- **Result**: first real run (not dry-run) gzipped 46 files, reclaimed 14.8MB
-  (`metadata/logs/` 70M → 56M — most of the remaining size is a handful of files
-  younger than the 7-day gzip threshold, e.g. the T15 batch64 run log, which will
-  compress on their next scheduled pass).
-
-### T11. Relocate dormant release data (Issue #16) — done 2026-07-16
-Moved `metadata/manifest_release.jsonl` (672MB) + `excluded_no_url.jsonl` (8.4MB) into
-`metadata/release_dormant/`, alongside the 3 dormant scripts already there. Zero risk
-difference (both `mv`d, not copied — no duplicate left behind); grepped first to confirm
-no code references the old root-level path, only prose in CLAUDE.md/DECISIONS.md/this
-file/the review doc — none of which are path-sensitive.
-
-### upsert_rows() performance fix — done 2026-07-16
-Not a numbered T-task (tracked only in `docs/UPSERT_PERFORMANCE_FIX_PLAN.md`, found
-mid-sweep while auditing the uncommitted backlog before commit) — closing the loop here
-so it doesn't fall through the cracks again. `upsert_rows()` (`pipeline/catalog/catalog.py`)
-switched from per-row `conn.executemany()` to a vectorised `pd.DataFrame` +
-`INSERT ... SELECT` bulk path above `UPSERT_BULK_THRESHOLD = 2_000` rows. Real-world
-validation: full 3-source `speaker.cluster` rerun (1,241,586 segments) — **104s total**
-vs. the historical ~78min for the podcast source's write alone (45×+ speedup), zero
-data drift (identical row/speaker counts). 357/357 tests passing (14 new in
-`tests/test_upsert_rows.py`). Full writeup: DECISIONS.md 2026-07-16. Side effect worth
-tracking under T14: removes the root cause of the `run-many`
-`asr.transcribe`+`speaker.cluster` pairing stall (T15 points 3-5) — worth a retry next
-time both have real backlogs queued.
-
-### T6. Re-export default manifest (Issue #2 + N3) — done 2026-07-15
-`pipe run manifest.export` re-run after T15's full chain landed (see T15 addendum below)
-and T16's auto_gold gate rebuild. `metadata/manifest.jsonl`/`train.jsonl`/`val.jsonl`
-regenerated 2026-07-15 21:35 (606,775 entries). `report.build` re-run 2026-07-16 00:03:
-1349.3h / 9,023 speakers / 3 sources / 6 domains, 11/12 acceptance criteria PASS (only
-`text_verified` fails, expected — see T1).
-
 ### T15. Drain the reingest.pending backlog through the full DAG (found 2026-07-12) — done 2026-07-17
 - **What**: `docs/IO_OPTIMIZATION_PLAN.md` diagnosed Drive4's file-count skew (2.55M
   files, dentry-cache thrashing was the real `speaker.cluster` I/O bottleneck, not
@@ -1024,7 +956,7 @@ regenerated 2026-07-15 21:35 (606,775 entries). `report.build` re-run 2026-07-16
       18-21GB VRAM + 50-62% SM per GPU, zero errors/OOM over 100k+ segments — qwen3_asr
       pass ETA ~3.5-4h, sense_voice pass after. Full writeup: DECISIONS.md 2026-07-13
       addendum. Structural fix (per-model `dispatch_batch` or raised CLI default) tracked
-      as `docs/PIPELINE_REVIEW_2026-07-13.md` Issue #19 / its Phase B2.
+      as `docs/archive/PIPELINE_REVIEW_2026-07-13.md` Issue #19 / its Phase B2.
   **2 pre-existing test failures, unrelated to the canto_ft retirement itself** (confirmed
   by direct investigation, not swept under the rug): `test_asr_results_at_least_two_
   architectures_per_segment` (live-catalog test) currently fails because ~107,668 T15
@@ -1113,199 +1045,3 @@ regenerated 2026-07-15 21:35 (606,775 entries). `report.build` re-run 2026-07-16
   quantify how much the old legacy-ASR rejection was actually a false-negative problem —
   worth a `PROGRESS.md`/`DECISIONS.md` note either way.
 
-### T15 — addendum: full downstream chain confirmed drained, 2026-07-16
-Verified live (not just claimed) via `pipe catalog verify` (17/17 PASS) and direct catalog
-query: `asr_agreement`/`filters`/`tiers` all now sit at the `segments` ceiling
-(1,241,610 rows each) — the `asr.agreement → filter.text → filter.acoustic → filter.decide
-→ tier.assign` chain (interrupted mid-session 2026-07-14 by the `filter.decide` OOM, see
-DECISIONS.md 2026-07-14) fully drained after that fix. `speaker.cluster` also re-ran:
-speakers 11,679 → 14,330. `g2p` sits at 780,219/1,241,610 — this LOOKS like a lag against
-`segments`, but is not one: g2p's real population is `filters.pass = TRUE` (also exactly
-780,219), not all segments (most segments legitimately fail some filter gate and never need
-g2p at all — see `pipeline/nodes/g2p.py`'s discovery SQL). **Correction 2026-07-17**: verified
-live via `discover()` — g2p backlog is genuinely **0**, fully caught up. The "lag" framing in
-the original addendum was a miscalculation (comparing against the wrong denominator), not a
-real gap; no g2p work is outstanding. T15 moved to Done in full this session (2026-07-17) —
-the DAG-drain work described above was already complete, this was purely a bookkeeping fix
-(the Tier 3 list still had prima facie the entire investigation/postmortem sitting there as
-if still open).
-
-### T19. `calibrate.serve` — 'rejected' propagation fix + one-click Mandarin
-flag button — done 2026-07-15
-- **What**: found while implementing the Mandarin flag request — `record_decision('rejected',
-  ...)` was recorded in `calibration_review` but never read by `manifest.py`'s eligibility
-  join (`segments`/`asr_agreement`/`g2p`/`filters`/`tiers` only). A human "Reject" click had
-  zero effect on what shipped in the manifest.
-- **Done**:
-  1. `record_decision()`: `decision == 'rejected'` now also directly upserts
-     `tiers.tier='excluded'` (provenance `calibrate_reject`), mirroring the existing
-     `'verified'`→`'gold'` direct write and its rationale (sidesteps `tier.assign`'s
-     `provenance='tier_assign'`-scoped anti-join). Applies to every rejection, not just
-     Mandarin-flagged ones.
-  2. `pipe calibrate serve`: new one-click **Mandarin** button (`M` key) submits
-     `decision='rejected', flag_reason='mandarin'` (`MANDARIN_FLAG_REASON` constant) — for
-     segments that surface for QA but are actually non-HK-Cantonese. Both excludes (via the
-     fix above) and records the reason in one click.
-  3. `summary_stats()`'s `top_flag_reasons` leaderboard broadened to include `'rejected'`
-     rows with a reason, not just `'flagged'`, so Mandarin rejections surface in triage.
-  4. `'flagged'` (generic pipeline-bug report) unchanged — still non-exclusionary, free text.
-  5. (2026-07-16 follow-up, same task) **Sample-options controls added to the browser UI**
-     itself — a new "Sample:" control group in the topbar (tier / min-agreement / code-switch),
-     the web equivalent of `pipe run calibrate.sample --tier/--min-agreement/--code-switch`.
-     Scopes both the manual "↻ Refill" button and the auto-refill-on-empty-queue path (so a
-     reviewer's focused session, e.g. tier=auto_gold + code-switch=only, doesn't get diluted
-     by an unscoped auto top-up once they run dry). New `_parse_sample_options()` helper
-     (shared by `/api/refill` POST body and `/api/next`'s query params) validates tier against
-     `_VALID_QA_TIERS` and min_agreement as a float, returning a JSON 400 on bad input instead
-     of silently sampling something unintended. Distinct from the existing batch/source/order
-     controls, which only filter browsing of already-queued items, not what gets queued.
-- **Also done same session**: deleted the two T16 backfill safety-net DB backups
-  (`corpus.duckdb.pre_agreement_t16_backup` / `.pre_tier_t16_backup`, 8.6GB) — not
-  git-tracked, T16 already verified and documented, no further use.
-- **Tests**: 3 new in `tests/test_calibrate_node.py` (357/357 total). Sample-options controls
-  verified via a live smoke test against a scratch catalog (page renders the new controls,
-  scoped refill queues the correct tier/code-switch population, invalid tier/min-agreement
-  return a 400 with a JSON error body) — no dedicated pytest suite exists for
-  `calibrate_server.py`'s HTTP layer (it's an interactive tool, tested live per CLAUDE.md).
-- **Not done**: no retroactive re-tiering of any segment already 'rejected' before this fix
-  landed (none exist yet — T1 pilot QA, the main consumer of this UI, hasn't started).
-
-### T18. Code-switching-aware export cut + QA oversampling — done 2026-07-15
-- **What**: T16's distribution analysis found code-switched segments (`filters.english_ratio
-  > 0`, 220,364 segments / 17.7% of the corpus) clear ASR-agreement thresholds far less
-  often than pure-Cantonese segments (e.g. 18.8% vs 48.5% at agreement≥0.90) — a systematic
-  AR-vs-CTC English-token transliteration divergence, not necessarily a quality signal.
-  Owner decision (AskUserQuestion): keep ONE unified corpus (no physical fork), add
-  on-demand tooling for training-side filtering + QA focus, with a **10x** QA oversampling
-  multiplier (owner-specified) for code-switch segments.
-- **Done**:
-  1. `pipeline/nodes/manifest.py`: `--code-switch {only|exclude}` cut flag added to
-     `manifest.build`/`manifest.export` (`discover()`/`build_manifest()`/
-     `run_manifest_build()`/`run_manifest_export()`/`_export_tag()` all threaded through;
-     `CODE_SWITCH_CONDITIONS` dict maps `only`→`english_ratio > 0`, `exclude`→`= 0`).
-     Combinable with `--min-tier`/`--min-agreement`. 8 new tests in
-     `tests/test_manifest_node.py`. Real exports produced: `manifest_codeswitch_only.jsonl`
-     (84,770 entries / 226.6h / 3,692 speakers) and `manifest_codeswitch_exclude.jsonl`
-     (522,005 / 1,122.7h / 8,728 speakers) — sums to the full 606,775-entry pool.
-  2. `pipeline/nodes/calibrate.py`: `CODE_SWITCH_QA_MULTIPLIER = 10.0`;
-     `recommended_sample_n(..., code_switch=True)` scopes population to
-     `english_ratio > 0` AND multiplies the tier's base QA rate by 10x (capped at 100%);
-     `discover()`/`run_calibrate_sample()` gained a matching `code_switch` param
-     (`'only'`/`'exclude'`), wired into `pipe run calibrate.sample --code-switch
-     {only|exclude}` and the `run-many` adapter. 8 new tests in `tests/test_calibrate_node.py`.
-  3. CLI: both `manifest.build`/`manifest.export`/`calibrate.sample` subcommands expose
-     `--code-switch`.
-- **Result** (not yet acted on — no QA batch queued this session, left for the owner since
-  it consumes real review time): recommended code-switch-scoped QA sample sizes —
-  auto_gold 1,250 (15% of 8,332), silver 10,366 (40% of 25,907), **bronze 50,524 (100% —
-  the 10x multiplier hits the rate cap exactly at bronze's 10% base rate, i.e.
-  "review all of them," not realistically a near-term QA target as a full pass; a smaller
-  pilot batch like the 2026-07-11 precedent's 300-per-tier is the practical next step).
-- **Tests**: 354/354 passing (16 new: 8 manifest + 8 calibrate).
-- **Not done**: no QA batch actually queued (deliberately left to the owner to trigger via
-  `pipe run calibrate.sample --tier <t> --code-switch only --n <N>`).
-
-### T16. Rebuild the `auto_gold` gate for the 2-model era — done 2026-07-15
-- **What**: `tier.assign`'s `auto_gold` gate required `canto_ft_confidence > 0.8` — always
-  `NULL` for new segments since canto_ft's 2026-07-13 retirement, failing closed. All 5
-  steps completed same session: (1) normalization fix (done 2026-07-13, see Issue #20),
-  (2) full-corpus `asr_agreement` backfill (1,241,610 ids, canto_ft excluded + normalized
-  text, `scratchpad/backfill_agreement_t16.py`, 84.8s, `text_verified` preserved for all
-  58 pre-existing gold rows), (3) distribution analysis (agreement × dnsmos crosstab +
-  code-switch-split breakdown, presented to owner), (4) owner picked the "Balanced"
-  bundle via AskUserQuestion: `AUTO_GOLD_AGREE_MIN` 0.95→**0.92**, confidence gate
-  replaced with `AUTO_GOLD_DNSMOS_MIN=3.5` (new, `filters.dnsmos`), silver/bronze
-  unchanged (0.85/0.70) — `pipeline/nodes/tier.py`'s `assign_tier()` signature changed
-  `canto_ft_confidence` param → `dnsmos`, 13/13 tests updated+passing in
-  `tests/test_tier_node.py`, (5) `tiers` re-derived corpus-wide
-  (`scratchpad/backfill_tier_thresholds_t16.py`, 5.6s, 0 human-gold rows touched).
-- **Result** (manifest-eligible pool, filters.pass=TRUE): `auto_gold` 73,252→**279,195**
-  segments (151.9h→**640.9h**, +322%), `silver` 158,087 (333.9h), `bronze` 169,435
-  (374.4h), `gold` unchanged at 58. Full pool 606,775 entries/1,349.3h/9,023 speakers
-  (up from 590,410/1,317.0h — normalization alone recovered ~32h even before the gate
-  change). `manifest.export`/`report.build` re-run (default + `--min-tier
-  auto_gold/silver/bronze` cuts, each also copied to `metadata/DATASET_REPORT_<tier>.md`).
-  `tests/test_catalog.py`'s `test_manifest_build_matches_expected_corpus_totals` baseline
-  updated per its own docstring's "update only after an intentional, verified re-run" rule.
-- **Provisional**: T1 pilot QA (still 0/~900 reviewed) has NOT yet validated this gate's
-  real precision — owner explicitly chose to unblock now rather than wait, revisit the
-  0.92/3.5 numbers once T1 ground truth exists.
-- **Follow-up spun out as T18** (done same day, see T18 below): code-switching handling —
-  segments with `english_ratio > 0` clear agreement thresholds far less often (e.g. 18.8%
-  vs 48.5% pure-Cantonese at agreement≥0.90) since the two ASR backends diverge on
-  English-token transliteration, not necessarily quality.
-
-### T17. `filter.acoustic` GPU offload via onnxruntime-gpu — done 2026-07-14
-- **What**: `filter.acoustic` (SNR+DNSMOS) was CPU-only and had hit a scaling wall —
-  `--workers 4→8` doubled CPU usage (~18.8→~35.3 cores) for almost no throughput gain
-  (~21→~21.6/s), while both RTX 4090s sat idle. Swapped in `onnxruntime-gpu` (system had
-  only CPU `onnxruntime` installed) so DNSMOS ONNX inference runs on GPU.
-- **How**: `uv pip uninstall onnxruntime && uv pip install onnxruntime-gpu`; new
-  `--gpu 0,1` flag on `pipe run filter.acoustic` (comma-separated CUDA device ids,
-  round-robinned across the worker pool; omitted = unchanged CPU-only path, so this is
-  backward compatible). `LD_LIBRARY_PATH` for worker subprocesses points at torch's
-  pip-bundled CUDA 13 runtime (no separate system CUDA toolkit needed). Code:
-  `pipeline/nodes/filter.py` (`_build_capped_dnsmos`, `AcousticWorker`, `worker_main`,
-  `run_filter_acoustic`) + `pipeline/cli.py`. Full detail + correctness verification
-  (GPU vs CPU sig_mos/ovrl_mos exact match on 5 real segments, |Δ|=0.0) in
-  `DECISIONS.md` 2026-07-14.
-- **Result**: `--workers 8 --gpu 0,1` → ~115-122/s (~5.5× the CPU baseline). Tried
-  `--workers 16 --gpu 0,1` — no further gain (~115/s, same ballpark), GPU util stayed
-  low (10-25%) at both worker counts — the bottleneck past 8 workers is the supervisor's
-  asyncio dispatch loop / IPC round-trip, not GPU or CPU compute. **8 workers is the
-  practical ceiling for the current dispatch pattern.**
-- **Follow-up not done**: no regression test yet for the `--gpu` code path (add once a
-  default-on-GPU decision is made for future runs — currently opt-in only). If the
-  asyncio dispatch loop is ever revisited for other worker-pool nodes, this is a second
-  data point (after label_prosody-style nodes) that per-batch IPC overhead caps
-  throughput around ~8 concurrent workers regardless of backend speed.
-
-### T7. Drain the 2026-07-11 ingest round's downstream backlog (N3) — done 2026-07-12
-`run_t7_chain.sh` (resumed #4) ran the full waterfall — `filter.decide` (44,026 decided,
-32,834 passed) → `g2p` (32,834 converted, 100% accepted) → `speaker.embed` (44,026
-GPU-computed, 0 legacy-reused, 417s) → `speaker.cluster` (whole-source recompute, 3
-sources, 662,697 segments → 11,679 speakers, 6,117s) → `tier.assign` (44,084 tiered:
-gold=58, auto_gold=4, silver=640, bronze=16,921, excluded=26,461). Completed
-2026-07-12T14:22:39. See `metadata/logs/t7_chain_20260711.log`. **Note**: this run's
-`speaker.cluster` pass predates T15's reingest admission (which finished 15:57, after
-this chain completed) — it does NOT include any of the 578,889 re-admitted segments;
-those still need their own `speaker.embed` pass before the next `speaker.cluster` run.
-T6 (manifest re-export) is now unblocked.
-
-### T8. Finish `conn=` injection on remaining nodes (Issue #5) — done 2026-07-07
-Found already fully complete while investigating T14 (2026-07-12) — this entry was stale.
-Per `docs/ORCHESTRATOR_PLAN.md` line 3: **23/23 call sites done**, `pipe run-many`
-validated live at full backlog scale same day (`label.music`+`filter.acoustic`, then
-`asr.transcribe`+`filter.acoustic`). All 23 registered in `RUN_MANY_ADAPTERS`
-(`pipeline/cli.py`), regression-tested in `tests/test_run_many.py` (29 tests). No
-remaining nodes need `conn=` injection.
-
-### T2. Re-baseline `catalog verify` row_count checks (Issue N1) — done 2026-07-11
-`pipeline/catalog/verify.py`'s `check_row_counts()` now does floor-only (or floor+ceiling
-for the three tables that are 1:1-with-segments: `asr_agreement`/`filters`/`tiers`) checks
-against live-queried 2026-07-11 baselines, replacing the old exact-match `EXPECTED` dict —
-same pattern already established in `tests/test_catalog.py`'s `*_monotonic_growth` tests.
-Verified: `pipe catalog verify` now shows 17/17 PASS (was 10/17 FAIL). See
-`docs/PIPELINE_REVIEW_2026-07-11.md` §6 Issue N1 disposition.
-
-### T3. Fix flaky snapshot test (Issue N2) — done 2026-07-11
-`tests/test_catalog.py::test_manifest_build_matches_expected_corpus_totals` converted
-from hardcoded `==` to tolerant floor/ceiling/tolerance-window assertions (count/n_speakers:
-floor + generous ceiling; gold: floor only, expected to trend up; auto_gold/silver/bronze:
-±1,000-row tolerance window, since they deplete as rows promote to gold). Landed in the
-same batch as T2. Verified: full suite green (304 passed), including this test, while a
-live `calibrate serve` review session was actively drifting `gold` in the background.
-
-### T4. Port `report.build` node (Issue #3) — done 2026-07-11
-New `pipeline/nodes/report.py`: `run_report_build(*, min_tier=None)` reuses
-`manifest.py`'s `run_manifest_build()` to read the manifest-eligible pool LIVE from the
-catalog on every call (never a stale file), computes all 12 CLAUDE.md Acceptance Criteria
-(fixing a legacy bug where the old script silently never checked 2 of its 11 declared
-thresholds), and writes `metadata/DATASET_REPORT.md`. `text_verified` and single-speaker
-are reported honestly (not faked to pass) — see the node's module docstring. Registered as
-`pipe run report.build` (`--min-tier` scoping, matching `manifest.build`/`manifest.export`'s
-convention). `scripts/10_report.py` retired via `git rm` per its own documented condition —
-`scripts/` is now empty. Live run against the real catalog: 458,844 entries / 1018.9h /
-8,817 speakers, 10/11 criteria PASS (only `text_verified` fails, correctly — see T1).
-CLAUDE.md/README.md updated to match. See `docs/PIPELINE_REVIEW_2026-07-11.md` §6 Issue #3
-disposition.

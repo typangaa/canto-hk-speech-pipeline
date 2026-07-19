@@ -532,6 +532,15 @@ def load_pending_decisions(path: Path | None = None) -> dict[str, dict]:
     return entries
 
 
+def _prune_old_snapshots(directory: Path, pattern: str, keep: int = 5) -> None:
+    """Keep only the `keep` most recent flushed-buffer snapshots matching
+    `pattern` under `directory`; older ones are just committed history and
+    unbounded accumulation is pure disk clutter."""
+    snapshots = sorted(directory.glob(pattern), key=lambda p: p.stat().st_mtime)
+    for stale in snapshots[:-keep]:
+        stale.unlink()
+
+
 async def run_calibrate_flush_pending(*, conn=None, in_path: Path | None = None) -> dict:
     """Replay the local decision buffer into the catalog via record_decision(),
     then archive the buffer file so it isn't replayed again. Safe to run
@@ -564,6 +573,7 @@ async def run_calibrate_flush_pending(*, conn=None, in_path: Path | None = None)
     if not errors:
         archived_to = in_path.with_name(f"{in_path.stem}.flushed_{time.strftime('%Y%m%dT%H%M%S')}{in_path.suffix}")
         in_path.rename(archived_to)
+        _prune_old_snapshots(in_path.parent, f"{in_path.stem}.flushed_*{in_path.suffix}")
         archived_to = str(archived_to)
     else:
         # Leave failed ids in the buffer (as the only remaining lines) so a

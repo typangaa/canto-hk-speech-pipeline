@@ -25,6 +25,7 @@ metadata/
 
 # Session logs (personal notes, not source)
 PROGRESS.md
+PROGRESS_archive_*.md
 
 # yt-dlp download archives
 *.ytdlp-archive
