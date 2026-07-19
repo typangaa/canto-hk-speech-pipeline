@@ -15,6 +15,15 @@ Source: round-2 post-execution review of `docs/PIPELINE_REVIEW_2026-07-11.md` §
 ## 🔴 Tier 1 — data-trust-critical, do first
 
 ### T1. Pilot QA batch review (Issue #15)
+- **Update 2026-07-19 (stale-excluded prune — see T25 in Done)**: found 172 (later 221 at
+  a second look, after 72 more offline decisions were flushed) queue rows still `pending`
+  whose segment had since been auto-excluded by T20/T22/T23's gate catch-up — these can
+  never become `gold`, so reviewing them was wasted effort. Pruned via the new
+  `prune_excluded_pending()` node function (`pipe calibrate prune-excluded` CLI, or the
+  "🧹 Prune excluded" button now in `pipe calibrate serve`'s UI). Queue is now **299
+  total, 243 reviewed, 56 pending** (all genuinely reviewable — 0 excluded-tier pending
+  left). Run this anytime a queued batch might have drifted stale against later gate
+  changes; it's idempotent and safe to click even when there's nothing to prune.
 - **Update 2026-07-18 (queue reset — see "Near-incident" in Done)**: owner asked to empty
   the accumulated pending queue so `calibrate.sample`/Refill can re-sample fresh going
   forward. `calibration_review` is now **171 total rows, 0 pending** (149 `verified` / 21
@@ -283,6 +292,45 @@ what actually landed and when.)
 ---
 
 ## Done
+
+### T25. Prune stale excluded-tier rows from the QA queue + web UI button — done 2026-07-19
+- **What**: T23+T24 follow-up's `filter.decide` re-run (5,288 newly-excluded segments)
+  left the `calibration_review` queue with rows still `decision='pending'` whose segment
+  had since flipped to `tiers.tier='excluded'` — these can never become `gold` (a
+  `verified` decision only flips `tiers.tier`, it doesn't undo an existing exclusion
+  reason), so reviewing them was wasted human effort. Owner asked for a query to clean
+  these up, then asked whether a web UI button could do it going forward.
+- **One-off live cleanup**: flushed 72 unflushed offline decisions first (never delete
+  `pending` rows without flushing immediately before — the exact lesson from the
+  2026-07-18 near-incident, see that Done entry), then deleted 172 stale rows via a direct
+  `DELETE ... WHERE decision='pending' AND tiers.tier='excluded'` join query. Queue went
+  471 total/300 pending → **299 total/56 pending** (all genuinely reviewable).
+- **Made it a permanent tool**: added `prune_excluded_pending(conn)` (the delete query
+  itself, returns `{removed, pending_before, pending_after}`) and
+  `run_calibrate_prune_excluded(*, conn=None, in_path=None)` (flushes the offline decision
+  buffer first via `run_calibrate_flush_pending()`, then prunes — same near-incident
+  safeguard as the one-off cleanup, now baked into the function) to
+  `pipeline/nodes/calibrate.py`.
+- **CLI**: `pipe calibrate prune-excluded` (`pipeline/cli.py::cmd_calibrate_prune_excluded`).
+- **Web UI**: "🧹 Prune excluded" button next to "↻ Refill" in `pipe calibrate serve`
+  (`pipeline/tools/calibrate_server.py`) — `POST /api/prune-excluded`, confirm dialog
+  before running, toast shows rows removed + decisions flushed. Also clears the server's
+  in-memory `_local_decisions` overlay for any id that got flushed during the call (the
+  flush bypasses this server's own `/api/submit` path, so without this the overlay would
+  keep serving stale 'pending' for those ids until the next server restart — the same
+  class of bug as the 2026-07-18 near-incident's residual double-counting issue, this time
+  fixed at the source instead of needing a manual restart).
+- **Tests**: 4 new tests in `tests/test_calibrate_node.py` (`prune_excluded_pending`
+  removes only pending+excluded rows and no-ops when nothing's stale;
+  `run_calibrate_prune_excluded` flushes a buffered decision before pruning, spares a row
+  that was buffered-verified even though its tier is excluded, and no-ops on an empty
+  buffer). Full suite 472/472 passing.
+- **Live-restarted** `pipe calibrate serve` (old PID 374410 → new PID 652205) to pick up
+  the new endpoint/button, smoke-tested `POST /api/prune-excluded` against the live
+  catalog (returned `{"removed": 0, ...}` — correctly idempotent, nothing left to prune
+  since the one-off cleanup already ran).
+- **Not committed to git yet** — implementation only, no commit/push requested this
+  session.
 
 ### T23+T24 follow-up. `filter.decide` re-run + full manifest re-export — done 2026-07-19
 - **What**: T23's label.suite catch-up and T24's g2p reprocess both landed on the same

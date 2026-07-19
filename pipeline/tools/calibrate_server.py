@@ -91,6 +91,7 @@ from pipeline.nodes.calibrate import (
     load_pending_decisions,
     next_pending,
     queue_stats,
+    run_calibrate_prune_excluded,
     run_calibrate_sample,
     summary_stats,
 )
@@ -605,6 +606,28 @@ def _build_app(default_batch: str | None):
                 self._send_json(result)
                 return
 
+            if self.path == "/api/prune-excluded":
+                # run_calibrate_prune_excluded() flushes the local decision buffer via
+                # record_decision() directly, bypassing this server's own /api/submit path
+                # -- without also dropping those ids from _local_decisions here, the overlay
+                # would keep serving stale 'pending' for them (the same class of bug noted
+                # in the module docstring's near-incident writeup, previously only fixed by
+                # restarting the server process). Snapshot the buffer's ids before flushing
+                # so a full-success flush (the only case run_calibrate_flush_pending archives
+                # the file for) can clear exactly those from the in-memory overlay.
+                pre_flush_ids = set(load_pending_decisions())
+                try:
+                    result = _write(lambda conn: asyncio.run(run_calibrate_prune_excluded(conn=conn)))
+                except Exception as exc:  # noqa: BLE001 -- surface any DB error to the UI, not a 500 traceback
+                    self._send_json({"error": str(exc)}, status=500)
+                    return
+                if result.get("flushed") and not PENDING_DECISIONS_PATH.exists():
+                    with _local_decisions_lock:
+                        for seg_id in pre_flush_ids:
+                            _local_decisions.pop(seg_id, None)
+                self._send_json(result)
+                return
+
             if self.path != "/api/submit":
                 self.send_error(404)
                 return
@@ -780,7 +803,7 @@ _PAGE_HTML = r"""<!doctype html>
   #flag-cancel { background: var(--panel-2); color: var(--muted); border: 1px solid var(--border) !important; }
 
   /* ---- refill ---- */
-  #refillBtn { background: var(--panel-2); color: var(--muted); border: 1px solid var(--border);
+  #refillBtn, #pruneBtn { background: var(--panel-2); color: var(--muted); border: 1px solid var(--border);
                border-radius: 6px; padding: 0.35rem 0.6rem; font-size: 0.78rem; cursor: pointer; }
   #refill-toast { font-size: 0.76rem; color: var(--accent); margin-top: 0.5rem; display: none; }
 
@@ -876,6 +899,7 @@ _PAGE_HTML = r"""<!doctype html>
       </select>
     </span>
     <button id="refillBtn" title="Queue another sample using the Sample options above">↻ Refill</button>
+    <button id="pruneBtn" title="Remove queued-but-pending segments that a later automatic gate has since excluded (tiers.tier='excluded') -- they can never become gold, reviewing them is wasted effort (T25)">🧹 Prune excluded</button>
   </div>
 </div>
 
@@ -1396,6 +1420,30 @@ function showRefillToast(n) {
   clearTimeout(window._toastTimer);
   window._toastTimer = setTimeout(() => { el.style.display = 'none'; }, 4000);
 }
+
+// ---- prune stale pending rows an automatic gate has since excluded (T25) ----
+async function pruneExcluded() {
+  if (!confirm('Remove queued-but-pending segments that a later automatic gate has ' +
+               'already excluded? This only removes never-reviewed queue entries -- ' +
+               'no verified/rejected/flagged decision is touched.')) {
+    return;
+  }
+  const r = await fetch('/api/prune-excluded', { method: 'POST' });
+  if (!r.ok) {
+    const body = await r.json().catch(() => ({}));
+    alert('Prune failed: ' + (body.error || r.statusText));
+    return;
+  }
+  const result = await r.json();
+  const el = document.getElementById('refill-toast');
+  el.textContent = `Pruned ${result.removed} stale pending row(s) (flushed ${result.flushed} buffered decision(s) first)`;
+  el.style.display = 'block';
+  clearTimeout(window._toastTimer);
+  window._toastTimer = setTimeout(() => { el.style.display = 'none'; }, 5000);
+  await Promise.all([refreshStats(), refreshHistory()]);
+  loadNext();
+}
+document.getElementById('pruneBtn').onclick = pruneExcluded;
 
 // ---- sample summary dashboard (explicit refresh, not auto-polling) ----
 function barRow(label, value, total, color) {

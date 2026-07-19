@@ -846,6 +846,18 @@ def cmd_calibrate_flush_pending(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_calibrate_prune_excluded(args: argparse.Namespace) -> int:
+    import asyncio
+    import logging
+
+    from pipeline.nodes.calibrate import run_calibrate_prune_excluded
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    result = asyncio.run(run_calibrate_prune_excluded())
+    print(f"\nDone: {result}")
+    return 0
+
+
 def cmd_calibrate_progress(args: argparse.Namespace) -> int:
     from pipeline.nodes.calibrate import run_calibrate_progress
 
@@ -1039,6 +1051,13 @@ def main() -> int:
              "code-switch status x decision, read-only",
     )
     p_calibrate_progress.set_defaults(func=cmd_calibrate_progress)
+    p_calibrate_prune = calibrate_sub.add_parser(
+        "prune-excluded",
+        help="delete 'pending' calibration_review rows whose segment has since been "
+             "auto-excluded by filter.decide (tiers.tier='excluded') -- flushes the "
+             "offline decision buffer first (2026-07-19, T25)",
+    )
+    p_calibrate_prune.set_defaults(func=cmd_calibrate_prune_excluded)
 
     p_run = sub.add_parser("run", help="Run a DAG node via the orchestrator")
     run_sub = p_run.add_subparsers(dest="run_command", required=True)

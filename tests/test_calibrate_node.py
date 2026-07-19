@@ -25,11 +25,13 @@ from pipeline.nodes.calibrate import (
     next_pending,
     pending_queue_rows,
     progress_report,
+    prune_excluded_pending,
     queue_stats,
     record_decision,
     recommended_sample_n,
     run_calibrate_export_snapshot,
     run_calibrate_flush_pending,
+    run_calibrate_prune_excluded,
     run_calibrate_sample,
     summary_stats,
 )
@@ -842,6 +844,69 @@ def test_run_calibrate_flush_pending_leaves_failed_entries_for_retry(scratch_con
     assert path.exists()  # left in place for retry, not archived
     remaining = load_pending_decisions(path)
     assert set(remaining) == {"bad1"}
+
+
+# ---------------------------------------------------------------------------
+# prune_excluded_pending() / run_calibrate_prune_excluded() (T25, 2026-07-19)
+# ---------------------------------------------------------------------------
+
+def test_prune_excluded_pending_removes_only_pending_excluded_rows(scratch_conn):
+    conn = scratch_conn
+    _seed_segment(conn, "excluded_pending", tier="excluded")
+    _seed_segment(conn, "silver_pending", tier="silver")
+    _seed_segment(conn, "excluded_reviewed", tier="excluded")
+    conn.execute("INSERT INTO calibration_review (id, decision) VALUES ('excluded_pending', 'pending')")
+    conn.execute("INSERT INTO calibration_review (id, decision) VALUES ('silver_pending', 'pending')")
+    conn.execute("INSERT INTO calibration_review (id, decision) VALUES ('excluded_reviewed', 'rejected')")
+
+    result = prune_excluded_pending(conn)
+
+    assert result == {"removed": 1, "pending_before": 2, "pending_after": 1}
+    remaining_ids = {r[0] for r in conn.execute("SELECT id FROM calibration_review").fetchall()}
+    assert remaining_ids == {"silver_pending", "excluded_reviewed"}
+
+
+def test_prune_excluded_pending_noop_when_nothing_stale(scratch_conn):
+    conn = scratch_conn
+    _seed_segment(conn, "silver_pending", tier="silver")
+    conn.execute("INSERT INTO calibration_review (id, decision) VALUES ('silver_pending', 'pending')")
+
+    result = prune_excluded_pending(conn)
+
+    assert result == {"removed": 0, "pending_before": 1, "pending_after": 1}
+
+
+def test_run_calibrate_prune_excluded_flushes_buffer_before_pruning(scratch_conn, tmp_path):
+    """A row that's still 'pending' in the DB but already has a real decision
+    sitting in the offline buffer must be flushed (and therefore spared, even
+    if its segment happens to also be tier='excluded') rather than deleted --
+    this is the near-incident lesson: never prune 'pending' without flushing
+    immediately before."""
+    conn = scratch_conn
+    _seed_segment(conn, "buffered", tier="excluded")
+    _seed_segment(conn, "stale", tier="excluded")
+    conn.execute("INSERT INTO calibration_review (id, decision) VALUES ('buffered', 'pending')")
+    conn.execute("INSERT INTO calibration_review (id, decision) VALUES ('stale', 'pending')")
+    path = tmp_path / "pending.jsonl"
+    append_pending_decision("buffered", "verified", "人手校正嘅文字", None, path=path)
+
+    result = asyncio.run(run_calibrate_prune_excluded(conn=conn, in_path=path))
+
+    assert result["flushed"] == 1
+    assert result["removed"] == 1  # only 'stale' -- 'buffered' was flushed to 'verified' first
+    row = conn.execute("SELECT decision FROM calibration_review WHERE id='buffered'").fetchone()
+    assert row == ("verified",)
+    assert conn.execute("SELECT id FROM calibration_review WHERE id='stale'").fetchone() is None
+
+
+def test_run_calibrate_prune_excluded_empty_buffer(scratch_conn, tmp_path):
+    conn = scratch_conn
+    _seed_segment(conn, "stale", tier="excluded")
+    conn.execute("INSERT INTO calibration_review (id, decision) VALUES ('stale', 'pending')")
+
+    result = asyncio.run(run_calibrate_prune_excluded(conn=conn, in_path=tmp_path / "missing.jsonl"))
+
+    assert result == {"removed": 1, "pending_before": 1, "pending_after": 0, "flushed": 0}
 
 
 # ---------------------------------------------------------------------------

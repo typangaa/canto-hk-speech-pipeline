@@ -580,6 +580,57 @@ async def run_calibrate_flush_pending(*, conn=None, in_path: Path | None = None)
     return {"flushed": flushed, "errors": len(errors), "archived_to": archived_to}
 
 
+def prune_excluded_pending(conn) -> dict:
+    """Delete `calibration_review` rows still `decision='pending'` whose
+    segment has since been auto-excluded by a later `filter.decide` gate
+    (`tiers.tier='excluded'`). These can never become 'gold' -- a 'verified'
+    decision only flips `tiers.tier`, it does not undo an existing exclusion
+    reason -- so once a gate excludes a segment, its still-queued review row
+    is dead weight (found live 2026-07-19: 172 rows queued before T20/T22/T23's
+    audio-language gate catch-up excluded them, see pending_task.md T25)."""
+    pending_before = conn.execute(
+        "SELECT count(*) FROM calibration_review WHERE decision = 'pending'"
+    ).fetchone()[0]
+    conn.execute("""
+        DELETE FROM calibration_review
+        WHERE id IN (
+            SELECT c.id FROM calibration_review c
+            JOIN tiers t ON t.id = c.id
+            WHERE c.decision = 'pending' AND t.tier = 'excluded'
+        )
+    """)
+    pending_after = conn.execute(
+        "SELECT count(*) FROM calibration_review WHERE decision = 'pending'"
+    ).fetchone()[0]
+    removed = pending_before - pending_after
+    log.info(f"calibrate.prune_excluded_pending: removed {removed} stale pending rows "
+             f"({pending_before} -> {pending_after} pending)")
+    return {"removed": removed, "pending_before": pending_before, "pending_after": pending_after}
+
+
+async def run_calibrate_prune_excluded(*, conn=None, in_path: Path | None = None) -> dict:
+    """CLI/server wrapper: flush the offline decision buffer FIRST -- so a
+    still-buffered real human decision on a since-excluded id is replayed
+    into `calibration_review`/`tiers` (and thus counted as reviewed) rather
+    than silently discarded by the prune below. This ordering is the direct
+    lesson from the 2026-07-18 near-incident (PROGRESS.md) where a bulk
+    delete of 'pending' rows almost destroyed 113 rows with real decisions
+    still sitting unflushed -- never delete 'pending' rows without flushing
+    the buffer immediately before. `in_path` (default PENDING_DECISIONS_PATH)
+    exists purely so tests can point the flush step at a scratch file."""
+    from pipeline.catalog.catalog import connect
+
+    owns_conn = conn is None
+    conn = conn or connect()
+    try:
+        flush_result = await run_calibrate_flush_pending(conn=conn, in_path=in_path)
+        prune_result = prune_excluded_pending(conn)
+        return {**prune_result, "flushed": flush_result["flushed"]}
+    finally:
+        if owns_conn:
+            conn.close()
+
+
 def jyutping_preview(text: str) -> dict:
     """Live Jyutping-validity preview for the browser UI's text box -- reuses
     g2p.py's actual conversion + validation functions (not a reimplementation)
