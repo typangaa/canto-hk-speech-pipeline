@@ -122,10 +122,11 @@
   style: "casual"
   priority: "high"
   estimated_hours: 80
-  status: "active"
+  status: "skip"
   notes: >
     Playlist ID confirmed 2026-06-09. Public affairs discussion with diverse guests.
     Very high speaker diversity (different guests each episode).
+    DELETED: Permanently deleted from YouTube by RTHK in 2021.
 
 - name: "頭條新聞 YouTube"
   url: "https://www.youtube.com/playlist?list=PLP6gBXOda05e-1sKR8VcIq2ebUFe470rE"
@@ -136,9 +137,10 @@
   style: "casual"
   priority: "high"
   estimated_hours: 100
-  status: "active"
+  status: "skip"
   notes: >
     Playlist ID confirmed 2026-06-09. Political satire show, multiple hosts, natural HK Cantonese.
+    DELETED: Permanently deleted from YouTube by RTHK.
 
 - name: "香港故事 YouTube"
   url: "https://www.youtube.com/playlist?list=PLuwJy35eAVaLZsUf-TiUgdjfLSo0Qtsxi"
@@ -159,7 +161,7 @@
 # ──────────────────────────────────────────────
 
 - name: "財經快訊 YouTube"
-  url: "https://www.youtube.com/@rthkhongkong"
+  url: "https://www.youtube.com/@RTHK"
   type: "channel"
   source: "rthk"
   language: "yue"
@@ -170,10 +172,10 @@
   status: "evaluate"
   notes: >
     No standalone podcast RSS found (2026-06-09). Needs playlist ID lookup.
-    Short financial news segments, very formal delivery.
+    Short financial news segments, very formal delivery. Handle updated from @rthkhongkong.
 
 - name: "一路走來 YouTube"
-  url: "https://www.youtube.com/@rthkhongkong"
+  url: "https://www.youtube.com/@RTHK"
   type: "channel"
   source: "rthk"
   language: "yue"
@@ -184,7 +186,7 @@
   status: "evaluate"
   notes: >
     No standalone podcast RSS found (2026-06-09). Needs playlist ID lookup.
-    Biography documentary, interview format. Older speakers (50+) represented.
+    Biography documentary, interview format. Older speakers (50+) represented. Handle updated from @rthkhongkong.
 
 - name: "千禧年代 YouTube"
   url: "https://www.youtube.com/playlist?list=PLuwJy35eAVaKEgSGp0cq6PIP32dTaUY1s"
@@ -237,7 +239,7 @@
 # ──────────────────────────────────────────────
 
 - name: "RTHK 新聞直播"
-  url: "https://www.youtube.com/@rthknews"
+  url: "https://www.youtube.com/@RTHK_news"
   type: "channel"
   source: "rthk"
   language: "yue"
@@ -249,7 +251,7 @@
   notes: >
     Live news stream clips. Large volume but many clips are live broadcast with
     background audio. Sample and check DNSMOS distribution before bulk download.
-    Focus on in-studio segments, not outdoor live reporting.
+    Focus on in-studio segments, not outdoor live reporting. Handle updated from @rthknews.
 
 - name: "自由風自由PHONE Podcast"
   url: "https://podcast.rthk.hk/podcast/item.php?pid=289"
@@ -281,11 +283,12 @@
   style: "formal"
   priority: "high"
   estimated_hours: 60
-  status: "active"
+  status: "skip"
   notes: >
     VERIFIED 2026-06-12 via WebSearch. 132 episodes, all seasons (2017-2021).
     Philosophy talk-show with academics. Clear, formal, deliberate Cantonese.
     Excellent for TTS — minimal music, no audience noise, studio quality.
+    DELETED: Permanently deleted from YouTube by RTHK.
 
 - name: "五夜講場 - 哲學有偈傾 2019"
   url: "https://www.youtube.com/playlist?list=PLuwJy35eAVaLYr2s-aZu-fV6ymUg1FhHe"
@@ -296,8 +299,8 @@
   style: "formal"
   priority: "medium"
   estimated_hours: 10
-  status: "active"
-  notes: "VERIFIED 2026-06-12. Season-specific playlist. Skip if 全集合輯 above already covers it."
+  status: "skip"
+  notes: "VERIFIED 2026-06-12. Season-specific playlist. Skip if 全集合輯 above already covers it. PRIVATE: Playlist is forbidden/private (403)."
 
 - name: "五夜講場 - 歷史係咁話 2020"
   url: "https://www.youtube.com/playlist?list=PLuwJy35eAVaJv3m3sK1eqjUrsR0eTsXqt"
