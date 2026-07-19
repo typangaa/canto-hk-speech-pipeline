@@ -1,6 +1,7 @@
 from pipeline.nodes.g2p import (
     MIN_VALID_FRACTION,
     _is_valid_token,
+    candidate_preview,
     g2p_one,
     text_to_jyutping,
     validate_jyutping,
@@ -28,6 +29,36 @@ def test_text_to_jyutping_empty_string_returns_none():
 
 def test_text_to_jyutping_pure_english_returns_none():
     assert text_to_jyutping("hello world") is None
+
+
+def test_candidate_preview_empty_text_returns_empty_list():
+    assert candidate_preview("") == []
+    assert candidate_preview(None) == []
+
+
+def test_candidate_preview_unambiguous_text_returns_empty_list():
+    # Both words resolve to a single known multi-char dictionary entry --
+    # nothing for a reviewer to look at.
+    assert candidate_preview("心臟病中風") == []
+
+
+def test_candidate_preview_flags_known_polyphone():
+    # Bare 重 (out of a disambiguating multi-char context) is a known
+    # polyphone: zung6 "heavy" / cung4 "repeat" / cung5 / cung6 readings.
+    result = candidate_preview("重, hello")
+    assert len(result) == 1
+    entry = result[0]
+    assert entry["token"] == "重"
+    assert entry.keys() == {"token", "candidates", "confidence", "source"}
+    assert len(entry["candidates"]) >= 2
+    assert entry["confidence"] in ("ranked", "tied")
+
+
+def test_candidate_preview_excludes_english_and_punctuation():
+    result = candidate_preview("重, hello")
+    tokens = [entry["token"] for entry in result]
+    assert "hello" not in tokens
+    assert "," not in tokens and "，" not in tokens
 
 
 def test_validate_jyutping_all_valid():

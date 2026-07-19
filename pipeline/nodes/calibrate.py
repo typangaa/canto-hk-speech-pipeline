@@ -646,19 +646,26 @@ def jyutping_preview(text: str) -> dict:
     g2p.py's actual conversion + validation functions (not a reimplementation)
     so the preview can never drift from what the real g2p DAG node will
     compute once this segment's text is verified. Returns
-    {jyutping, valid_fraction, accept, bad_tokens}."""
-    from pipeline.nodes.g2p import text_to_jyutping, validate_jyutping
+    {jyutping, valid_fraction, accept, bad_tokens, ambiguous}.
+
+    `ambiguous` (added alongside canto-hk-g2p v2.0.0's confidence/source
+    fields, 2026-07-19): g2p.py's candidate_preview() -- tokens with 2+
+    known candidate readings, so a reviewer can spot a polyphone the g2p
+    node silently picked rank-0 for. Purely additive to the existing
+    validity fields; the g2p node's own conversion is unaffected."""
+    from pipeline.nodes.g2p import candidate_preview, text_to_jyutping, validate_jyutping
 
     text = (text or "").strip()
     if not text:
-        return {"jyutping": "", "valid_fraction": 1.0, "accept": True, "bad_tokens": []}
+        return {"jyutping": "", "valid_fraction": 1.0, "accept": True, "bad_tokens": [], "ambiguous": []}
 
+    ambiguous = candidate_preview(text)
     jyutping = text_to_jyutping(text)
     if not jyutping:
-        return {"jyutping": "", "valid_fraction": 0.0, "accept": False, "bad_tokens": []}
+        return {"jyutping": "", "valid_fraction": 0.0, "accept": False, "bad_tokens": [], "ambiguous": ambiguous}
 
     accept, frac, bad = validate_jyutping(jyutping)
-    return {"jyutping": jyutping, "valid_fraction": frac, "accept": accept, "bad_tokens": bad}
+    return {"jyutping": jyutping, "valid_fraction": frac, "accept": accept, "bad_tokens": bad, "ambiguous": ambiguous}
 
 
 def _levenshtein(a: str, b: str) -> int:

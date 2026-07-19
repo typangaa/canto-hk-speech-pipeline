@@ -295,6 +295,44 @@ what actually landed and when.)
 
 > Entries dated 2026-07-16 and earlier rotated out to `DECISIONS.md` (2026-07-19 cleanup pass) to keep this file to the recent working window — same rotation `PROGRESS.md` uses. Full history is in `DECISIONS.md`, chronological, nothing lost.
 
+### T27. Surface polyphone-candidate ambiguity in `pipe calibrate serve`'s live preview — done 2026-07-19
+- **What**: T24's "Not done" list item 2 ("wire `convert_candidates()` into `pipe
+  calibrate serve`'s UI to surface polyphone alternatives during human review") —
+  closed out now that T26 confirmed the library's v2.0.0 `confidence`/`source` fields
+  work end-to-end. Before this, the live Jyutping preview in the review textarea only
+  ever showed the rank-0 reading `g2p_one()` would commit — a reviewer had no way to
+  tell "g2p is confident" apart from "g2p silently picked one of 4 candidates via an
+  arbitrary tie-break," since both rendered identically (a single string).
+- **`pipeline/nodes/g2p.py`**: added `candidate_preview(text)` — calls
+  `_G2P.convert_candidates()` (same Pipeline singleton as `g2p_one()`, so this can
+  never drift from what the DAG node actually commits) and returns one
+  `{token, candidates, confidence, source}` dict per Cantonese token with 2+ known
+  readings; unambiguous tokens (single reading, English, punctuation) are omitted.
+  The `g2p` node's own write path (`_convert_for_moss()`) is untouched — this is
+  purely an additive read-only helper for the calibrate UI.
+- **`pipeline/nodes/calibrate.py`**: `jyutping_preview()` now also calls
+  `candidate_preview()` and returns the result as a new `ambiguous` key alongside the
+  existing `jyutping`/`valid_fraction`/`accept`/`bad_tokens` fields.
+- **`pipeline/tools/calibrate_server.py`**: `/api/g2p_preview` needed no change (already
+  forwards whatever `jyutping_preview()` returns verbatim). Added `.amb-token` CSS
+  (dotted underline; `--warn` amber for `confidence="tied"` — rime-cantonese's raw
+  arbitrary tie-break, no real preference signal, most worth a second look; `--muted`
+  grey for `confidence="ranked"` — a real context-aware lean, lower priority) and
+  updated `refreshJyutpingPreview()`'s JS to render an "— ambiguous: …" segment with a
+  hover tooltip showing `confidence via source: candidate / candidate`.
+- **Verified**: `curl /api/g2p_preview?text=重` (a known polyphone: 重要"heavy" vs
+  重複"repeat") returns `ambiguous: [{"token": "重", "candidates": ["cung5", "cung4",
+  "zung6", "cung6"], "confidence": "ranked", "source": "tojyutping_tiebreak"}]` against
+  a live `pipe calibrate serve` instance; `text=心臟病中風` (resolves via whole-word
+  dictionary entries, no per-character ambiguity) returns `ambiguous: []`. 5 new tests
+  (`test_g2p_node.py`: empty/unambiguous/polyphone/English+punct-exclusion cases for
+  `candidate_preview()`; `test_calibrate_node.py`: `jyutping_preview()`'s `ambiguous`
+  key, including the exact-dict-equality empty-text test). Full suite 477 passed / 0
+  failed (was 472 before this change).
+- **Not done** (out of scope this round): using `confidence`/`source` to build the
+  `user_dict` override candidate list (T24's "Not done" item 1) — that's a separate,
+  offline corpus-wide audit script, not a UI change; still queued.
+
 ### T26. Upgrade `canto-hk-g2p` 1.9.0 → 2.0.0 (breaking tuple-arity change) — done 2026-07-19
 - **What**: upstream `canto-hk-g2p` v2.0.0 (closes
   [#12](https://github.com/typangaa/canto-hk-g2p/issues/12) and
@@ -477,8 +515,8 @@ what actually landed and when.)
      review queue has enough samples flagging G2P mispronunciations specifically (as
      opposed to ASR-text errors) — needs a way to distinguish the two failure modes in
      `calibrate.sample`'s existing flag taxonomy, which doesn't exist yet either.
-  2. Wire `convert_candidates()` into `pipe calibrate serve`'s UI to surface polyphone
-     alternatives during human review.
+  2. ~~Wire `convert_candidates()` into `pipe calibrate serve`'s UI to surface polyphone
+     alternatives during human review.~~ — **done 2026-07-19**, see T27 above.
   3. ~~`manifest.jsonl` still holds pre-reprocess jyutping strings~~ — **done
      2026-07-19**, see "T23+T24 follow-up" entry above (bundled with T23's re-export
      rather than exporting twice).

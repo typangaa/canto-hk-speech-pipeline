@@ -138,6 +138,36 @@ def text_to_jyutping(text: str) -> str | None:
     return jyutping if jyutping else None
 
 
+def candidate_preview(text: str) -> list[dict]:
+    """Per-token polyphone-ambiguity detail for the calibrate UI's live preview
+    (pipeline/nodes/calibrate.py's jyutping_preview()) -- reuses the same
+    Pipeline singleton as g2p_one()/text_to_jyutping() so this can never drift
+    from what the g2p DAG node actually commits (always the rank-0 reading,
+    from convert_detailed()). Uses convert_candidates() (canto-hk-g2p v1.9.0+)
+    purely to surface the alternates a human reviewer might want to see --
+    the g2p node's own conversion path is untouched.
+
+    Returns one {token, candidates, confidence, source} dict per Cantonese
+    token that has 2+ known candidate readings; unambiguous tokens (single
+    known reading, English, punctuation) are omitted -- nothing for a
+    reviewer to look at. confidence is "ranked" (real context-aware lean) or
+    "tied" (rime-cantonese arbitrary tie-break, no real signal -- the ones
+    most worth a second look)."""
+    text = (text or "").strip()
+    if not text:
+        return []
+    try:
+        candidates = _G2P.convert_candidates(text)
+    except Exception as exc:
+        log.error(f"canto-g2p convert_candidates failed: {exc}")
+        return []
+    return [
+        {"token": token, "candidates": readings, "confidence": confidence, "source": source}
+        for token, readings, lang, confidence, source in candidates
+        if lang == "yue" and len(readings) > 1
+    ]
+
+
 def _is_valid_token(token: str) -> bool:
     """Hard constraint #8's regex shape (`^[a-z]+[1-6]$`) is necessary but not
     sufficient -- it accepts syllable-shaped garbage like "zzz1" that isn't a

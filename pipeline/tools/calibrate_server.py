@@ -777,6 +777,9 @@ _PAGE_HTML = r"""<!doctype html>
   #jyutping-preview .frac.warn { color: var(--warn); }
   #jyutping-preview .frac.bad { color: var(--bad); }
   #jyutping-preview .bad-token { color: var(--bad); text-decoration: underline wavy; }
+  #jyutping-preview .amb-token { text-decoration: underline dotted; cursor: help; }
+  #jyutping-preview .amb-token.tied { color: var(--warn); }
+  #jyutping-preview .amb-token.ranked { color: var(--muted); }
 
   .actions { display: flex; gap: 0.6rem; flex-wrap: wrap; align-items: center; }
   button.action { font-size: 0.95rem; padding: 0.6rem 1.1rem; border-radius: 6px; border: none;
@@ -1142,7 +1145,15 @@ async function refreshJyutpingPreview() {
   const badPart = p.bad_tokens.length
     ? ` — invalid: ${p.bad_tokens.map((t) => `<span class="bad-token">${escapeHtml(t)}</span>`).join(' ')}`
     : '';
-  el.innerHTML = `jyutping: ${escapeHtml(p.jyutping) || '(none)'} &nbsp; <span class="frac ${cls}">${pct}% valid</span>${badPart}`;
+  const ambiguous = p.ambiguous || [];
+  const ambPart = ambiguous.length
+    ? ` — ambiguous: ${ambiguous.map((a) => {
+        const acls = a.confidence === 'tied' ? 'tied' : 'ranked';
+        const title = `${a.confidence} via ${a.source}: ${a.candidates.join(' / ')}`;
+        return `<span class="amb-token ${acls}" title="${escapeHtml(title)}">${escapeHtml(a.token)}</span>`;
+      }).join(' ')}`
+    : '';
+  el.innerHTML = `jyutping: ${escapeHtml(p.jyutping) || '(none)'} &nbsp; <span class="frac ${cls}">${pct}% valid</span>${badPart}${ambPart}`;
 }
 
 async function refreshFilterOptions() {

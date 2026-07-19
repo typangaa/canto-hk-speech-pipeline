@@ -655,11 +655,30 @@ def test_jyutping_preview_valid_cantonese_text():
     assert result["valid_fraction"] == 1.0
     assert result["bad_tokens"] == []
     assert "sam1" in result["jyutping"]
+    assert isinstance(result["ambiguous"], list)
 
 
 def test_jyutping_preview_empty_text():
     result = jyutping_preview("")
-    assert result == {"jyutping": "", "valid_fraction": 1.0, "accept": True, "bad_tokens": []}
+    assert result == {
+        "jyutping": "",
+        "valid_fraction": 1.0,
+        "accept": True,
+        "bad_tokens": [],
+        "ambiguous": [],
+    }
+
+
+def test_jyutping_preview_flags_polyphone_ambiguity():
+    # Bare 重 (out of a disambiguating multi-char context) is a known
+    # polyphone -- should surface in `ambiguous` regardless of which reading
+    # g2p commits to as jyutping.
+    result = jyutping_preview("重")
+    tokens = [a["token"] for a in result["ambiguous"]]
+    assert "重" in tokens
+    for a in result["ambiguous"]:
+        assert a["confidence"] in ("ranked", "tied")
+        assert len(a["candidates"]) >= 2
 
 
 # ---------------------------------------------------------------------------
