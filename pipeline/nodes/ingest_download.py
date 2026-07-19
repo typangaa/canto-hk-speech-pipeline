@@ -366,8 +366,9 @@ def _download_youtube_source(
     outtmpl = str(out_dir / f"%(upload_date)s_{name_slug}_%(id)s.%(ext)s")
     before = _snapshot_audio_files(out_dir)
 
+    import sys
     cmd = [
-        "yt-dlp",
+        sys.executable, "-m", "yt_dlp",
         "--no-playlist" if entry.get("type") not in ("playlist", "channel") else "--yes-playlist",
         "--format", "bestaudio/best",   # native container, NO --extract-audio/--audio-format
         "--restrict-filenames",
@@ -382,6 +383,11 @@ def _download_youtube_source(
         "--max-filesize", "500M",
         "--no-warnings", "--quiet", "--ignore-errors", "--no-part",
     ]
+    node_path = Path("/home/typangaa/.local/bin/node")
+    if node_path.exists():
+        cmd += ["--js-runtimes", f"node:{node_path}"]
+    else:
+        cmd += ["--js-runtimes", "node"]
     cookies_from_browser = getattr(args, "cookies_from_browser", None)
     if cookies_from_browser:
         cmd += ["--cookies-from-browser", cookies_from_browser]
