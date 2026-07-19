@@ -904,3 +904,49 @@ other_language_audio segments:
 `report.build` re-run: 596,089 entries, 10/11 acceptance criteria pass (unchanged
 pattern, `text_verified` still the only failure). `grep -c "/mnt/Drive1/"` = 0 across
 manifest.jsonl/train.jsonl/val.jsonl. `catalog verify` 17/17 PASS.
+
+## 2026-07-19 — T24: `canto-hk-g2p` 1.5.0 → 1.9.0 upgrade + phonological validation
+
+**Decision**: reinstall the pipeline's `.venv` copy of `canto_hk_g2p` (stuck at 1.5.0)
+up to 1.9.0 — four releases behind (v1.6.0 LSHK phonology `inventory()`/`segment()`
+API, v1.7.0/v1.7.1 polyphone tie-break data fixes, v1.8.0 `user_dict` runtime override,
+v1.9.0 `convert_candidates()`), all already on PyPI. Reinstalled editable from
+`~/Documents/canto-g2p` (already at `df8c552`/v1.9.0):
+`uv pip install -e ~/Documents/canto-g2p --force-reinstall --no-deps`.
+
+Used v1.6.0's `segment()` to close a real validation gap: `pipeline/nodes/g2p.py`'s
+Jyutping validity check was regex-shape-only (`^[a-z]+[1-6]$`), which accepts
+syllable-shaped strings that aren't real Cantonese syllables (e.g. `"zzz1"`). New
+`_is_valid_token()` requires both the regex AND `canto_hk_g2p.segment(token) is not
+None` — a genuine tightening of Hard Constraint #8's intent, not just its letter.
+
+**Reprocess decision**: rather than let the library-upgrade benefits (esp. v1.7.0/
+v1.7.1's tie-break corrections) only apply to newly-discovered segments going forward,
+reset `provenance = NULL` for all 780,215 `g2p_node`-tagged rows (same idempotent
+pattern as T20/T22's `lang_label_checked` reset) and re-ran `pipe run g2p` over the
+full backlog. Justified by two pre-flight measurements: (1) a 3,000-row sample compared
+old regex-only vs. new segment()-gated validation — **0 accept/reject flips**, so the
+stricter check carries no manifest-eligibility risk; (2) a 500-row before/after diff
+showed **287/500 (57%) rows got a corrected `jyutping` string** from the tie-break data
+alone (e.g. `一本正經` `zing1`→`zing3`, `沉重` `zung6`→`cung5`), 0 valid_fraction
+regressions. Full backlog result: **768,663 converted, 768,634 accepted (99.996%), 29
+rejected, 0 errors, 225s (3,412/s), `run_id=g2p_e1d6091188a0`** — g2p remains "the
+fastest hot path in the pipeline".
+
+**Deliberately not adopted this round**: v1.8.0's `user_dict` override (no curated
+correction data exists yet — needs sourcing from real QA-reject evidence first, which
+needs its own flag-taxonomy work in `calibrate.sample`) and v1.9.0's
+`convert_candidates()` (a `pipe calibrate serve` UI feature, not a `g2p`-node concern).
+Both tracked as explicit follow-ups rather than speculatively built without real data
+backing them (see `pending_task.md` T24).
+
+**Upstream**: filed 3 feature requests against `typangaa/canto-hk-g2p` — issues #11
+(`convert_candidates_batch()`), #12 (per-candidate confidence/frequency weight), #13
+(expose which dictionary layer resolved a token) — surfaced while evaluating what the
+calibrate-UI candidates integration and a future `user_dict` build would actually need.
+
+**Still outstanding**: `manifest.jsonl` was NOT re-exported this session — it still
+holds pre-reprocess (un-tie-broken) `jyutping` strings for every already-shipped row.
+Folded into T23's existing pending `filter.decide` re-run + manifest re-export
+follow-up (see `pending_task.md`) rather than re-exporting twice for two separate
+catalog changes landing the same week. Full detail: `pending_task.md` T24.

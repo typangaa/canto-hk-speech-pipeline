@@ -40,7 +40,24 @@ was checked against):
                                      upsert_rows() bulk-write fix (2026-07-16).
   3. segment.diarize         solo   (GPU; writes diarization_turns+raw_segments)
   4. segment.vad_cut         solo   (reads diarization_turns, writes segments)
-  5. pregate.snr             solo   (reads segments, writes pregate)
+  5. pregate.snr             \\
+     label.suite              }-- run-many: pregate.snr is CPU-only (no
+                                     --devices arg), label.suite is GPU-only
+                                     (cuda:0,cuda:1) -- no device contention,
+                                     unlike pairing two different GPU models
+                                     on one device. Both read segments ONLY,
+                                     write disjoint tables (pregate vs.
+                                     labels_lang/labels_overlap/labels_music).
+                                     T23 (pending_task.md, 2026-07-18): added
+                                     because label.suite was previously absent
+                                     from every round, so its output silently
+                                     fell 15 days / 785k segments behind while
+                                     every other stage kept advancing via this
+                                     chain -- filter.decide's T20/T22
+                                     audio-language gates (round 10) and
+                                     quality_tier.assign (round 13) both
+                                     depend on label.suite's output, so it
+                                     must land before either.
   6. asr.transcribe          solo   (GPU; do NOT pair with speaker.embed on
                                      shared devices -- interleaving two
                                      different GPU models on one device was
@@ -54,7 +71,9 @@ was checked against):
   9. filter.acoustic         solo   (reads filters_text pass=true only --
                                      sequential dependency on round 8)
  10. filter.decide           solo   (merges filters_text+filters_acoustic --
-                                     sequential dependency on rounds 8+9)
+                                     sequential dependency on rounds 8+9;
+                                     also reads labels_lang from round 5 for
+                                     the T20/T22 audio-language gates)
  11. g2p                     \\
      tier.assign              }-- run-many: three-way, all read
      speaker.cluster         /       asr_agreement/speaker_embeddings (already
@@ -66,7 +85,8 @@ was checked against):
                                      g2p+tier.assign are safe stand-ins that
                                      exercise the same speaker.cluster
                                      large-upsert path this round).
- 12. quality_tier.assign     solo   (depends on round 11's tier.assign output)
+ 12. quality_tier.assign     solo   (depends on round 11's tier.assign output,
+                                     and on round 5's labels_music/labels_overlap)
 
 Usage:
     pipe chain run                       # full chain, all rounds
@@ -76,7 +96,8 @@ Usage:
                                           # rounds if nothing new was ingested
     pipe chain run --dry-run             # print the round plan, run nothing
     pipe chain run --devices cuda:0,cuda:1   # forwarded to every round that
-                                          # takes --devices (diarize/asr/lang_screen)
+                                          # takes --devices (diarize/asr/
+                                          # lang_screen/label.suite)
 
 Each round's stdout/stderr is teed to metadata/logs/chain_runner_<UTC ts>.log
 in addition to the console, with clear round-boundary markers, so a resumed
@@ -115,7 +136,8 @@ def build_rounds(*, devices: str | None) -> list[Round]:
         Round(3, "segment.diarize", ["segment.diarize"],
               extra_args={"segment.diarize": device_args} if devices else {}),
         Round(4, "segment.vad_cut", ["segment.vad_cut"]),
-        Round(5, "pregate.snr", ["pregate.snr"]),
+        Round(5, "pregate.snr + label.suite", ["pregate.snr", "label.suite"],
+              extra_args={"label.suite": device_args} if devices else {}),
         Round(6, "asr.transcribe", ["asr.transcribe"],
               extra_args={"asr.transcribe": device_args} if devices else {}),
         Round(7, "asr.agreement", ["asr.agreement"]),
@@ -205,7 +227,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--only", default=None, help="comma-separated round numbers to run, e.g. 2,11")
     parser.add_argument("--skip", default=None, help="comma-separated round numbers to skip")
-    parser.add_argument("--devices", default=None, help="forwarded as --devices to GPU rounds (diarize/asr.transcribe/lang_screen.auto)")
+    parser.add_argument("--devices", default=None, help="forwarded as --devices to GPU rounds (diarize/asr.transcribe/lang_screen.auto/label.suite)")
     parser.add_argument("--dry-run", action="store_true", help="print the round plan, run nothing")
     args = parser.parse_args()
 

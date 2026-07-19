@@ -1,5 +1,6 @@
 from pipeline.nodes.g2p import (
     MIN_VALID_FRACTION,
+    _is_valid_token,
     g2p_one,
     text_to_jyutping,
     validate_jyutping,
@@ -56,6 +57,40 @@ def test_validate_jyutping_below_threshold_rejects():
     accept, frac, bad = validate_jyutping("XX YY ZZ")
     assert accept is False
     assert frac == 0.0
+
+
+# ---------------------------------------------------------------------------
+# _is_valid_token() -- regex shape is necessary but not sufficient; a token
+# must also resolve via canto_hk_g2p.segment() (v1.6.0+) to a real Jyutping
+# onset/rime/tone combination. "zzz1" matches the regex but isn't a real
+# syllable -- this is the gap the phonological check closes.
+# ---------------------------------------------------------------------------
+
+def test_is_valid_token_real_syllable_accepted():
+    assert _is_valid_token("nei5") is True
+
+
+def test_is_valid_token_syllabic_nasal_accepted():
+    assert _is_valid_token("m4") is True
+    assert _is_valid_token("ng4") is True
+
+
+def test_is_valid_token_regex_shaped_but_phonologically_invalid_rejected():
+    """Passes JYUTPING_TOKEN's `^[a-z]+[1-6]$` regex but isn't a real syllable."""
+    assert _is_valid_token("zzz1") is False
+
+
+def test_is_valid_token_wrong_shape_rejected():
+    assert _is_valid_token("[BAD]") is False
+    assert _is_valid_token("XX") is False
+
+
+def test_validate_jyutping_rejects_regex_shaped_garbage():
+    """A token like "zzz1" used to pass the old regex-only check -- it must
+    not pass now that _is_valid_token() also requires segment() to resolve it."""
+    accept, frac, bad = validate_jyutping("nei5 zzz1")
+    assert frac == 0.5
+    assert bad == ["zzz1"]
 
 
 # ---------------------------------------------------------------------------

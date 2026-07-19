@@ -85,7 +85,7 @@ Source: round-2 post-execution review of `docs/PIPELINE_REVIEW_2026-07-11.md` §
 
 ## 🟠 Tier 2 — functional gaps, close before P6
 
-(none currently — T5 done 2026-07-17, see Done section)
+(none currently — T23 done 2026-07-18, see Done section)
 
 ---
 
@@ -272,12 +272,218 @@ Do now (independent):      T1 (human QA, owner-paced, code-switch focus — 2026
 Schedule into P6 proper:   T9 (depends on T1), T10, T14 levers (3)+(4) live-validation
 Pulled by training needs:  T13
 ```
-(updated 2026-07-17 — T5/T6/T16/T15-remaining-chain all moved to Done since this list was
-last written; see Done section for what actually landed and when.)
+(updated 2026-07-19 — the T23+T24 combined follow-up (filter.decide re-run + full
+manifest re-export) is DONE, see the "T23+T24 follow-up" Done entry below; nothing left
+queued behind it. T24 (canto-hk-g2p 1.5.0→1.9.0 upgrade + phonological validation +
+corpus-wide reprocess) and T23 (label.suite chain-wiring) both in Done. T20/T21/T22 +
+the calibration_review near-incident moved to Done 2026-07-18. T5/T6/T16/
+T15-remaining-chain moved to Done in the prior 2026-07-17 update; see Done section for
+what actually landed and when.)
 
 ---
 
 ## Done
+
+### T23+T24 follow-up. `filter.decide` re-run + full manifest re-export — done 2026-07-19
+- **What**: T23's label.suite catch-up and T24's g2p reprocess both landed on the same
+  day, each leaving its own pending "make it actually reach filters.pass/manifest.jsonl"
+  follow-up (see both entries below). Closed both in one combined pass rather than
+  re-exporting twice for two catalog changes landing the same week.
+- **`lang_label_checked` reset turned out to be unnecessary**: re-reading
+  `DECIDE_DISCOVER_SQL` (`pipeline/nodes/filter.py`) showed it already self-heals —
+  `(COALESCE(f.lang_label_checked, FALSE) = FALSE AND ll.id IS NOT NULL)` re-triggers a
+  decided row the moment a `labels_lang` row lands for it later, no manual `UPDATE`
+  needed (unlike T20's original rollout, which genuinely needed one because it was
+  deploying new gate *logic* onto rows already marked `lang_label_checked = TRUE` from
+  before the gate existed — a different scenario). Verified live: querying
+  `DECIDE_DISCOVER_SQL` directly showed 785,680 rows already in scope before touching
+  anything. The "needs a manual reset" note in T23's write-up below was an
+  overcautious inference, not re-checked against the live query at the time — corrected
+  here.
+- **`filter.decide` re-run**: `pipe run filter.decide`, 785,680 rows re-decided in 21s
+  (37,724/s at completion), 319,427 passed this batch, 0 errors,
+  `run_id=filter_decide_7df33c041aff`. Net effect on `filters`: pass 768,663→**763,375**
+  (-5,288), driven entirely by the three audio-language gates now seeing labels_lang for
+  segments they never had it for before: `mandarin_audio` 10,940→**13,979** (+3,039),
+  `other_language_audio` 546→**2,322** (+1,776), `english_audio` 70→**543** (+473). Every
+  other fail_reason (snr/mandarin_ratio/text_too_short/dnsmos/english_ratio/
+  text_too_long/dnsmos_error) unchanged, as expected — those gates don't read
+  `labels_lang`. `catalog verify` 17/17 PASS before and after.
+- **Manifest re-export**: all 7 cuts re-exported (default + 6 derived, same set as
+  T20/T22's rollout) —
+  - default (`manifest.jsonl`/`train.jsonl`/`val.jsonl`): 596,089→**594,010** entries,
+    1331.6h→**1328.6h**, 8,682 speakers
+  - `--min-tier auto_gold`: **274,848** / 634.0h
+  - `--min-tier silver`: **427,757** / 959.6h
+  - `--min-tier bronze`: **594,010** / 1328.6h (same population as default)
+  - `--code-switch only`: **83,510** / 224.3h
+  - `--code-switch exclude`: **510,500** / 1104.3h
+  - `--min-tier auto_gold --min-quality-tier B`: **55,360** / 151.6h
+  `report.build` re-run: 594,010 entries, 10/11 acceptance criteria pass (unchanged
+  pattern, `text_verified` still the only failure). `grep -c "/mnt/Drive1/"` = 0 across
+  manifest.jsonl/train.jsonl/val.jsonl. `catalog verify` 17/17 PASS.
+- **Test baseline refresh**: `tests/test_catalog.py::test_manifest_build_matches_
+  expected_corpus_totals` had already drifted stale from T22's 2026-07-18 re-export
+  (596,571 floor vs. that session's actual 596,089 — flagged but not fixed in T23's
+  write-up) and this session's further legitimate drop widened the gap. Per the test's
+  own documented update policy ("update this baseline only after an intentional,
+  verified manifest.export re-run" — exactly what this entry is), refreshed all 6
+  baseline constants to this session's real values (count=594010, speakers=8682,
+  gold=149, auto_gold=274699, silver=152909, bronze=166253) with a dated comment
+  explaining the drop. Full suite: 468 passed, 0 failed (was 467 passed / 1 failed
+  before this fix).
+- **Git**: all of this session's changes (T24 code + T23/T24 follow-up) committed
+  together — see commit referenced at the top of this file's git log.
+
+### T24. Upgrade `canto-hk-g2p` 1.5.0 → 1.9.0 + phonological validation — done 2026-07-19
+- **What**: the pipeline's `.venv` had `canto_hk_g2p` pinned at 1.5.0 while the local
+  source repo (`~/Documents/canto-g2p`, this pipeline's own upstream dependency) had
+  already shipped four releases on top of that (v1.6.0 inventory/segment API, v1.7.0/
+  v1.7.1 polyphone tie-break data fixes, v1.8.0 `user_dict` runtime override, v1.9.0
+  `convert_candidates()`) — all already tagged/published on PyPI, confirmed via
+  `gh release list` + PyPI JSON API. `pipeline/nodes/g2p.py`'s Jyutping validity check
+  was also regex-shape-only (`^[a-z]+[1-6]$`), which accepts syllable-shaped garbage
+  like `"zzz1"` that isn't a real Cantonese syllable — a real gap against Hard
+  Constraint #8's intent, closeable now that v1.6.0 exposes the LSHK phonology inventory.
+- **Reinstall**: `uv pip install -e ~/Documents/canto-g2p --force-reinstall --no-deps`
+  (editable, source repo already at `df8c552`/v1.9.0) — `.venv` now reports
+  `canto_hk_g2p.__version__ == "1.9.0"`.
+- **Code change (`pipeline/nodes/g2p.py`)**: added `_is_valid_token()` — a token must
+  pass both the existing regex AND `canto_hk_g2p.segment(token) is not None` (v1.6.0).
+  `validate_jyutping()` now calls this instead of the bare regex. Module docstring
+  updated with a dated note explaining the upgrade, what changed, and what was
+  deliberately NOT adopted this round (see below). 6 new tests in
+  `tests/test_g2p_node.py` (`_is_valid_token` accept/reject cases including the
+  `"zzz1"`-passes-regex-but-not-phonology case, plus a `validate_jyutping`-level
+  regression test) — 19/19 passing in that file; full suite 467 passed / 1 failed
+  (the same pre-existing `test_manifest_build_matches_expected_corpus_totals` baseline
+  staleness flagged in T23's write-up below, unrelated to this change).
+- **Corpus-wide reprocess**: sampled 3,000 already-converted rows comparing old
+  regex-only vs. new segment()-gated validation — **zero accept/reject flips** (real
+  ASR-derived text essentially never produces phonologically-invalid-but-regex-shaped
+  garbage), so the stricter check was safe to roll out corpus-wide with no expected
+  manifest-eligibility impact. Separately, a 500-row before/after diff showed **287/500
+  (57%) rows got a corrected `jyutping` string** from the v1.7.0/v1.7.1 tie-break data
+  fix alone (e.g. `一本正經` `zing1`→`zing3`, `沉重` `zung6`→`cung5`), with 0
+  valid_fraction regressions — confirmed the reprocess is a pure correctness win, not a
+  gate-shifting risk. Reset `provenance = NULL` for all 780,215 `g2p_node`-tagged rows
+  (same idempotent-reset pattern as T20/T22's `lang_label_checked`) and re-ran
+  `pipe run g2p` in the background (`nohup`, `metadata/logs/g2p_reprocess_20260719.log`)
+  — **768,663 converted, 768,634 accepted (99.996%), 29 rejected (valid_fraction <
+  0.80), 0 errors, 225s (3,412/s), `run_id=g2p_e1d6091188a0`** (the ~11,552-row drop
+  from 780,215 to 768,663 is expected: discovery is scoped to `filters.pass = TRUE`
+  ids, same anti-join shape as every other run — a handful of ids lost `filters.pass`
+  between the original g2p run and this reprocess, e.g. via T20/T22's later gate
+  tightening, and correctly fell out of scope rather than being force-reprocessed
+  anyway).
+- **Deliberately NOT adopted this round** (scoped out, tracked as follow-ups, not
+  spec-first-guessed without real data): v1.8.0's `Pipeline(user_dict=...)` override —
+  no curated correction list exists yet; needs sourcing from `calibrate.sample` QA
+  reject/flag patterns first (RTHK/YouTube/podcast presenter names, programme titles
+  are the likely candidates, per the earlier advisory conversation). v1.9.0's
+  `convert_candidates()` — a `pipe calibrate serve` UI feature (surface ambiguous
+  polyphone alternatives to the human reviewer instead of blind-trusting rank-0), not a
+  `g2p` node concern; needs its own design pass on the calibrate UI.
+- **Upstream requests filed** (per the earlier advisory): 3 issues opened against
+  `typangaa/canto-hk-g2p` — [#11](https://github.com/typangaa/canto-hk-g2p/issues/11)
+  `convert_candidates_batch()` (throughput parity with the rest of the batch-capable
+  API), [#12](https://github.com/typangaa/canto-hk-g2p/issues/12) a confidence/frequency
+  weight per candidate (to distinguish a strong lean from a genuine tie when deciding
+  what's worth a human QA look), [#13](https://github.com/typangaa/canto-hk-g2p/issues/13)
+  exposing which dictionary layer resolved a token (word_dict/rime/ToJyutping/oral_hk/
+  user_dict — would make building the `user_dict` override list evidence-based instead
+  of guesswork).
+- **Not done** (explicit follow-ups, not started this session):
+  1. Build the actual `user_dict` override list from real QA-reject evidence once T1's
+     review queue has enough samples flagging G2P mispronunciations specifically (as
+     opposed to ASR-text errors) — needs a way to distinguish the two failure modes in
+     `calibrate.sample`'s existing flag taxonomy, which doesn't exist yet either.
+  2. Wire `convert_candidates()` into `pipe calibrate serve`'s UI to surface polyphone
+     alternatives during human review.
+  3. ~~`manifest.jsonl` still holds pre-reprocess jyutping strings~~ — **done
+     2026-07-19**, see "T23+T24 follow-up" entry above (bundled with T23's re-export
+     rather than exporting twice).
+
+### T23. Wire `label.suite` into `pipeline/tools/chain_runner.py` — done 2026-07-18
+- **What**: `label.suite` (writes `labels_lang`/`labels_overlap`/`labels_music` — the
+  per-segment audio-based lang-id T20/T22's `filter.decide` gates depend on, plus the
+  music/overlap signals T13's `quality_tier.assign` depends on) was last run manually
+  2026-07-03 and was entirely absent from all 12 `chain_runner.py` rounds — not a one-off
+  oversight, the round list simply never included it. Every other stage kept advancing
+  via `pipe chain run` automation while `label.suite` silently fell behind: coverage
+  stalled at 36.72% (455,930/1,241,610 segments) for 15 days, growing a 785,480-segment
+  backlog. Found while investigating why a recurring NBN-advertisement text (embedded in
+  18 SBS podcast episodes) was still passing `filter.decide` — 10/18 occurrences had
+  `labels_lang` = NULL, so the T20/T22 audio-language elif branches never fired.
+- **Immediate mitigation (2026-07-18)**: ran the 785,480-row backlog in the background
+  (`nohup .venv/bin/python -m pipeline.cli run label.suite`, PID 452882, both GPUs,
+  `metadata/logs/label_suite_backlog_20260718.log`) — finished cleanly, 785,480
+  processed, 0 errors, 16,209s (48.5/s), `run_id=label_suite_2e8e5702fa46`. Coverage now
+  100%. This alone was only the one-time catch-up; the structural fix is below.
+  **Follow-up done 2026-07-19** (see "T23+T24 follow-up" entry above): `filter.decide`
+  re-run + full manifest re-export. Turned out `lang_label_checked` did NOT need a
+  manual reset — `DECIDE_DISCOVER_SQL` already self-heals on a newly-landed
+  `labels_lang` row; the note originally here assumed it needed the same manual reset
+  T20's rollout required, which was checked and found unnecessary this time (different
+  scenario — see the follow-up entry for why).
+- **Fix (differs slightly from the original plan)**: rather than inserting `label.suite`
+  as a brand-new round (which would have renumbered rounds 5-12 to 6-13), it was merged
+  directly into the existing round 5 as a run-many pair with `pregate.snr` — same DAG
+  position, zero renumbering needed elsewhere. `pregate.snr` is CPU-only (CLI help says
+  "CPU, pipeline-cut segments only", no `--devices` arg) and `label.suite` is GPU-only
+  (`cuda:0,cuda:1`) — no device contention, unlike pairing two different GPU models on
+  one device (2026-07-13 starvation finding). Both read only `segments`; writes are fully
+  disjoint (`pregate` vs `labels_lang`/`labels_overlap`/`labels_music`) — same safety
+  shape as the existing round 2 (`ingest.probe`+`lang_screen.auto`) and round 11 pairings.
+  Round 5 now lands before round 10 (`filter.decide`, consumes `labels_lang`) and round
+  12 (`quality_tier.assign`, consumes `labels_music`/`labels_overlap`), so both stay
+  automatically current on every future `pipe chain run` pass — no more silent drift.
+  ```
+  1. ingest.commit
+  2. ingest.probe + lang_screen.auto
+  3. segment.diarize
+  4. segment.vad_cut
+  5. pregate.snr + label.suite        <- CHANGED: label.suite added, run-many
+  6. asr.transcribe                    (unchanged)
+  7. asr.agreement
+  8. filter.text
+  9. filter.acoustic
+  10. filter.decide                    (now sees fresh labels_lang every pass)
+  11. g2p + tier.assign + speaker.cluster
+  12. quality_tier.assign              (now sees fresh labels_music/overlap every pass)
+  ```
+- **Edits made**:
+  1. `pipeline/tools/chain_runner.py`: `build_rounds()` round 5 →
+     `Round(5, "pregate.snr + label.suite", ["pregate.snr", "label.suite"],
+     extra_args={"label.suite": device_args} if devices else {})`. Module docstring's
+     round table, `--devices` CLI help text, and `--devices` argparse help string all
+     updated to reflect `label.suite` now being a GPU round threaded via `--devices`.
+     Round count unchanged at 12 (no renumbering needed).
+  2. `tests/test_chain_runner.py`: `test_build_rounds_expected_run_many_pairs` and
+     `test_build_rounds_solo_rounds_are_single_node` updated for round 5 now being
+     run-many; `test_build_rounds_devices_threaded_only_to_gpu_rounds` extended to assert
+     `label.suite` gets `--devices` while `pregate.snr` doesn't; 2 new tests
+     (`test_run_chain_run_many_round_5_pairs_pregate_and_label_suite`,
+     `test_run_chain_run_many_round_5_threads_devices_to_label_suite_only`) mirroring the
+     existing round-2 pairing/device-threading test pattern. 20/20 passing in this file.
+  3. No catalog/schema changes — `label.suite` was already `RUN_MANY_ADAPTERS`-registered
+     (`conn=` injection already done) and already accepted `--devices`/`--gpu-policy`/
+     `--batch`/`--mem-fraction`/`--limit` via its existing CLI parser.
+- **Verified**: `pipe chain run --dry-run` shows the correct 12-round plan with round 5 as
+  `pregate.snr + label.suite [run-many]`; `tests/test_chain_runner.py` 20/20 passing; full
+  suite 462/463 passing (1 unrelated pre-existing failure, see below).
+- **Unrelated pre-existing test failure found while verifying (not fixed, out of scope)**:
+  `tests/test_catalog.py::test_manifest_build_matches_expected_corpus_totals` fails —
+  live count is 596,089 but the test's `BASELINE_COUNT` floor is 596,571. This is T22's
+  same-session re-export (`default 596,577→596,089`, see T22 above) never having been
+  reflected back into this test's baseline constants — a pure test-staleness gap, not
+  caused by this T23 change (T23 doesn't touch `filters`/manifest counts, only
+  `chain_runner.py` round wiring). Flagging for a future baseline refresh; left as-is
+  since it's outside T23's stated scope.
+- **Not done**: the `lang_label_checked` reset + `filter.decide` re-run + manifest
+  re-export that would make the 785,480-row catch-up's newly-covered `labels_lang` rows
+  actually affect `filters.pass` — this is the same downstream step T20/T22 each did
+  after their own production rollout, still pending as a separate follow-up.
 
 ### T20. Audio-based Mandarin gate wired into `filter.decide` — done 2026-07-18
 - **What**: found while the owner was reviewing the T1 QA queue and asked why Mandarin

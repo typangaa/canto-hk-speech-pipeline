@@ -313,19 +313,23 @@ def test_manifest_build_matches_expected_corpus_totals(catalog_conn):
     Update this baseline only after an intentional, verified manifest.export re-run."""
     from pipeline.nodes.manifest import run_manifest_build
 
-    # Baseline dropped 2026-07-18 (T20): the `mandarin_audio` gate flipped 10,940
-    # segments from pass to fail (audio-based Mandarin detection wired into
-    # filter.decide, see DECISIONS.md 2026-07-18), which legitimately shrinks the
-    # manifest-eligible pool -- this is not the "never shrink" case the floor is
-    # meant to guard, it's an intentional, verified re-export (matches this
-    # docstring's own update policy above). gold rose 58->149 from the T1 review
-    # session recovered the same day (see DECISIONS.md's "Near-incident" entry).
-    BASELINE_COUNT = 596571
-    BASELINE_SPEAKERS = 8715
+    # Baseline dropped 2026-07-19 (T23+T24 follow-up): label.suite's 785,480-segment
+    # backlog catch-up (T23, 2026-07-18) reached 100% labels_lang coverage, which let
+    # filter.decide's audio-language gates (T20/T22) evaluate hundreds of thousands of
+    # segments they'd never seen labels for -- discover_decide() re-decided 785,680 rows
+    # and correctly excluded 5,288 MORE of them (mandarin_audio +3,039, other_language_
+    # audio +1,776, english_audio +473; see DECISIONS.md 2026-07-19), none of which is a
+    # regression -- these segments were always non-Cantonese, the gate just couldn't see
+    # them before. A canto-hk-g2p 1.5.0->1.9.0 upgrade + corpus-wide g2p reprocess (T24,
+    # same date) landed in the same session but is gate-neutral (0 accept/reject flips
+    # measured pre-rollout) and did not itself move these counts. Re-verified via a fresh
+    # `manifest.export` run per this docstring's own update policy above.
+    BASELINE_COUNT = 594010
+    BASELINE_SPEAKERS = 8682
     BASELINE_GOLD = 149
-    BASELINE_AUTO_GOLD = 274965
-    BASELINE_SILVER = 153628
-    BASELINE_BRONZE = 167829
+    BASELINE_AUTO_GOLD = 274699
+    BASELINE_SILVER = 152909
+    BASELINE_BRONZE = 166253
     TIER_DEPLETION_TOLERANCE = 1000
 
     result = run_manifest_build()

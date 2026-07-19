@@ -51,16 +51,41 @@ directory three parent levels up from `canto_hk_g2p.__file__` — a path that
 only resolves under the editable/source dev install this script was written
 against (~/Documents/canto-g2p). canto-hk-g2p is deliberately excluded from
 uv.lock (pyproject.toml: "install from source") and has since shipped a
-public `canto_hk_g2p.Pipeline` wrapper (now on PyPI, v1.5.0 vs. whatever
-version originally produced manifest.jsonl's frozen `jyutping` field) that
-resolves its own bundled data/ correctly regardless of install layout — used
-here instead of the private API. Byte-exact parity against the legacy
-snapshot's `jyutping` field is NOT expected as a result (the library gained
-punctuation-normalisation and other behaviour changes between versions,
-outside this pipeline's control) — same "dependency drifted, not a bug" shape
-as asr.transcribe's golden-parity note (REARCHITECTURE_IMPLEMENTATION_PLAN.md
-§9.1). The correctness gate for this node is per-token structural validity
-(`^[a-z]+[1-6]$`, hard constraint #8), not legacy-byte-match.
+public `canto_hk_g2p.Pipeline` wrapper (now on PyPI, v1.9.0 as of 2026-07-19
+— see below — vs. whatever version originally produced manifest.jsonl's
+frozen `jyutping` field) that resolves its own bundled data/ correctly
+regardless of install layout — used here instead of the private API.
+Byte-exact parity against the legacy snapshot's `jyutping` field is NOT
+expected as a result (the library gained punctuation-normalisation and other
+behaviour changes between versions, outside this pipeline's control) — same
+"dependency drifted, not a bug" shape as asr.transcribe's golden-parity note
+(REARCHITECTURE_IMPLEMENTATION_PLAN.md
+§9.1). The correctness gate for this node is per-token validity
+(_is_valid_token() below: regex shape + phonological-inventory check, hard
+constraint #8), not legacy-byte-match.
+
+Library upgrade to v1.9.0 (2026-07-19): reinstalled from
+~/Documents/canto-g2p (editable) after four releases (v1.6.0-v1.9.0) landed
+on top of the v1.5.0 this node was originally written against. Two changes
+made here as a direct result:
+  1. v1.7.0/v1.7.1 corrected ~1,293 common polyphone mis-tie-breaks
+     (e.g. 一本正經 zing1->zing3, 沉重 zung6->cung5) at the library-data
+     level — a free correctness improvement on reinstall, no code change
+     needed. Existing `g2p` rows (`provenance = 'g2p_node'`) are NOT
+     automatically revisited by this node's anti-join discovery; a
+     corpus-wide reprocess needs a one-time `provenance` reset (out of this
+     change's scope — see pending_task.md).
+  2. v1.6.0 added `canto_hk_g2p.segment()`, the LSHK Jyutping Inventory
+     parser — `_is_valid_token()` now uses it alongside the existing regex
+     (see the function's docstring for why the regex alone isn't enough).
+     This is strictly stricter than the old regex-only check, so
+     `valid_fraction` can only go down for a given text, never up, on
+     re-conversion.
+Deliberately NOT adopted here: v1.8.0's `Pipeline(user_dict=...)` override
+(no curated correction data exists yet — needs sourcing from
+`calibrate.sample` QA rejects first) and v1.9.0's `convert_candidates()`
+(a calibration-UI feature, not a g2p-node concern) — both tracked as
+follow-ups in pending_task.md rather than spec-first-guessed here.
 """
 
 import logging
@@ -68,6 +93,7 @@ import re
 import time
 
 from canto_hk_g2p import Pipeline as _Pipeline
+from canto_hk_g2p import segment as _segment
 
 log = logging.getLogger(__name__)
 
@@ -99,13 +125,23 @@ def text_to_jyutping(text: str) -> str | None:
     return jyutping if jyutping else None
 
 
+def _is_valid_token(token: str) -> bool:
+    """Hard constraint #8's regex shape (`^[a-z]+[1-6]$`) is necessary but not
+    sufficient -- it accepts syllable-shaped garbage like "zzz1" that isn't a
+    real Cantonese syllable. canto_hk_g2p.segment() (v1.6.0+, LSHK Jyutping
+    Inventory) resolves a token into a real onset/rime/tone combination and
+    returns None if it doesn't parse -- use both checks."""
+    return bool(JYUTPING_TOKEN.match(token)) and _segment(token) is not None
+
+
 def validate_jyutping(jyutping: str) -> tuple[bool, float, list[str]]:
-    """Returns (accept, valid_fraction, bad_tokens). Hard constraint #8's regex."""
+    """Returns (accept, valid_fraction, bad_tokens). Hard constraint #8's regex,
+    tightened with a phonological-inventory check -- see _is_valid_token()."""
     tokens = jyutping.strip().split()
     if not tokens:
         return True, 1.0, []
-    valid = [t for t in tokens if JYUTPING_TOKEN.match(t)]
-    bad = [t for t in tokens if not JYUTPING_TOKEN.match(t)]
+    valid = [t for t in tokens if _is_valid_token(t)]
+    bad = [t for t in tokens if not _is_valid_token(t)]
     frac = len(valid) / len(tokens)
     return frac >= MIN_VALID_FRACTION, round(frac, 3), bad
 

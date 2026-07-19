@@ -22,14 +22,16 @@ def test_build_rounds_order_and_numbering():
 def test_build_rounds_expected_run_many_pairs():
     rounds = {r.number: r for r in build_rounds(devices=None)}
     assert rounds[2].nodes == ["ingest.probe", "lang_screen.auto"]
+    assert rounds[5].nodes == ["pregate.snr", "label.suite"]
     assert rounds[11].nodes == ["g2p", "tier.assign", "speaker.cluster"]
     assert rounds[2].is_run_many
+    assert rounds[5].is_run_many
     assert rounds[11].is_run_many
 
 
 def test_build_rounds_solo_rounds_are_single_node():
     rounds = build_rounds(devices=None)
-    solo_numbers = {1, 3, 4, 5, 6, 7, 8, 9, 10, 12}
+    solo_numbers = {1, 3, 4, 6, 7, 8, 9, 10, 12}
     for r in rounds:
         if r.number in solo_numbers:
             assert len(r.nodes) == 1
@@ -39,11 +41,15 @@ def test_build_rounds_solo_rounds_are_single_node():
 def test_build_rounds_devices_threaded_only_to_gpu_rounds():
     rounds = {r.number: r for r in build_rounds(devices="cuda:0,cuda:1")}
     assert rounds[3].extra_args["segment.diarize"] == ["--devices", "cuda:0,cuda:1"]
+    assert rounds[5].extra_args["label.suite"] == ["--devices", "cuda:0,cuda:1"]
     assert rounds[6].extra_args["asr.transcribe"] == ["--devices", "cuda:0,cuda:1"]
     assert rounds[2].extra_args["lang_screen.auto"] == ["--devices", "cuda:0,cuda:1"]
     # non-GPU rounds get no extra_args at all
     assert rounds[1].extra_args == {}
     assert rounds[11].extra_args == {}
+    # pregate.snr is CPU-only -- must not get --devices even though it shares
+    # round 5 with the GPU-only label.suite
+    assert "pregate.snr" not in rounds[5].extra_args
 
 
 def test_build_rounds_no_devices_means_no_extra_args():
@@ -142,6 +148,37 @@ def test_run_chain_run_many_round_2_pairs_probe_and_lang_screen(monkeypatch):
     assert "ingest.probe" in cmd
     assert "lang_screen.auto" in cmd
     assert cmd.index("--") > cmd.index("ingest.probe")
+
+
+def test_run_chain_run_many_round_5_pairs_pregate_and_label_suite(monkeypatch):
+    calls = []
+
+    def _record(cmd, cwd=None):
+        calls.append(cmd)
+        return _fake_result()
+
+    monkeypatch.setattr(chain_runner.subprocess, "run", _record)
+    run_chain(only={5}, dry_run=False)
+    cmd = calls[0]
+    assert "pregate.snr" in cmd
+    assert "label.suite" in cmd
+    assert cmd.index("--") > cmd.index("pregate.snr")
+
+
+def test_run_chain_run_many_round_5_threads_devices_to_label_suite_only(monkeypatch):
+    calls = []
+
+    def _record(cmd, cwd=None):
+        calls.append(cmd)
+        return _fake_result()
+
+    monkeypatch.setattr(chain_runner.subprocess, "run", _record)
+    run_chain(only={5}, devices="cuda:0,cuda:1", dry_run=False)
+    cmd = calls[0]
+    devices_idx = cmd.index("label.suite") + 1
+    assert cmd[devices_idx:devices_idx + 2] == ["--devices", "cuda:0,cuda:1"]
+    pregate_idx = cmd.index("pregate.snr")
+    assert cmd[pregate_idx + 1] in ("--", )
 
 
 # ---------------------------------------------------------------------------
