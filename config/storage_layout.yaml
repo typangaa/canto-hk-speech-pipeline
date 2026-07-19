@@ -2,7 +2,7 @@
 # Downstream code should import config/storage_layout.py (wrapper) rather than
 # hardcoding paths. Symlinks in data/ are legacy; new code reads this file.
 #
-# Drive map (post §3 Phase A+B, 2026-07-02 — see docs/PIPELINE_REARCHITECTURE_PLAN.md §3 執行結果):
+# Drive map (post §3 Phase A+B, 2026-07-02 — see docs/archive/PIPELINE_REARCHITECTURE_PLAN.md §3 執行結果):
 #   nvme0n1  ext4  /             hot: repo, metadata, nvme cache (+ canto-tts training, temp-parked)
 #   sdb1     ext4  /mnt/Drive2   warm: raw corpus (transient — delete after segment)
 #   sdd1     ext4  /mnt/Drive4   warm: filtered + segments (working corpus)

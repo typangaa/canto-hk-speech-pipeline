@@ -101,7 +101,7 @@ pointer 更新、`PROGRESS.md`。建議 message:
 **B3 — T15/IO-optimization 基建**(前兩日嘅工作,已 live 行過 production):
 `pipeline/catalog/schema.sql`(embedding column)、`pipeline/nodes/speaker.py`(columnar
 read + run-many 註記)、`pipeline/nodes/recover_orphans.py`(`recover.reingest_pending`)、
-`docs/IO_OPTIMIZATION_PLAN.md`(untracked → add)。建議 message:
+`docs/archive/IO_OPTIMIZATION_PLAN.md`(untracked → add)。建議 message:
 `T15 reingest admission node + columnar embedding storage (IO plan phase 3)`
 
 **B4 — Sources + ingest 韌性**:

@@ -327,4 +327,4 @@ batch 會被重新 discover、重新處理一次。**呢個係刻意接受嘅代
 ---
 
 ## Related
-[[canto-corpus-rearchitecture]] · `docs/archive/REARCHITECTURE_IMPLEMENTATION_PLAN_DESIGN_DETAIL.md` §3.2 · `docs/PIPELINE_REARCHITECTURE_PLAN.md`
+[[canto-corpus-rearchitecture]] · `docs/archive/REARCHITECTURE_IMPLEMENTATION_PLAN_DESIGN_DETAIL.md` §3.2 · `docs/archive/PIPELINE_REARCHITECTURE_PLAN.md`

@@ -761,7 +761,7 @@ async def run_speaker_cluster(
     for source in all_sources:
         # Load (id, embedding, embedding_ref) rows for this source, skipping
         # read_failed placeholders (both embedding and embedding_ref NULL).
-        # Phase 3 (2026-07-12, docs/IO_OPTIMIZATION_PLAN.md): prefer the
+        # Phase 3 (2026-07-12, docs/archive/IO_OPTIMIZATION_PLAN.md): prefer the
         # in-table `embedding` column -- a single columnar SQL scan instead of
         # opening one .npy sidecar file per segment, which was speaker.cluster's
         # dominant cost (ext4 dentry-cache thrashing, not clustering compute).
@@ -901,7 +901,7 @@ async def run_speaker_cluster(
 
 
 # ===========================================================================
-# embed.backfill -- one-time (2026-07-12, docs/IO_OPTIMIZATION_PLAN.md Phase 3)
+# embed.backfill -- one-time (2026-07-12, docs/archive/IO_OPTIMIZATION_PLAN.md Phase 3)
 # ===========================================================================
 
 BACKFILL_DISCOVER_SQL = """

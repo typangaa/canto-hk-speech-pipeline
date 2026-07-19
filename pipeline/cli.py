@@ -586,8 +586,8 @@ async def _run_many_adapt_raw_flac(args: argparse.Namespace, conn) -> dict:
 
 # Nodes wired up for `pipe run-many`. A node must accept a `conn=` kwarg
 # (dependency-injected DuckDB connection/cursor) before it can be added here —
-# see docs/ORCHESTRATOR_PLAN.md for the full call-site inventory and the
-# priority order for extending this incrementally.
+# see docs/archive/ORCHESTRATOR_PLAN_DESIGN_DETAIL.md for the full call-site
+# inventory and the priority order for extending this incrementally.
 RUN_MANY_ADAPTERS = {
     "filter.acoustic": _run_many_adapt_filter_acoustic,
     "segment.diarize": _run_many_adapt_segment_diarize,

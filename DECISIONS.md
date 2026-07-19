@@ -1232,3 +1232,49 @@ convention). `scripts/10_report.py` retired via `git rm` per its own documented 
 8,817 speakers, 10/11 criteria PASS (only `text_verified` fails, correctly — see T1).
 CLAUDE.md/README.md updated to match. See `docs/archive/PIPELINE_REVIEW_2026-07-11.md` §6 Issue #3
 disposition.
+
+## 2026-07-19 — `docs/` folder second pass: retire fully-executed plans, fix stale content
+
+Follow-up to the same day's earlier folder-hygiene pass. Went through every file in
+`docs/` individually (owner sign-off per item via AskUserQuestion, same protocol as the
+earlier pass).
+
+- **Archived (moved to `docs/archive/`, status header added noting execution/supersession)**:
+  `IO_OPTIMIZATION_PLAN.md` (Phase 0/1/3 executed via T15, Phase 2 re-scoped by owner,
+  Phase 5 stays deferred), `G2P_MIGRATION_NOTE.md` (ToJyutping→canto-g2p migration long
+  complete, referenced the retired `scripts/07_g2p.py`), `PIPELINE_REARCHITECTURE_PLAN.md`
+  (upstream vision doc whose status header still claimed "§4 not started" — actually fully
+  implemented, see `REARCHITECTURE_IMPLEMENTATION_PLAN.md`), and **`PIPELINE_SPEC.md`**
+  (513 lines entirely structured around the retired 10-stage flat-script chain
+  `01_discover.py`…`10_report.py`; per-node detail now lives in each
+  `pipeline/nodes/*.py` module docstring per CLAUDE.md's own convention).
+- **`docs/research/*.md` (10 files) + `FINDINGS_DRAMA_SCRIPTED_SOURCES.md`** moved to new
+  `docs/archive/research/` — one-time 2026-06-13 source-research reports, zero references
+  anywhere, content long absorbed into `sources/*.yaml`.
+- **`ORCHESTRATOR_PLAN.md` slimmed** (same split pattern as `REARCHITECTURE_IMPLEMENTATION_PLAN.md`):
+  kept status + "What's left"; the day-by-day 2026-07-06/07 implementation log and 22-call-site
+  design detail moved to new `docs/archive/ORCHESTRATOR_PLAN_DESIGN_DETAIL.md`.
+- **Stale content fixed in place** (docs kept live, factual drift corrected):
+  `MANIFEST_SCHEMA.md` (example used retired ASR model names `simonl0909/whisper-large-v2-
+  cantonese`/`openai/whisper-large-v3+zh` instead of `qwen3_asr`/`sense_voice`; `audio_path`
+  constrained to a single `/mnt/Drive3/` prefix instead of the actual 3-way shard; claimed
+  a "16 kHz mono 16-bit PCM WAV" master instead of the actual 48 kHz FLAC; jyutping
+  `[WORD]` English-placeholder convention contradicted canto-hk-g2p's actual pass-through
+  behavior; validation-script jyutping threshold was 0.80 instead of the Hard-Constraint-8
+  0.95; retired `05_calibrate.py`/`09_manifest.py` stage-script references). `QUALITY_SPEC.md`
+  (same `[WORD]`-placeholder and `10_report.py`/`06_filter.py` staleness). `KNOWN_ISSUES.md`
+  (one dangling `PIPELINE_SPEC.md` pointer redirected to the live `pipeline/nodes/segment.py`).
+  `LABEL_FRAMEWORK_SPEC.md` (§5/§6/§9/§10 described a `scripts/labels/` sub-package + flat
+  `metadata/labels/<name>.jsonl` sidecar design that was never built that way — actual
+  implementation is `pipeline/nodes/label_*.py` DAG nodes writing DuckDB `labels_*` tables;
+  added an implementation-mapping note rather than rewriting the still-valid conceptual
+  design, since the raw+bucket contract and SSOT-schema concept remain accurate).
+- Fixed every cross-reference to a moved file across `CLAUDE.md`, `README.md`,
+  `config/storage_layout.yaml`, `pipeline/catalog/schema.sql`, `pipeline/nodes/speaker.py`,
+  `pipeline/cli.py`, `pending_task.md`, and other `docs/archive/*.md` files.
+- `docs/` now holds 8 live files (down from 20 across `docs/` + `docs/research/`);
+  `docs/archive/` holds 11 files + a `research/` subfolder.
+- Full suite: 468 passed / 4 failed — the 4 failures are all `g2p`-related
+  (`canto-hk-g2p` local editable install has an unreleased API change, "too many values to
+  unpack"), traced to the sibling `canto-g2p` project's in-progress dev work, not caused by
+  this doc-only pass (no pipeline logic files were touched beyond comments).

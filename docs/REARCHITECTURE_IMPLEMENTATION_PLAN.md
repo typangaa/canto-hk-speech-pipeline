@@ -6,7 +6,7 @@
 > 參考資料)已搬去 `docs/archive/REARCHITECTURE_IMPLEMENTATION_PLAN_DESIGN_DETAIL.md`,
 > 本檔淨低 TL;DR + §8 Milestones(CLAUDE.md 引用嘅權威 milestone 狀態來源)。
 > **上游文件**:`PIPELINE_REARCHITECTURE_PLAN.md`(§4 願景 + §3 storage 遷移已完成)、
-> `LABEL_FRAMEWORK_SPEC.md`(label production 框架)、`PIPELINE_SPEC.md`、`KNOWN_ISSUES.md`
+> `LABEL_FRAMEWORK_SPEC.md`(label production 框架)、`docs/archive/PIPELINE_SPEC.md`、`KNOWN_ISSUES.md`
 > **本文件**:§4 願景嘅**可執行 implementation plan** —— 具體組件設計、DAG node 清單、
 > milestone、驗證 gate、風險。
 > **已拍板決定(owner,2026-07-02)**:

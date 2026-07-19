@@ -175,11 +175,14 @@ canto-hk-speech-pipeline/
 │   ├── youtube_channels.yaml
 │   └── podcast_sources.yaml
 ├── docs/                       # Design documents
-│   ├── PIPELINE_SPEC.md        # Legacy stage-by-stage implementation details
+│   ├── REARCHITECTURE_IMPLEMENTATION_PLAN.md  # Milestone status (authoritative)
+│   ├── ORCHESTRATOR_PLAN.md    # `pipe run-many` concurrency design + status
+│   ├── LABEL_FRAMEWORK_SPEC.md # Label tables + the A/B TTS-quality tier axis
 │   ├── QUALITY_SPEC.md         # Filter thresholds and rationale
 │   ├── MANIFEST_SCHEMA.md      # Output field definitions
 │   ├── KNOWN_ISSUES.md         # Failure modes and workarounds
-│   └── SOURCE_GUIDE.md         # How to add new audio sources
+│   ├── SOURCE_GUIDE.md         # How to add new audio sources
+│   └── archive/                # Superseded/executed plan docs, incl. legacy PIPELINE_SPEC.md
 ├── pyproject.toml / uv.lock    # dependency declaration — install with `uv pip install`
 ├── LICENSE                     # Apache 2.0 (pipeline code only)
 └── README.md
@@ -195,7 +198,7 @@ Not committed to this repo (see `.gitignore`):
 
 ## Related Projects
 
-- [canto-hk-g2p](https://github.com/typangaa/canto-hk-g2p) — Rust-core Cantonese G2P library used in Stage 7
+- [canto-hk-g2p](https://github.com/typangaa/canto-hk-g2p) — Rust-core Cantonese G2P library used in the `g2p` DAG node
 
 ---
 

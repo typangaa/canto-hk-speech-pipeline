@@ -65,7 +65,7 @@ assert 2.0 <= sorted(scores)[50] <= 4.5, "DNSMOS median suspicious"
 
 **Rationale**: SNR < 20 dB produces audible noise that the codec learns to reproduce. SNR < 25 dB causes the spectral codec to mis-encode phonemes in noisy frequency bands. Professional broadcast content (RTHK) typically achieves 35–45 dB; YouTube content varies widely.
 
-**SNR estimation method** (from `docs/PIPELINE_SPEC.md Stage 5`): Frame-energy-based estimate separating top 10% (signal) from bottom 10% (noise floor). This is an approximation — use `dnsmos` as the primary quality gate.
+**SNR estimation method** (from `docs/archive/PIPELINE_SPEC.md Stage 5`): Frame-energy-based estimate separating top 10% (signal) from bottom 10% (noise floor). This is an approximation — use `dnsmos` as the primary quality gate.
 
 **Expected rejection rate**: 10–20% (higher for YouTube user-generated content).
 
@@ -90,7 +90,7 @@ How agreement drives the pipeline:
   but are deprioritised — they reach the human last and must be human-verified before
   use. (Audio of a low-agreement segment can still be perfectly good; only the text is
   uncertain.)
-- **Calibration ordering**: stage 5 reviews lowest-agreement segments first.
+- **Calibration ordering**: `calibrate.sample`/`pipe calibrate serve` reviews lowest-agreement segments first.
 
 **Final gate**: regardless of agreement, every segment that enters the training corpus
 must have `text_verified: true`. Agreement only prioritises human effort.
@@ -111,7 +111,7 @@ or noisy speech → lower.
 
 **Rationale**: Cantonese speakers code-switch English naturally (e.g., "call 佢" or "email 返 你"). A ratio up to 30% is acceptable because the TTS should learn to handle this. Above 30%, the segment is likely from an English-dominant context unsuitable for Cantonese TTS.
 
-**Note on English tokens in Jyutping**: English words in the text produce `[WORD]` placeholders in Jyutping (not real phonemes). The TTS training procedure must handle these. This is a known limitation documented in DECISIONS.md.
+**Note on English tokens in Jyutping**: canto-hk-g2p passes English words through unchanged rather than bracket-placeholder tokenising them (see `CLAUDE.md` "Issue 1 — G2P tool history"). The TTS training procedure must handle raw English tokens mixed into the Jyutping string.
 
 #### Mandarin Ratio
 
@@ -138,7 +138,7 @@ def mandarin_ratio(text: str) -> float:
     return mandarin_chars / max(cjk_total, mandarin_chars + cantonese_chars)
 ```
 
-**Expected rejection rate**: 5–10% (depends on WhisperX behaviour — see `KNOWN_ISSUES.md §9`).
+**Expected rejection rate**: 5–10% (depends on ASR Mandarin-vs-Cantonese confusion behaviour — see `KNOWN_ISSUES.md §9`).
 
 ---
 
@@ -151,7 +151,21 @@ def mandarin_ratio(text: str) -> float:
 
 **Rationale**:
 - Min 5 chars: Shorter segments tend to be utterances like "係" or "好" — too short to be useful TTS training data.
-- Max 150 chars: ASR hallucination (WhisperX sometimes generates repetitive text for music/noise segments) produces abnormally long output. This filter catches those.
+- Max 150 chars: ASR hallucination (models sometimes generate repetitive text for music/noise segments) produces abnormally long output. This filter catches those.
+
+---
+
+### 7. Jyutping Validity
+
+Hard Constraint 8 (`CLAUDE.md`): reject if `valid_fraction < 0.95` (i.e., > 5% of a
+segment's Jyutping tokens fail the `^[a-z]+[1-6]$` pattern). This is a hard gate, not
+an advisory/scored filter — moved out of the old "Secondary Filters" grouping below,
+which is advisory-only.
+
+| Threshold | Action |
+|-----------|--------|
+| ≥ 0.95 | Accept |
+| < 0.95 | Reject |
 
 ---
 
@@ -161,15 +175,6 @@ These filters generate warnings that are logged for human review but do not auto
 
 ### Speaker Confidence
 If speaker embedding distance to nearest cluster centroid > 0.85 cosine similarity, flag as "uncertain speaker assignment". Does not reject, but lowers confidence in speaker_id.
-
-### Jyutping Coverage
-If `valid_fraction < 0.95` (i.e., > 5% of tokens fail the `^[a-z]+[1-6]$` pattern), log a warning. For `valid_fraction < 0.80`, reject.
-
-| Threshold | Action |
-|-----------|--------|
-| ≥ 0.95 | Accept, no warning |
-| 0.80 – 0.95 | Accept with warning logged |
-| < 0.80 | Reject |
 
 ### Duration Outlier
 Segments with duration > 18 seconds are accepted but flagged. They are rare under VAD-based segmentation; a large number suggests the VAD silence threshold is too permissive.
@@ -186,9 +191,10 @@ Apply filters in this order (cheapest first to minimise computation):
 2. Text length (O(n) on verified text)
 3. English ratio (O(n) on verified text)
 4. Mandarin ratio (O(n) on verified text)
-5. ASR agreement (already computed in stage 4)
-6. SNR (O(n) audio analysis — fast)
-7. DNSMOS (speechmos neural model on 16 kHz copy — most expensive, apply last)
+5. ASR agreement (already computed by the `asr.agreement` node)
+6. Jyutping validity (already computed by the `g2p` node, runs on verified text)
+7. SNR (O(n) audio analysis — fast)
+8. DNSMOS (speechmos neural model on 16 kHz copy — most expensive, apply last)
 ```
 
 ---
@@ -209,9 +215,9 @@ These are calibrated estimates. If actual pass rates deviate significantly, inve
 ## Changing Thresholds
 
 If you need to change a threshold, follow this process:
-1. Run `10_report.py` with the current threshold and note the pass rate.
+1. Run `python -m pipeline.cli run report.build` with the current threshold and note the pass rate.
 2. Propose the change with a specific reason in DECISIONS.md.
-3. Run `06_filter.py --dry-run` with the new threshold to preview impact.
+3. Run `filter.text`/`filter.acoustic` with the new threshold on a `--limit` sample to preview impact.
 4. If > 20% swing in pass rate, require human review before applying.
 5. Update this document to reflect the new value and rationale.
 

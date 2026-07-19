@@ -11,7 +11,7 @@
 ```json
 {
   "id":             "rthk_20230325_seg00000",
-  "audio_path":     "/mnt/Drive3/Development/AI-ML/canto-hk-speech-pipeline/data/filtered/rthk/canto_science_20230325_seg00000.wav",
+  "audio_path":     "/mnt/Drive3/canto/segments/rthk_20230325_canto_science_seg00000.flac",
   "source":         "rthk",
   "source_url":     "https://www.youtube.com/watch?v=XXXXXXXXXXX",
   "program":        "創科新里程",
@@ -19,8 +19,8 @@
   "text":           "心臟病中風這些常見的心腦血管疾病",
   "text_verified":  true,
   "asr_candidates": [
-    {"model": "simonl0909/whisper-large-v2-cantonese", "text": "心臟病中風這些常見的心腦血管疾病", "confidence": 0.88},
-    {"model": "openai/whisper-large-v3+zh",            "text": "心臟病中風这些常見的心腦血管疾病", "confidence": 0.82}
+    {"model": "qwen3_asr",    "text": "心臟病中風這些常見的心腦血管疾病", "confidence": 0.88},
+    {"model": "sense_voice",  "text": "心臟病中風這些常見的心腦血管疾病", "confidence": 0.82}
   ],
   "asr_agreement":  0.96,
   "jyutping":       "sam1 zong6 beng6 zung1 fung1 ze2 se1 soeng4 gin3 dik1 sam1 nou5 hyut3 gun2 zat6 beng6",
@@ -70,24 +70,27 @@ print(f'Duplicate IDs: {len(dups)}')
 
 ### `audio_path` — string, required
 
-Absolute path to the WAV file.
+Absolute path to the segment master file.
 
 **Constraints**:
-- Must start with `/mnt/Drive3/`
+- Must start with `/mnt/Drive2/`, `/mnt/Drive3/`, or `/mnt/Drive4/` — segments are
+  3-way sharded across the three drives via `config/storage_layout.py:shard_index()`
+  (deterministic `hash % 3` — never hand-pick a shard)
 - File must exist and be readable
-- File must be 16 kHz, mono, 16-bit PCM WAV
+- File must be a **48 kHz mono lossless master** — FLAC for new segments, legacy 16-bit
+  PCM WAV not re-encoded (`KNOWN_ISSUES.md §11`); never a downsampled or lossy copy
 
 **Validation**:
 ```python
-assert str(audio_path).startswith("/mnt/Drive3/"), f"Invalid path: {audio_path}"
+assert str(audio_path).startswith(("/mnt/Drive2/", "/mnt/Drive3/", "/mnt/Drive4/")), \
+    f"Invalid path: {audio_path}"
 assert audio_path.exists(), f"Missing: {audio_path}"
 ```
 
 **Never use**:
-- `/mnt/d/` — Windows D: drive
-- `/mnt/c/` — Windows C: drive
+- `/mnt/d/`, `/mnt/c/` — Windows-style paths
 - Relative paths (`./data/...` or `../...`)
-- Symlinks that point outside `/mnt/Drive3/`
+- A hand-picked shard drive — always resolve via `shard_index()`
 
 ---
 
@@ -150,15 +153,16 @@ The **canonical, human-verified** transcript in Traditional Chinese (written Can
 - Not empty
 - Not padded with leading/trailing whitespace
 - Punctuation may be included (it is stripped for G2P but preserved here)
-- This is the text produced by the stage 5 human calibration, **not** raw ASR output.
-  Until calibrated, an interim entry may carry an ASR candidate here with
+- This is the text produced by human calibration (`pipe calibrate serve`), **not** raw
+  ASR output. Until calibrated, an interim entry may carry an ASR candidate here with
   `text_verified: false`.
 
 ---
 
 ### `text_verified` — boolean, required
 
-`true` once a human has confirmed `text` in stage 5 (`05_calibrate.py`). `false` for
+`true` once a human has confirmed `text` via `pipe calibrate serve` (a `'verified'`
+decision flips `asr_agreement.text_verified` + `tiers.tier='gold'`). `false` for
 interim ASR-only entries.
 
 **Constraint**: every segment in the **final training corpus** must be `true`. The
@@ -199,26 +203,26 @@ Jyutping romanisation with tone numbers. Space-separated, one token per syllable
 
 **Constraints**:
 - Each token must match `^[a-z]+[1-6]$`
-- English words represented as `[WORD]` placeholder (uppercase in brackets)
+- English words pass through unchanged (canto-hk-g2p does not tokenise or bracket them
+  letter-by-letter — see `CLAUDE.md` "Issue 1 — G2P tool history")
 - No empty tokens
+- Reject the segment if more than 5% of tokens fail the regex (Hard Constraint 8)
 
 **Validation** (must pass before writing to manifest):
 ```python
 import re
 JYUTPING_TOKEN = re.compile(r'^[a-z]+[1-6]$')
-PLACEHOLDER = re.compile(r'^\[[A-Z0-9]+\]$')
 
 def validate_jyutping_field(jyutping: str) -> tuple[bool, float]:
     tokens = jyutping.strip().split()
-    jyutping_tokens = [t for t in tokens if not PLACEHOLDER.match(t)]
-    valid = sum(1 for t in jyutping_tokens if JYUTPING_TOKEN.match(t))
-    frac = valid / len(jyutping_tokens) if jyutping_tokens else 0.0
+    valid = sum(1 for t in tokens if JYUTPING_TOKEN.match(t))
+    frac = valid / len(tokens) if tokens else 0.0
     return frac >= 0.95, frac
 ```
 
 **Invalid examples**:
 ```
-"sam1zong6beng6"         # ← missing spaces (pycantonese bug)
+"sam1zong6beng6"         # ← missing spaces (pycantonese bug — do not use pycantonese)
 "sam1 zong6beng6"        # ← partial concatenation
 "sam 1 zong 6"           # ← tone digit separated from syllable
 "sam1 zong6 "            # ← trailing space (minor, clean before writing)
@@ -328,7 +332,7 @@ ISO date (YYYY-MM-DD) when this manifest entry was created.
 
 ## Complete Validation Script
 
-Run this after Stage 8 (manifest generation) and before Stage 9 (report):
+Run this after `manifest.build`/`.export` and before `report.build`:
 
 ```python
 #!/usr/bin/env python3
@@ -347,7 +351,7 @@ DOMAIN_ENUM  = {"documentary","news","talk_show","podcast","drama","vlog","educa
 GENDER_ENUM  = {"male","female","unknown"}
 STYLE_ENUM   = {"formal","casual","narration","interview"}
 JP_TOKEN     = re.compile(r'^[a-z]+[1-6]$')
-JP_PLACEHOLDER = re.compile(r'^\[[A-Z0-9]+\]$')
+SHARD_ROOTS  = ("/mnt/Drive2/", "/mnt/Drive3/", "/mnt/Drive4/")
 
 errors = 0
 with open("metadata/manifest.jsonl") as f:
@@ -360,8 +364,8 @@ with open("metadata/manifest.jsonl") as f:
                 print(f"Line {i}: Missing field: {field}")
                 errors += 1
 
-        # audio_path
-        if not e.get("audio_path","").startswith("/mnt/Drive3/"):
+        # audio_path (3-way segment shard — see config/storage_layout.py:shard_index())
+        if not e.get("audio_path","").startswith(SHARD_ROOTS):
             print(f"Line {i}: Bad audio_path: {e.get('audio_path')}")
             errors += 1
 
@@ -399,13 +403,12 @@ with open("metadata/manifest.jsonl") as f:
             print(f"Line {i}: dnsmos out of range: {d}")
             errors += 1
 
-        # jyutping
+        # jyutping (Hard Constraint 8: reject if > 5% of tokens fail)
         jp = e.get("jyutping", "")
         tokens = jp.strip().split()
-        jp_tokens = [t for t in tokens if not JP_PLACEHOLDER.match(t)]
-        if jp_tokens:
-            valid = sum(1 for t in jp_tokens if JP_TOKEN.match(t))
-            if valid / len(jp_tokens) < 0.80:
+        if tokens:
+            valid = sum(1 for t in tokens if JP_TOKEN.match(t))
+            if valid / len(tokens) < 0.95:
                 print(f"Line {i}: Low jyutping validity: {jp!r}")
                 errors += 1
 
@@ -428,7 +431,7 @@ sys.exit(0 if errors == 0 else 1)
 ## Split Files
 
 `metadata/train.jsonl` and `metadata/val.jsonl` are subsets of `metadata/manifest.jsonl`. They:
-- Are written by `scripts/09_manifest.py`
+- Are written by the `manifest.build`/`.export` DAG node (95/5 split)
 - Use the exact same schema
 - Satisfy: no `speaker_id` appears in both train and val
 - Are stratified by `source` to preserve source distribution

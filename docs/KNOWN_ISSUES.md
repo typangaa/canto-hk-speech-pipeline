@@ -46,16 +46,13 @@ if not ok:
     continue
 ```
 
-**Alternative**: Use `ToJyutping` as the primary G2P tool. Its output format is more consistent. Compare both tools on 100 sample sentences before committing.
-
-```bash
-pip install ToJyutping pycantonese
-python -c "
-import ToJyutping
-print(ToJyutping.get_jyutping_text('心臟病中風'))
-# Expected: sam1 zong6 beng6 zung1 fung1
-"
-```
+**Do not use `ToJyutping` either** — it handles English letter-by-letter
+(`"send"` → `[S][E][N][D]`), which breaks TTS alignment differently but just as badly.
+The current, correct tool is **canto-hk-g2p** (`github.com/typangaa/canto-hk-g2p`,
+Rust-core, passes English through unchanged, expands numbers/dates) — see `CLAUDE.md`
+"Issue 1 — G2P tool history" and the `g2p` DAG node (`pipeline/nodes/g2p.py`). Regex
+validation (`^[a-z]+[1-6]$` per token, ≥95% pass rate) is still mandatory regardless of
+tool, since any G2P library can regress silently.
 
 ---
 
@@ -84,7 +81,7 @@ def segment_by_vad(audio_path: str, min_dur=3.0, max_dur=20.0):
                                        min_silence_duration_ms=500,
                                        min_speech_duration_ms=int(min_dur * 1000))
     # Merge short segments, split long ones at silence points
-    # ... (see PIPELINE_SPEC.md for full implementation)
+    # ... (see pipeline/nodes/segment.py for the live implementation)
     return segments
 ```
 
@@ -107,10 +104,13 @@ These paths work on the original machine only. Moving to another machine or remo
 ```python
 from pathlib import Path
 
-# Always resolve to absolute Linux path before writing to manifest
+# Always resolve to absolute Linux path before writing to manifest.
+# Segments are 3-way sharded across Drive2/3/4 via
+# config/storage_layout.py:shard_index() — never hand-pick a shard.
+SHARD_ROOTS = ("/mnt/Drive2/", "/mnt/Drive3/", "/mnt/Drive4/")
 audio_path = Path(audio_path).resolve()
-assert str(audio_path).startswith("/mnt/Drive3/"), \
-    f"Path must be under /mnt/Drive3/, got: {audio_path}"
+assert str(audio_path).startswith(SHARD_ROOTS), \
+    f"Path must be under one of {SHARD_ROOTS}, got: {audio_path}"
 ```
 
 **Validation check before finalising manifest**:
@@ -183,15 +183,15 @@ named `dnsmos`, and the score key is `ovrl_mos`, NOT `OVRL`.
 
 **What happened**: During TTS training (not data collection), `neuphonic/neutts-air` on HuggingFace was silently updated between training sessions. A LoRA adapter trained against version N became incompatible with version N+1. Training loss jumped from 2.37 to 5.02 overnight.
 
-**Impact on data pipeline**: None directly. But the data pipeline should record model versions used (for WhisperX, DNSMOS models) so that if a model is updated, the affected batches can be re-processed.
+**Impact on data pipeline**: None directly. But the data pipeline should record model versions used (ASR, DNSMOS models) so that if a model is updated, the affected batches can be re-processed.
 
 **Required mitigation**: Pin model versions in config files:
 
 ```yaml
 # In sources config or pipeline config
 models:
-  whisperx: "large-v3"           # pin to specific version
-  whisperx_commit: "abc123..."   # optionally pin commit hash
+  qwen3_asr: "Qwen/Qwen3-ASR-1.7B"      # pin to specific version
+  sense_voice: "FunAudioLLM/SenseVoiceSmall"
   dnsmos: "microsoft/DNSMOS"
   speaker_embed: "speechbrain/spkrec-ecapa-voxceleb"
 ```
@@ -201,7 +201,7 @@ Log model versions at the start of each pipeline run:
 ```python
 import transformers
 log.info(f"transformers version: {transformers.__version__}")
-log.info(f"WhisperX model: {MODEL_ID}")
+log.info(f"ASR model: {MODEL_ID}")
 ```
 
 ---
@@ -295,23 +295,33 @@ readings.
 
 **Required mitigation — multi-ASR + human calibration (matches project ASR strategy):**
 
-1. Run **several** ASR models per segment and store every candidate:
-   - A Cantonese fine-tuned Whisper, e.g. `simonl0909/whisper-large-v2-cantonese`
-     (~7.65% CER) or `khleeloo/whisper-large-v3-cantonese`. These output written
-     Cantonese and avoid the collapse.
-   - Base `openai/whisper-large-v3` with `language="zh"` **plus** an `initial_prompt`
-     seeded with written-Cantonese text to bias toward 粵語白話文 (never `yue`).
+**Current models (2026-07 onward)**: the two Whisper-family models originally piloted
+here — a Cantonese fine-tuned Whisper (`simonl0909/whisper-large-v2-cantonese`, this
+project's former `canto_ft`) and base `openai/whisper-large-v3` with `language="zh"` +
+an `initial_prompt` (this project's former `whisper_v3`) — are both **retired**:
+measured 17–36% CER on human-verified samples, vs. **`qwen3_asr`** (Qwen3-ASR-1.7B,
+`language="Cantonese"`, ~0.4% CER) and **`sense_voice`** (SenseVoice-Small, CTC
+non-autoregressive, `language="yue"`, emits Simplified → converted to Traditional HK
+via OpenCC). Neither active model is Whisper-derived, so the `language="yue"` decoder
+collapse described above does not apply to them — but the general lesson (never trust
+a single ASR output; use cross-model agreement + human calibration) still fully applies
+and is why the project still runs two models per segment. See `CLAUDE.md`'s "ASR
+strategy" section for current details; the `initial_prompt` technique below was
+specific to steering the retired Whisper-family models and is kept here only as a
+historical technique reference, not current guidance:
 
-   ```python
-   model.transcribe(
-       audio, language="zh",
-       initial_prompt="以下係廣東話口語，請用粵語白話文書寫，例如：係、唔係、冇、喺、佢哋、嘅、嗰、嚟。"
-   )
-   ```
+```python
+model.transcribe(
+    audio, language="zh",
+    initial_prompt="以下係廣東話口語，請用粵語白話文書寫，例如：係、唔係、冇、喺、佢哋、嘅、嗰、嚟。"
+)
+```
 
-2. Compute cross-model **agreement** (character-level overlap). High agreement →
-   likely correct; low agreement → flag for the human calibration stage (stage 5).
-
+1. Run the two active models per segment and store every candidate (`asr.transcribe`
+   DAG node, `pipeline/nodes/asr.py`).
+2. Compute cross-model **agreement** (character-level overlap, `asr.agreement` node).
+   High agreement → likely correct; low agreement → flag for human calibration
+   (`calibrate.sample` queues it, reviewed via `pipe calibrate serve`).
 3. Detect Mandarin-dominant output and prefer the Cantonese-marker-rich candidate:
    ```python
    CANTONESE_MARKERS = set("係冇喺佢哋嘅嗰嚟咁啩囉𠮶")
@@ -320,7 +330,9 @@ readings.
    ```
 
 4. **Never auto-finalise a single ASR output.** The canonical `text` field is set by a
-   human in stage 5 (`05_calibrate.py`), using the candidates as references.
+   human via `pipe calibrate serve` (a `'verified'` decision flips
+   `asr_agreement.text_verified` + `tiers.tier='gold'`), using the candidates as
+   references.
 
 ---
 
@@ -354,12 +366,10 @@ def single_speaker_turns(wav_path: str) -> list[tuple[float, float, str]]:
 # to cut 3–20 s clips. Never let a clip cross a turn boundary.
 ```
 
-Record the per-file local speaker label on each segment; stage 8 clusters these across
-files (via ECAPA embeddings) into global `speaker_id`s. Reject any segment where
-diarization reports overlapping speech / more than one speaker.
-
-WhisperX also bundles diarization (`--diarize`), which can be reused instead of calling
-pyannote directly — either is acceptable.
+Record the per-file local speaker label on each segment; `speaker.cluster`
+(`pipeline/nodes/speaker.py`) clusters these across files (via ECAPA-TDNN embeddings)
+into global `speaker_id`s. Reject any segment where diarization reports overlapping
+speech / more than one speaker.
 
 ---
 
@@ -374,9 +384,13 @@ corpus cannot train any of them, and upsampling cannot recover the missing high
 frequencies — the data is permanently capped.
 
 **Required mitigation**:
-1. Download the **best available audio** (YouTube serves 48 kHz AAC; keep it).
-2. Store every segment as a **48 kHz mono master** in `data/segments/` and
-   `data/filtered/`.
+1. Download the **best available audio** (YouTube serves 48 kHz AAC; keep it — raw
+   container is kept native/zero-transcode, see `ingest.download`).
+2. Store every segment as a **48 kHz mono master**, FLAC for new segments, 3-way
+   sharded across `/mnt/Drive{2,3,4}/canto/segments/` via
+   `config/storage_layout.py:shard_index()`. "Filtered" is not a physical copy —
+   `filters.pass` in the catalog is the authoritative signal; `segments.audio_path`
+   is read directly wherever it lives on the shard.
 3. VAD, diarization, ASR, and DNSMOS all need 16 kHz — generate a *transient* 16 kHz
    copy in memory or `/tmp` for those tools, and **never** write it over the master.
 
@@ -423,4 +437,4 @@ from redistributing the source audio.
 
 ---
 
-*Last updated: 2026-06-09. Add new issues as they are discovered during this pipeline run.*
+*Content last fact-checked against the live pipeline: 2026-07-19. Add new issues as they are discovered during this pipeline run.*

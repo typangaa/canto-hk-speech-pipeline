@@ -393,7 +393,7 @@ CREATE TABLE IF NOT EXISTS speaker_embeddings (
     embedding_ref TEXT,
     provenance    TEXT   -- 'legacy_reused' (sidecar .npy found) | 'speaker_embed_node' (freshly computed on GPU)
 );
--- 2026-07-12 (I/O optimization, docs/IO_OPTIMIZATION_PLAN.md Phase 3): the embedding
+-- 2026-07-12 (I/O optimization, docs/archive/IO_OPTIMIZATION_PLAN.md Phase 3): the embedding
 -- vector itself, stored in-table instead of read via embedding_ref's per-file .npy
 -- sidecar -- speaker.cluster's dominant cost was opening hundreds of thousands of tiny
 -- sidecar files (ext4 dentry-cache thrashing on the giant flat segments/{source}/ dirs),

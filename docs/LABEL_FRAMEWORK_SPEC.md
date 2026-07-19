@@ -1,7 +1,7 @@
 # Label Framework — Design Spec
 
 > **狀態**:Draft for review · 2026-06-30
-> **先讀**:`PIPELINE_SPEC.md`、`MANIFEST_SCHEMA.md`、`QUALITY_SPEC.md`
+> **先讀**:`docs/archive/PIPELINE_SPEC.md`、`MANIFEST_SCHEMA.md`、`QUALITY_SPEC.md`
 > **緣起**:`canto-tts/docs/L2_CONTROL_DATA_PREP_PLAN.md`(消費端 L2 control 設計)
 > **範圍**:把 quality + L2-control 標註**統一**成一個 upstream「label production」框架,令任何
 > downstream model(Nano 0.1B CPU / Local-1.7B GPU production / 未來)自己揀用邊啲 label、點 render。
@@ -103,8 +103,21 @@
 
 ## 5. 架構 / Stages
 
-新增一個 `scripts/labels/` 子套件,把 detector + calibrate + build 收埋。現有 `11/12/13` 維持原檔,
-但 raw 輸出**搬入** `metadata/labels/`(統一命名)。
+> **實現筆記(2026-07-19)**:下面呢個 diagram 係設計時(2026-06-30)嘅原始構想 ——
+> `scripts/labels/` 子套件 + flat `metadata/labels/<name>.jsonl` sidecar。**實際落地嘅實現
+> 唔係咁**:detector layer 變咗 `pipeline/nodes/label_*.py` DAG node,raw 輸出寫入 DuckDB
+> `labels_*` table(唔係 flat per-id jsonl sidecar)。Node 對應:
+> `11_audio_tag.py` → `label.music`(`pipeline/nodes/label_music.py`,寫 `labels_music`);
+> `12_language_id.py`/`13_overlap_detect.py` → `label.suite`
+> (`pipeline/nodes/label_suite.py`,decode-once fan-out 寫 `labels_lang`/`labels_overlap`
+> 連埋 `labels_music`);`14_prosody.py` → `label.prosody`
+> (`pipeline/nodes/label_prosody.py`,寫 `labels_prosody`);`15_emotion.py` 呢個 gated GPU
+> label**未實現**(仍然停留喺呢份文件描述嘅設計階段)。`calibrate_labels.py` →
+> `label.calibrate`(`pipeline/nodes/label_calibrate.py`);`build_label_store.py` →
+> `label.store`(`pipeline/nodes/label_store.py`,輸出 `metadata/labels.jsonl`);
+> `assign_tier.py`(§10)→ `quality_tier.assign`(`pipeline/nodes/quality_tier.py`,寫獨立
+> `quality_tiers` table,唔係寫返 label store/manifest 欄)。下面嘅概念設計(raw+bucket
+> contract、schema 概念)保持有效,淨係實現路徑同物理儲存格式已經改變。
 
 ```
 [detector layer] 逐 label → metadata/labels/<name>.jsonl   (id-keyed raw, resumable, sharded)
@@ -134,11 +147,12 @@
 [consumer] assign_tier.py (§10) → tier;canto-tts → render
 ```
 
-`pause` 嘅 gap list 由 `14_prosody.py` 嘅同一個 VAD pass 一齊出(免重跑 VAD)。
+`pause` 嘅 gap list 由 `label.prosody` 嘅同一個 VAD pass 一齊出(免重跑 VAD)。
 
 ---
 
-## 6. SSOT Schema — `scripts/labels/label_schema.py`
+## 6. SSOT Schema (concept — 原構想一個獨立 `label_schema.py`,實現後 schema 邏輯分佈落
+`pipeline/nodes/label_*.py` 各 node 入面,唔係獨立一個 module)
 
 單一真相源,detector / calibrate / build / **canto-tts infer 共用**(train/infer 一致鐵律)。
 
@@ -220,7 +234,7 @@ def bucket(name, raw, *, speaker_stats=None, params=None) -> str:
 
 ## 9. Calibration pass
 
-`scripts/labels/calibrate_labels.py`:
+`label.calibrate` (`pipeline/nodes/label_calibrate.py`):
 1. 掃全部 raw sidecar。
 2. `rate`:corpus-wide P25 / P75。
 3. `pitch` / `energy`:per-`speaker_id` μ/σ(+ corpus fallback μ/σ);記低每 speaker 樣本數。
@@ -234,7 +248,7 @@ def bucket(name, raw, *, speaker_stats=None, params=None) -> str:
 
 ## 10. Tier framework(label store 嘅 consumer)
 
-`scripts/labels/assign_tier.py` join manifest + labels.jsonl,套規則(SSOT 入 schema):
+`quality_tier.assign` (`pipeline/nodes/quality_tier.py`) join manifest + labels.jsonl,套規則(SSOT 入 schema):
 
 - **Tier A(pretrain,permissive)** = 全部 **減 stage-1-fatal**:壞 transcript、`overlap≥0.20`、純 music/
   silence、`lang=cmn`。

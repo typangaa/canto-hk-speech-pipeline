@@ -60,7 +60,7 @@ canto-hk-speech-pipeline/
 │   ├── MANIFEST_SCHEMA.md                     ← manifest field definitions + examples
 │   ├── KNOWN_ISSUES.md                        ← all known failure modes from prior attempts
 │   ├── SOURCE_GUIDE.md                        ← how to research and add new sources
-│   ├── (others: PIPELINE_SPEC, G2P_MIGRATION_NOTE, IO_OPTIMIZATION_PLAN …)
+│   ├── (others: FINDINGS_ASR_AGREEMENT_THRESHOLDS …)
 │   └── archive/                                ← executed/superseded plan+review docs — historical, not maintained
 │
 ├── sources/                 ← rthk_sources.yaml / youtube_channels.yaml / podcast_sources.yaml
