@@ -361,11 +361,14 @@ what actually landed and when.)
   pass rather than lazily. Ran via `pipe run g2p` in the background
   (`g2p_jyutping_cs_backfill_2026_07_20` temporary provenance marker, overwritten back to
   `'g2p_node'` by the node's own upsert on completion — see T29 for why this leaves no
-  non-standard state behind). ~140/s observed rate → est. ~90 min, running in the
-  background at commit time; `manifest.export` still needs a final re-run after it
-  finishes to populate `jyutping_cs` corpus-wide in `metadata/manifest.jsonl` (T29's
-  961-row reprocess already exercised this same reset->reprocess->export sequence, just
-  at corpus scale here).
+  non-standard state behind). Actual rate 2,679/s (much faster than the ~140/s seen on
+  T29's small 961-row run, which was dominated by fixed per-run overhead, not per-row
+  cost) — 763,375/763,375 converted in 285s, 763,347 accepted (99.997%, matching the
+  existing `jyutping`/`valid_fraction` gate; 28 rows below 0.80 as expected, same
+  acceptance semantics as before). Re-ran `manifest.export`: 594,006 entries (unchanged
+  count) all now carrying `jyutping_cs` — verified 0/594,006 entries missing the field in
+  `metadata/manifest.jsonl`, and spot-checked a code-switch segment (`Tesla`/`Google`/
+  `wear OS` inline) came out correctly positioned.
 
 ### T29. Upgrade `canto-hk-g2p` 2.0.0 → 2.1.0 (借音字 phonetic-loan alias layer) — done 2026-07-19
 - **What**: upstream v2.1.0 (now on PyPI) adds a hand-curated alias table
