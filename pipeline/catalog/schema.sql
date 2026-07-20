@@ -180,6 +180,12 @@ ALTER TABLE g2p ADD COLUMN IF NOT EXISTS valid_fraction DOUBLE;
 -- provenance = 'g2p_node' so its own discovery anti-join can tell "never
 -- processed by this node" apart from "row exists" (which is otherwise always true).
 ALTER TABLE g2p ADD COLUMN IF NOT EXISTS provenance TEXT;
+-- jyutping_cs ("code-switch") added 2026-07-20: Cantonese tokens as Jyutping,
+-- English words/punctuation kept verbatim in their original position (unlike
+-- `jyutping`, which drops non-Cantonese tokens entirely). Not used for the
+-- valid_fraction accept/reject gate -- see pipeline/nodes/g2p.py. NULL for
+-- any row not yet (re)processed since this column was added.
+ALTER TABLE g2p ADD COLUMN IF NOT EXISTS jyutping_cs TEXT;
 
 -- From manifest.jsonl tier field; one row per segment recording quality tier.
 -- P4 (pipeline/nodes/tier.py): same legacy-row-collision fix as filters.provenance/g2p.provenance —

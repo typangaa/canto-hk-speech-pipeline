@@ -362,7 +362,8 @@ Full threshold rationale: `docs/QUALITY_SPEC.md`
     {"model": "...", "text": "...", "confidence": 0.88}
   ],
   "asr_agreement":  0.91,                            // char-overlap across candidates
-  "jyutping":       "sam1 zong6 beng6 zung1 fung1", // from verified text; tone digits 1-6
+  "jyutping":       "sam1 zong6 beng6 zung1 fung1", // Cantonese-only, tone digits 1-6, English/punct DROPPED
+  "jyutping_cs":    "sam1 zong6 beng6 zung1 fung1", // same, but English/punct kept inline (code-switch consumers)
   "duration_sec":   6.97,
   "sample_rate":    48000,
   "speaker_id":     "rthk_001",

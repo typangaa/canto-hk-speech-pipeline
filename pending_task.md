@@ -321,6 +321,52 @@ what actually landed and when.)
 
 > Entries dated 2026-07-16 and earlier rotated out to `DECISIONS.md` (2026-07-19 cleanup pass) to keep this file to the recent working window — same rotation `PROGRESS.md` uses. Full history is in `DECISIONS.md`, chronological, nothing lost.
 
+### T30. Add `g2p.jyutping_cs` — code-switch-aware Jyutping (English/punct kept inline) — done 2026-07-20
+- **What**: proposed by a downstream consumer (canto-tts, sibling repo) after the T29 g2p
+  2.1.0 upgrade surfaced a real drift risk — canto-tts's `convert_corpus_to_moss.py`
+  re-implements "text -> Jyutping" itself (via `canto_hk_g2p.Pipeline.convert()`) instead
+  of using this node's `jyutping` column, purely because `jyutping` drops English/punct
+  tokens entirely and canto-tts needs them kept inline for code-switch alignment. That
+  duplication meant canto-tts's own `canto-hk-g2p` install could (and did) silently drift
+  out of sync with this node's, with no `provenance`-based reprocess tracking on their
+  side. `jyutping_cs` closes the gap: same Cantonese-token conversion as `jyutping`, but
+  via `.convert()` instead of `.convert_detailed()` + `lang == "yue"` filtering, so
+  canto-tts (and any other code-switch-aware consumer) can drop its own G2P call entirely
+  and just read this field.
+- **`pipeline/catalog/schema.sql`**: additive `ALTER TABLE g2p ADD COLUMN IF NOT EXISTS
+  jyutping_cs TEXT` — same pattern as `valid_fraction`/`provenance`.
+- **`pipeline/nodes/g2p.py`**: `_convert_codeswitch()` + `text_to_jyutping_codeswitch()`
+  (mirrors `_convert_for_moss()`/`text_to_jyutping()`); `g2p_one()` now returns
+  `{jyutping, valid_fraction, jyutping_cs}` — `jyutping_cs` is computed independently and
+  is **not** part of the `valid_fraction`/accept-reject gate (it intentionally contains
+  non-Jyutping tokens, so `JYUTPING_TOKEN`/`_is_valid_token()` don't apply to it — the
+  existing `jyutping` field remains Hard Constraint 8's gate, untouched).
+- **`pipeline/nodes/manifest.py`**: `MANIFEST_DISCOVER_SQL` + `build_entry()` thread
+  `jyutping_cs` through to `metadata/manifest.jsonl` as a new (non-breaking, additive)
+  key.
+- **Docs**: `docs/MANIFEST_SCHEMA.md` new `jyutping_cs` section (+ corrected a stale claim
+  that `jyutping` "passes English through unchanged" — it doesn't, `jyutping_cs` is the
+  field that does); `CLAUDE.md` manifest schema quick-reference updated.
+- **Tests**: `tests/test_g2p_node.py` (`text_to_jyutping_codeswitch()` cases +
+  `g2p_one()` cases updated for the 3rd key), `tests/test_manifest_node.py` (`_row()`
+  fixture tuple shape + `build_entry()` assertion). Full suite 478 passed / 2 failed —
+  both pre-existing/unrelated: `test_manifest_build_matches_expected_corpus_totals`
+  (known baseline-drift, same as T29's note) and
+  `test_orchestrator.py::test_label_music_kill_resume_no_duplicates` (passed in isolation
+  on rerun, environmental flake).
+- **Corpus-wide backfill**: reset `provenance` on all 763,375 `filters.pass = TRUE` rows
+  previously converted under `provenance = 'g2p_node'` (i.e. every manifest-input-eligible
+  row, broader than manifest's final 594,006 — `filters.pass = TRUE` alone doesn't apply
+  every downstream gate) so `jyutping_cs` gets backfilled for the whole corpus in one
+  pass rather than lazily. Ran via `pipe run g2p` in the background
+  (`g2p_jyutping_cs_backfill_2026_07_20` temporary provenance marker, overwritten back to
+  `'g2p_node'` by the node's own upsert on completion — see T29 for why this leaves no
+  non-standard state behind). ~140/s observed rate → est. ~90 min, running in the
+  background at commit time; `manifest.export` still needs a final re-run after it
+  finishes to populate `jyutping_cs` corpus-wide in `metadata/manifest.jsonl` (T29's
+  961-row reprocess already exercised this same reset->reprocess->export sequence, just
+  at corpus scale here).
+
 ### T29. Upgrade `canto-hk-g2p` 2.0.0 → 2.1.0 (借音字 phonetic-loan alias layer) — done 2026-07-19
 - **What**: upstream v2.1.0 (now on PyPI) adds a hand-curated alias table
   (`data/variant_words.tsv`, ~20 entries) that corrects common sound-borrowing

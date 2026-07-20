@@ -111,6 +111,23 @@ polyphone-mis-tie-break fix: existing `g2p` rows (`provenance = 'g2p_node'`)
 are NOT automatically revisited by this node's anti-join discovery — a
 corpus-wide reprocess to pick up the ~20 corrected words is a separate,
 not-yet-scheduled task (see pending_task.md).
+
+`jyutping_cs` column added (2026-07-20, T30): canto-tts (a downstream consumer
+in a sibling repo) independently re-implements "text -> Jyutping" itself
+rather than using this node's `jyutping` column, because `jyutping` drops
+English/punctuation tokens entirely (see `_convert_for_moss()` above) and
+canto-tts needs them kept inline for code-switch alignment. That duplication
+meant canto-tts's own `canto-hk-g2p` install could silently drift out of sync
+with this node's -- exactly what happened with the v2.1.0 upgrade above (this
+node's `provenance`-tagged anti-join reprocessed the 961 affected segments
+automatically; canto-tts's already-encoded training data had no such
+tracking and needed a manual audit to catch it). `jyutping_cs` closes that
+gap: same Cantonese-token conversion as `jyutping`, but via `_G2P.convert()`
+instead of `_G2P.convert_detailed()` + `lang == "yue"` filtering, so English
+words and punctuation survive verbatim in their original position. Additive
+column, existing `jyutping`/`valid_fraction` gate untouched -- `jyutping_cs`
+is not validated against `JYUTPING_TOKEN`/`_is_valid_token()` since it's
+intentionally not pure Jyutping.
 """
 
 import logging
@@ -148,6 +165,31 @@ def text_to_jyutping(text: str) -> str | None:
         log.error(f"canto-g2p failed: {exc}")
         return None
     return jyutping if jyutping else None
+
+
+def _convert_codeswitch(text: str) -> str:
+    """Space-separated Jyutping for Cantonese tokens; English words and
+    punctuation are kept verbatim in their original position (no filtering) --
+    unlike _convert_for_moss(), nothing is dropped. Uses canto_hk_g2p's
+    .convert() directly, same call code-switch-aware downstream consumers
+    (e.g. canto-tts's core/cantophon.py) already made independently -- see
+    pending_task.md T30."""
+    return _G2P.convert(text)
+
+
+def text_to_jyutping_codeswitch(text: str) -> str:
+    """Cantonese -> Jyutping with English/punctuation kept inline (see
+    _convert_codeswitch()). Returns "" on empty input or a G2P failure --
+    always a printable string, never None, matching
+    canto_hk_g2p.Pipeline.convert()'s own empty-input behaviour."""
+    text = (text or "").strip()
+    if not text:
+        return ""
+    try:
+        return _convert_codeswitch(text)
+    except Exception as exc:
+        log.error(f"canto-g2p convert (codeswitch) failed: {exc}")
+        return ""
 
 
 def candidate_preview(text: str) -> list[dict]:
@@ -202,16 +244,22 @@ def validate_jyutping(jyutping: str) -> tuple[bool, float, list[str]]:
 
 
 def g2p_one(text: str | None) -> dict:
-    """Pure logic: text -> {jyutping, valid_fraction}. Empty text or a G2P
-    failure yields jyutping="" + valid_fraction=0.0 (treated as reject by any
-    downstream valid_fraction >= 0.80 filter, but still a written row)."""
+    """Pure logic: text -> {jyutping, valid_fraction, jyutping_cs}. Empty text
+    or a G2P failure yields jyutping="" + valid_fraction=0.0 (treated as
+    reject by any downstream valid_fraction >= 0.80 filter, but still a
+    written row). jyutping_cs (English/punctuation kept inline, see
+    text_to_jyutping_codeswitch()) is computed independently and is NOT part
+    of the accept/reject gate -- it can be non-empty even when
+    jyutping/valid_fraction reject, e.g. pure-English text."""
     text = (text or "").strip()
     if not text:
-        return {"jyutping": "", "valid_fraction": 0.0}
+        return {"jyutping": "", "valid_fraction": 0.0, "jyutping_cs": ""}
+
+    jyutping_cs = text_to_jyutping_codeswitch(text)
 
     jyutping = text_to_jyutping(text)
     if not jyutping:
-        return {"jyutping": "", "valid_fraction": 0.0}
+        return {"jyutping": "", "valid_fraction": 0.0, "jyutping_cs": jyutping_cs}
 
     accept, frac, bad = validate_jyutping(jyutping)
     if not accept:
@@ -219,7 +267,7 @@ def g2p_one(text: str | None) -> dict:
     elif frac < WARN_VALID_FRACTION:
         log.info(f"  Jyutping validity warning {frac:.2f} {bad[:3]}")
 
-    return {"jyutping": jyutping, "valid_fraction": frac}
+    return {"jyutping": jyutping, "valid_fraction": frac, "jyutping_cs": jyutping_cs}
 
 
 # ---------------------------------------------------------------------------

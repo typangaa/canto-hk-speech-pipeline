@@ -24,6 +24,7 @@
   ],
   "asr_agreement":  0.96,
   "jyutping":       "sam1 zong6 beng6 zung1 fung1 ze2 se1 soeng4 gin3 dik1 sam1 nou5 hyut3 gun2 zat6 beng6",
+  "jyutping_cs":    "sam1 zong6 beng6 zung1 fung1 ze2 se1 soeng4 gin3 dik1 sam1 nou5 hyut3 gun2 zat6 beng6",
   "duration_sec":   6.97,
   "sample_rate":    48000,
   "speaker_id":     "rthk_001",
@@ -203,8 +204,12 @@ Jyutping romanisation with tone numbers. Space-separated, one token per syllable
 
 **Constraints**:
 - Each token must match `^[a-z]+[1-6]$`
-- English words pass through unchanged (canto-hk-g2p does not tokenise or bracket them
-  letter-by-letter — see `CLAUDE.md` "Issue 1 — G2P tool history")
+- English words and punctuation are **dropped entirely**, not passed through — this field
+  is Cantonese-tokens-only (`pipeline/nodes/g2p.py::_convert_for_moss()` filters
+  `lang == "yue"`). For English/punctuation kept inline (code-switch alignment), use
+  `jyutping_cs` below instead. (canto-hk-g2p itself does not tokenise or bracket English
+  letter-by-letter — see `CLAUDE.md` "Issue 1 — G2P tool history" — the dropping is this
+  field's own filtering, not a library limitation.)
 - No empty tokens
 - Reject the segment if more than 5% of tokens fail the regex (Hard Constraint 8)
 
@@ -227,6 +232,29 @@ def validate_jyutping_field(jyutping: str) -> tuple[bool, float]:
 "sam 1 zong 6"           # ← tone digit separated from syllable
 "sam1 zong6 "            # ← trailing space (minor, clean before writing)
 ```
+
+---
+
+### `jyutping_cs` — string, required (added 2026-07-20, T30)
+
+Jyutping romanisation, same as `jyutping`, but English words and punctuation are kept
+**verbatim in their original position** instead of being dropped. Produced via
+`canto_hk_g2p.Pipeline.convert()` (vs. `jyutping`'s `.convert_detailed()` +
+`lang == "yue"` filter) — see `pipeline/nodes/g2p.py::_convert_codeswitch()`.
+
+**Format**: `gam1 jat6 tin1 hei3 gei2 hou2 ， do1 ze6 saai3 David 。`
+
+**Use**: code-switch-aware consumers (e.g. a TTS model that keeps English orthography
+unphonemized) should tokenise this field directly instead of re-running G2P themselves
+against `text` — re-implementing G2P downstream is exactly what caused a train/infer
+drift risk when canto-hk-g2p was upgraded independently in two repos on the same day
+(2026-07-20); `jyutping_cs` is the single source of truth.
+
+**Constraints**:
+- **Not** validated against `^[a-z]+[1-6]$` or Hard Constraint 8's 95% threshold — it
+  intentionally contains non-Jyutping tokens (English words, punctuation), so it is not
+  part of the accept/reject gate. `jyutping`/`valid_fraction` remain the gate.
+- Can be non-empty even when `jyutping` is empty (e.g. pure-English text).
 
 ---
 
@@ -342,7 +370,7 @@ from pathlib import Path
 
 REQUIRED_FIELDS = [
     "id","audio_path","source","source_url","program","domain",
-    "text","text_verified","asr_candidates","asr_agreement","jyutping",
+    "text","text_verified","asr_candidates","asr_agreement","jyutping","jyutping_cs",
     "duration_sec","sample_rate","speaker_id",
     "gender","style","snr_db","dnsmos","english_ratio","created_at"
 ]

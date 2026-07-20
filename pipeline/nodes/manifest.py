@@ -157,7 +157,7 @@ MANIFEST_DISCOVER_SQL = """
         s.id, s.audio_path, s.source, s.source_url, s.program, s.domain,
         s.duration_sec, s.sample_rate, s.speaker_id, s.gender, s.style, s.created_at,
         a.best_text, a.text_verified, a.agreement,
-        g.jyutping,
+        g.jyutping, g.jyutping_cs,
         f.snr_db, f.dnsmos, f.english_ratio,
         t.tier
     FROM segments s
@@ -206,7 +206,7 @@ def build_entry(row: tuple, asr_candidates: list[dict]) -> dict:
         seg_id, audio_path, source, source_url, program, domain,
         duration_sec, sample_rate, speaker_id, gender, style, created_at,
         best_text, text_verified, agreement,
-        jyutping,
+        jyutping, jyutping_cs,
         snr_db, dnsmos, english_ratio,
         tier,
     ) = row
@@ -223,6 +223,7 @@ def build_entry(row: tuple, asr_candidates: list[dict]) -> dict:
         "asr_candidates": asr_candidates,
         "asr_agreement": round(float(agreement), 3),
         "jyutping": jyutping,
+        "jyutping_cs": jyutping_cs or "",
         "duration_sec": round(float(duration_sec), 3),
         "sample_rate": int(sample_rate),
         "speaker_id": speaker_id or f"{source}_unk",

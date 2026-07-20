@@ -4,6 +4,7 @@ from pipeline.nodes.g2p import (
     candidate_preview,
     g2p_one,
     text_to_jyutping,
+    text_to_jyutping_codeswitch,
     validate_jyutping,
 )
 
@@ -125,38 +126,68 @@ def test_validate_jyutping_rejects_regex_shaped_garbage():
 
 
 # ---------------------------------------------------------------------------
-# g2p_one() — pure text -> {jyutping, valid_fraction} dict, always returns a row
-# (even on empty/failed input) so discovery never loops forever on a bad segment.
+# g2p_one() — pure text -> {jyutping, valid_fraction, jyutping_cs} dict, always
+# returns a row (even on empty/failed input) so discovery never loops forever
+# on a bad segment.
 # ---------------------------------------------------------------------------
 
 def test_g2p_one_empty_text_returns_zero_fraction_row():
     row = g2p_one("")
-    assert row == {"jyutping": "", "valid_fraction": 0.0}
+    assert row == {"jyutping": "", "valid_fraction": 0.0, "jyutping_cs": ""}
 
 
 def test_g2p_one_none_text_returns_zero_fraction_row():
     row = g2p_one(None)
-    assert row == {"jyutping": "", "valid_fraction": 0.0}
+    assert row == {"jyutping": "", "valid_fraction": 0.0, "jyutping_cs": ""}
 
 
 def test_g2p_one_whitespace_only_returns_zero_fraction_row():
     row = g2p_one("   ")
-    assert row == {"jyutping": "", "valid_fraction": 0.0}
+    assert row == {"jyutping": "", "valid_fraction": 0.0, "jyutping_cs": ""}
 
 
 def test_g2p_one_pure_english_returns_zero_fraction_row():
-    """No Cantonese tokens -> text_to_jyutping() returns None -> zero-fraction row."""
+    """No Cantonese tokens -> text_to_jyutping() returns None -> zero-fraction
+    jyutping/valid_fraction, but jyutping_cs is computed independently and
+    keeps the English text verbatim (it's not part of the accept/reject gate)."""
     row = g2p_one("hello world")
-    assert row == {"jyutping": "", "valid_fraction": 0.0}
+    assert row["jyutping"] == ""
+    assert row["valid_fraction"] == 0.0
+    assert row["jyutping_cs"] == "hello world"
 
 
 def test_g2p_one_valid_cantonese_text():
     row = g2p_one("你好嘅")
     assert row["jyutping"] == "nei5 hou2 ge3"
     assert row["valid_fraction"] == 1.0
+    assert row["jyutping_cs"] == "nei5 hou2 ge3"
 
 
-def test_g2p_one_always_returns_both_keys():
+def test_g2p_one_always_returns_all_keys():
     for text in ["", None, "   ", "hello", "你好"]:
         row = g2p_one(text)
-        assert set(row.keys()) == {"jyutping", "valid_fraction"}
+        assert set(row.keys()) == {"jyutping", "valid_fraction", "jyutping_cs"}
+
+
+# ---------------------------------------------------------------------------
+# text_to_jyutping_codeswitch() — like text_to_jyutping() but keeps English
+# words and punctuation inline instead of dropping them (T30: added so
+# downstream code-switch-aware consumers, e.g. canto-tts, no longer need to
+# re-run canto-hk-g2p themselves against the raw text).
+# ---------------------------------------------------------------------------
+
+def test_text_to_jyutping_codeswitch_keeps_english_and_punctuation_inline():
+    result = text_to_jyutping_codeswitch("今日天氣幾好，多謝晒 David。")
+    assert "David" in result.split()
+    assert "，" in result
+    assert "。" in result
+    assert result.startswith("gam1 jat6")
+
+
+def test_text_to_jyutping_codeswitch_empty_text_returns_empty_string():
+    assert text_to_jyutping_codeswitch("") == ""
+    assert text_to_jyutping_codeswitch(None) == ""
+
+
+def test_text_to_jyutping_codeswitch_pure_english_returns_verbatim():
+    assert text_to_jyutping_codeswitch("hello world") == "hello world"

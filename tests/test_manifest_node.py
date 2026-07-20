@@ -21,7 +21,7 @@ def _row(**overrides):
         "seg001", "/mnt/Drive4/canto/filtered/youtube/x.wav", "youtube", "", "", "other",
         6.97, 48000, "youtube_001", "male", "formal", "2026-06-09",
         "hello world", False, 0.91,
-        "nei5 hou2",
+        "nei5 hou2", "nei5 hou2",
         35.2, 3.8, 0.02,
         "silver",
     )
@@ -31,7 +31,7 @@ def _row(**overrides):
         "seg_id", "audio_path", "source", "source_url", "program", "domain",
         "duration_sec", "sample_rate", "speaker_id", "gender", "style", "created_at",
         "best_text", "text_verified", "agreement",
-        "jyutping",
+        "jyutping", "jyutping_cs",
         "snr_db", "dnsmos", "english_ratio",
         "tier",
     ]
@@ -48,6 +48,7 @@ def test_build_entry_basic_fields():
     assert entry["text_verified"] is False
     assert entry["tier"] == "silver"
     assert entry["jyutping"] == "nei5 hou2"
+    assert entry["jyutping_cs"] == "nei5 hou2"
 
 
 def test_build_entry_rounding_matches_manifest_schema():
