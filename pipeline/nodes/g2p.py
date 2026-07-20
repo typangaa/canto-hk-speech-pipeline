@@ -99,6 +99,18 @@ through. Reinstalled the editable package to pick up the matching version
 metadata (`uv pip install -e ~/Documents/canto-g2p` — the compiled extension
 and pyproject.toml version had already moved to 2.0.0, but the installed
 dist-info was stale at 1.9.0 until reinstall).
+
+Library upgrade to v2.1.0 (2026-07-19, now on PyPI): additive, non-breaking —
+new 借音字 (phonetic-loan) alias layer corrects common sound-borrowing
+miswritings (e.g. 訓覺 -> fan3 gaau3, not 訓's own fan3 gok3) via a hand-curated
+canonical-word alias table resolved at build time; adds `source="variant_alias"`
+to the existing tuple shape, no unpack changes needed here. Reinstalled
+(`uv pip install -e ~/Documents/canto-g2p`) to refresh the dist-info version
+metadata, same drift as the v2.0.0 note above. Same caveat as v1.7.0's
+polyphone-mis-tie-break fix: existing `g2p` rows (`provenance = 'g2p_node'`)
+are NOT automatically revisited by this node's anti-join discovery — a
+corpus-wide reprocess to pick up the ~20 corrected words is a separate,
+not-yet-scheduled task (see pending_task.md).
 """
 
 import logging

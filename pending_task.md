@@ -321,6 +321,28 @@ what actually landed and when.)
 
 > Entries dated 2026-07-16 and earlier rotated out to `DECISIONS.md` (2026-07-19 cleanup pass) to keep this file to the recent working window — same rotation `PROGRESS.md` uses. Full history is in `DECISIONS.md`, chronological, nothing lost.
 
+### T29. Upgrade `canto-hk-g2p` 2.0.0 → 2.1.0 (借音字 phonetic-loan alias layer) — done 2026-07-19
+- **What**: upstream v2.1.0 (now on PyPI) adds a hand-curated alias table
+  (`data/variant_words.tsv`, ~20 entries) that corrects common sound-borrowing
+  miswritings — e.g. `訓覺` used to resolve to `訓`'s own native reading `fan3 gok3`
+  instead of the intended `瞓覺` reading `fan3 gaau3`. Purely additive: new
+  `source="variant_alias"` tag on the existing 5-tuple shape, no unpack changes.
+- **Reinstalled** `uv pip install -e ~/Documents/canto-g2p` to refresh the dist-info
+  version metadata (was stale at 2.0.0 even though the compiled extension had already
+  moved — same drift pattern as T26).
+- **`pipeline/nodes/g2p.py`**: docstring-only change (new dated upgrade note); no code
+  change needed — `_convert_for_moss()`'s starred unpack and `candidate_preview()`'s
+  generic `source` passthrough already handle any new source-tag value.
+- **Verified**: `text_to_jyutping("訓覺")` now returns `"fan3 gaau3"` (was `"fan3 gok3"`
+  under 2.0.0); `convert_candidates("訓覺")` confirms `source="variant_alias"`. Full
+  suite 476 passed / 1 failed — the 1 failure
+  (`test_manifest_build_matches_expected_corpus_totals`, off by 4 rows against its
+  live-catalog baseline) is the known baseline-drift pattern, unrelated to this
+  upgrade (no g2p rows were reprocessed this round; see "Not done" below).
+- **Not done**: corpus-wide `g2p` reprocess to retroactively correct the ~20 words'
+  worth of existing rows — same "not automatically revisited by anti-join discovery"
+  caveat as T24's v1.7.0 note; still queued, not scheduled this round.
+
 ### T27. Surface polyphone-candidate ambiguity in `pipe calibrate serve`'s live preview — done 2026-07-19
 - **What**: T24's "Not done" list item 2 ("wire `convert_candidates()` into `pipe
   calibrate serve`'s UI to surface polyphone alternatives during human review") —
