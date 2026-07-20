@@ -1,6 +1,7 @@
 """
 pipeline/nodes/ingest_download.py
-ingest.download DAG node — download audio for rthk/youtube/podcast sources.
+ingest.download DAG node — download audio for all registered SOURCE_FILES sources
+(rthk/youtube/podcast/hktv/radio/audiobook/gov/drama/edu, 2026-07-20 expansion).
 
 Policy (2026-07-04, DECISIONS.md "Storage format policy FINALIZED after
 external research"): keep the native bestaudio/RSS-enclosure container
@@ -85,6 +86,17 @@ SOURCE_FILES = {
     "rthk": SOURCES_DIR / "rthk_sources.yaml",
     "youtube": SOURCES_DIR / "youtube_channels.yaml",
     "podcast": SOURCES_DIR / "podcast_sources.yaml",
+    # 2026-07-20 expansion (T31, see DECISIONS.md): rthk/youtube/podcast alone
+    # under-covered domain diversity (87% of youtube raw rows had domain=None).
+    # Each of these is a distinct distribution channel with its own yaml, but
+    # reuses the existing rss/channel/playlist download paths unchanged — no
+    # new download mechanism was needed, only new source categories + folders.
+    "hktv": SOURCES_DIR / "hktv_sources.yaml",
+    "radio": SOURCES_DIR / "radio_sources.yaml",
+    "audiobook": SOURCES_DIR / "audiobook_sources.yaml",
+    "gov": SOURCES_DIR / "gov_sources.yaml",
+    "drama": SOURCES_DIR / "drama_sources.yaml",
+    "edu": SOURCES_DIR / "edu_sources.yaml",
 }
 
 # Native container extensions this node can produce (RSS enclosures + yt-dlp
@@ -570,7 +582,7 @@ async def run_ingest_commit(*, conn=None) -> dict:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--source", default="all", choices=["rthk", "youtube", "podcast", "all"])
+    ap.add_argument("--source", default="all", choices=list(SOURCE_FILES) + ["all"])
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--cookies-from-browser", default=None,

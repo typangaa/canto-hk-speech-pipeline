@@ -1,0 +1,127 @@
+# HK TV Broadcaster Sources (non-RTHK)
+# Other Hong Kong free-to-air / OTT TV broadcaster YouTube channels — HOY TV, ViuTV, TVB.
+#
+# Usage: python -m pipeline.cli run ingest.download -- --source hktv
+# This file is read by ingest.download.
+#
+# Schema: see docs/SOURCE_GUIDE.md
+# Status values: evaluate | active | paused | done | skip
+#
+# All entries below were seeded from agy-gemini online research (2026-07-20) and are
+# UNVERIFIED candidates. None are "active" yet — every entry must be spot-checked with
+# `yt-dlp --simulate --dump-json` and a 2-3 episode listen test per docs/SOURCE_GUIDE.md
+# before being promoted to status: active.
+
+# ──────────────────────────────────────────────
+# TVB Anywhere overseas-targeted channels are NOT included here.
+# Channels such as @TVBVariety and @TVBBestDramaChannel enforce regional geo-blocking
+# and are aimed at overseas audiences — do not add them without confirming access
+# from this machine first.
+# ──────────────────────────────────────────────
+
+# ──────────────────────────────────────────────
+# Candidates — evaluate before activating
+# ──────────────────────────────────────────────
+
+- name: "HOY 78 × 有線新聞 Cable News"
+  url: "https://www.youtube.com/@hoy78cablenews"
+  type: "channel"
+  source: "hktv"
+  language: "yue"
+  domain: "news"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 150
+  status: "evaluate"
+  notes: >
+    UNVERIFIED — candidate sourced from agy-gemini online research (2026-07-20), not yet
+    spot-checked via yt-dlp or listened to. Run yt-dlp --simulate --dump-json + a 2-3 episode
+    listen test per docs/SOURCE_GUIDE.md before promoting to status: active.
+    Daily news broadcasts and current-affairs programs (一線搜查, 有理有得傾, 財智商傳);
+    high volume, thousands of hours of 5-30min segments available. No geo-block reported.
+
+- name: "HOY 媒體網絡"
+  url: "https://www.youtube.com/@hkhoy"
+  type: "channel"
+  source: "hktv"
+  language: "yue"
+  domain: "talk_show"
+  style: "casual"
+  priority: "medium"
+  estimated_hours: 40
+  status: "evaluate"
+  notes: >
+    UNVERIFIED — candidate sourced from agy-gemini online research (2026-07-20), not yet
+    spot-checked via yt-dlp or listened to. Run yt-dlp --simulate --dump-json + a 2-3 episode
+    listen test per docs/SOURCE_GUIDE.md before promoting to status: active.
+    Lifestyle/health/culture talk shows (健康關注组, 臥底旅行團); medium-high volume,
+    10-45min highlight clips. No geo-block reported.
+
+- name: "Viu1 HK"
+  url: "https://www.youtube.com/@viu1hk"
+  type: "channel"
+  source: "hktv"
+  language: "yue"
+  domain: "talk_show"
+  style: "interview"
+  priority: "high"
+  estimated_hours: 60
+  status: "evaluate"
+  notes: >
+    UNVERIFIED — candidate sourced from agy-gemini online research (2026-07-20), not yet
+    spot-checked via yt-dlp or listened to. Run yt-dlp --simulate --dump-json + a 2-3 episode
+    listen test per docs/SOURCE_GUIDE.md before promoting to status: active.
+    Entertainment news, celebrity interviews, press conferences; unedited 3-15min Q&As,
+    high volume, diverse speakers. No geo-block reported.
+
+- name: "ViuTV Official Channel"
+  url: "https://www.youtube.com/@viutv"
+  type: "channel"
+  source: "hktv"
+  language: "yue"
+  domain: "talk_show"
+  style: "casual"
+  priority: "medium"
+  estimated_hours: 30
+  status: "evaluate"
+  notes: >
+    UNVERIFIED — candidate sourced from agy-gemini online research (2026-07-20), not yet
+    spot-checked via yt-dlp or listened to. Run yt-dlp --simulate --dump-json + a 2-3 episode
+    listen test per docs/SOURCE_GUIDE.md before promoting to status: active.
+    Variety-show highlight clips (晚吹 series), modern colloquial Cantonese.
+    CAVEAT: full episodes live on viu.tv and are HK-IP geo-blocked — only ingest this
+    YouTube channel's own uploaded clips, do not attempt to pull from viu.tv directly.
+
+- name: "TVB NEWS Official 無綫新聞"
+  url: "https://www.youtube.com/@tvbnewsofficial"
+  type: "channel"
+  source: "hktv"
+  language: "yue"
+  domain: "news"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 150
+  status: "evaluate"
+  notes: >
+    UNVERIFIED — candidate sourced from agy-gemini online research (2026-07-20), not yet
+    spot-checked via yt-dlp or listened to. Run yt-dlp --simulate --dump-json + a 2-3 episode
+    listen test per docs/SOURCE_GUIDE.md before promoting to status: active.
+    24hr news bulletin clips, formal broadcast Cantonese; high volume, 1-15min clips,
+    continuously updated. No geo-block reported.
+
+- name: "Now 財經新聞"
+  url: "https://www.youtube.com/@nowbnc"
+  type: "channel"
+  source: "hktv"
+  language: "yue"
+  domain: "news"
+  style: "formal"
+  priority: "medium"
+  estimated_hours: 50
+  status: "evaluate"
+  notes: >
+    UNVERIFIED — candidate sourced from agy-gemini online research (2026-07-20), not yet
+    spot-checked via yt-dlp or listened to. Run yt-dlp --simulate --dump-json + a 2-3 episode
+    listen test per docs/SOURCE_GUIDE.md before promoting to status: active.
+    Financial news, real estate, expert interviews (樓市每日睇); professional/financial
+    Cantonese register, medium volume, 5-20min clips.

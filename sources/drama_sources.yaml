@@ -1,0 +1,80 @@
+# HK Cantonese Radio Drama (廣播劇) Audio Sources
+# New source category: "drama" — voice-acted narrative audio, multi-speaker
+#
+# Usage: python -m pipeline.cli run ingest.download -- --source drama
+# Schema: see docs/SOURCE_GUIDE.md
+# Status values: active | paused | done | skip | evaluate
+#
+# Seeded from agy-gemini online research (2026-07-20). Every entry below is
+# UNVERIFIED — not yet spot-checked via yt-dlp or listened to. All entries
+# carry status: "evaluate" until a human/spot-check promotes them.
+#
+# ⚠️ CAUTION — higher filter-yield risk than other sources:
+# Unlike other categories, radio drama audio commonly mixes background music
+# (BGM) and sound effects (SFX) under the dialogue throughout the recording.
+# docs/SOURCE_GUIDE.md already flags "Audio has background music throughout"
+# as a quality red flag that can suppress DNSMOS below the pipeline's 3.0
+# pass threshold for most segments. Treat every channel in this file as
+# higher-risk than a typical talk/news/podcast source:
+#   1. Before ANY bulk download, run yt-dlp --limit (a handful of episodes)
+#      and a mini segment.diarize → segment.vad_cut → asr.transcribe →
+#      filter.* pass on that small batch.
+#   2. Check the resulting filter.decide pass rate. SOURCE_GUIDE.md flags
+#      <40% pass rate as needing investigation before committing to a
+#      bulk download of that channel.
+#   3. Only promote status to "active" after this spot-check confirms an
+#      acceptable pass rate.
+#
+# Out of scope for this file (researched but not included):
+#   - HKU Digital Repository historical Commercial Radio drama tapes
+#     (1966-1976): an academic archive, not a yt-dlp/RSS-downloadable web
+#     source — not compatible with this pipeline's ingest.download mechanism.
+#     Possible future manual-research item if a downloadable mirror surfaces.
+#   - RTHK Podcast One radio drama: already covered by sources/rthk_sources.yaml
+#     and sources/podcast_sources.yaml — not duplicated here.
+
+# ──────────────────────────────────────────────
+# Candidates — pending spot-check verification
+# ──────────────────────────────────────────────
+
+- name: "Listen Watch Learn 聆聽觀看學習"
+  url: "https://www.youtube.com/@ListenWatchLearn_amtb"
+  type: "channel"
+  source: "drama"
+  language: "yue"
+  domain: "drama"
+  style: "narration"
+  priority: "medium"
+  estimated_hours: 200
+  status: "evaluate"
+  notes: >
+    UNVERIFIED — candidate sourced from agy-gemini online research (2026-07-20), not yet
+    spot-checked via yt-dlp or listened to. Run yt-dlp --simulate --dump-json + a 2-3 episode
+    listen test per docs/SOURCE_GUIDE.md before promoting to status: active. CAUTION: radio
+    drama audio commonly mixes background music/SFX under dialogue, which can suppress DNSMOS
+    below the 3.0 pass threshold — before any bulk download, run a small --limit test batch
+    through segment→transcribe→filter and check the pass rate (SOURCE_GUIDE.md flags <40%
+    pass rate as needing investigation).
+    Classic HK radio drama archive (奇幻檔案, 民間傳奇, martial arts adaptations),
+    multi-speaker voice acting, 200+ hours of estimated available audio.
+
+- name: "佛靈人．港鬼故 GHOST-RADIO"
+  url: "https://www.youtube.com/@ghostradiohk"
+  type: "channel"
+  source: "drama"
+  language: "yue"
+  domain: "drama"
+  style: "narration"
+  priority: "low"
+  estimated_hours: 50
+  status: "evaluate"
+  notes: >
+    UNVERIFIED — candidate sourced from agy-gemini online research (2026-07-20), not yet
+    spot-checked via yt-dlp or listened to. Run yt-dlp --simulate --dump-json + a 2-3 episode
+    listen test per docs/SOURCE_GUIDE.md before promoting to status: active. CAUTION: radio
+    drama audio commonly mixes background music/SFX under dialogue, which can suppress DNSMOS
+    below the 3.0 pass threshold — before any bulk download, run a small --limit test batch
+    through segment→transcribe→filter and check the pass rate (SOURCE_GUIDE.md flags <40%
+    pass rate as needing investigation).
+    Supernatural & horror Cantonese audio dramas, dramatic storytelling style,
+    50+ hours of estimated available audio.

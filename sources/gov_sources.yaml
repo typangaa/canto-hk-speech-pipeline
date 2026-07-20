@@ -1,0 +1,68 @@
+# HK Government / Public-Sector Audio Sources
+# Legislative Council (LegCo) + Information Services Department (ISD) — official
+# HKSAR public-record speech archives.
+#
+# Usage: python scripts/02_download.py --source gov
+# This file is read by 01_discover.py and 02_download.py.
+#
+# Schema: see docs/SOURCE_GUIDE.md
+# Status values: active | paused | done | skip | evaluate
+#
+# Why this source category: these are the HIGHEST speaker-diversity candidates found
+# so far — LegCo sessions alone feature 100+ distinct lawmakers, secretaries, and
+# department heads, which directly targets this project's "≥100 unique speakers"
+# acceptance criterion. Speech is formal-register Cantonese (public meetings, press
+# briefings) and unambiguously public record (published by HKSAR government bodies
+# for public access, no login/geo-block).
+#
+# Provenance: every entry below was seeded from online research via agy-gemini
+# (2026-07-20) and is UNVERIFIED — not yet spot-checked with yt-dlp or listened to.
+# Do not set status: active until docs/SOURCE_GUIDE.md's verification steps
+# (yt-dlp --simulate --dump-json + a 2-3 episode listen test) have been run.
+
+# ──────────────────────────────────────────────
+# High Priority — Candidates Pending Verification
+# ──────────────────────────────────────────────
+
+- name: "Legislative Council of the HKSAR (LegCo)"
+  url: "https://www.youtube.com/@legcogovhken"
+  type: "channel"
+  source: "gov"
+  language: "yue"
+  domain: "talk_show"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 1000
+  status: "evaluate"
+  notes: >
+    UNVERIFIED — candidate sourced from agy-gemini online research (2026-07-20), not yet
+    spot-checked via yt-dlp or listened to. Run yt-dlp --simulate --dump-json + a 2-3 episode
+    listen test per docs/SOURCE_GUIDE.md before promoting to status: active.
+    SINGLE HIGHEST-PRIORITY CANDIDATE in this research round. Full council meetings, finance
+    committee sessions, and public hearings — 100+ unique speakers (lawmakers, secretaries,
+    department heads), formal legislative Cantonese register. Massive volume, 1,000+ hours
+    available. No login, no geo-block, public record. CAUTION: some sessions publish a
+    simultaneous-interpretation audio channel alongside the primary Cantonese track — verify
+    and select only the primary Cantonese track, avoid the interpretation channel.
+    Informational (not a separate entry, not for this pass): LegCo also runs a webcast portal
+    at legco.gov.hk/en/legco-business/webcast.html with HLS stream links, a possible future
+    stretch-goal alternative access point if the YouTube channel's archive proves incomplete —
+    would need different download tooling (not a yt-dlp channel dump), out of scope for now.
+
+- name: "Information Services Department (ISD) HKSAR"
+  url: "https://www.youtube.com/@isdgovhk"
+  type: "channel"
+  source: "gov"
+  language: "yue"
+  domain: "news"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 500
+  status: "evaluate"
+  notes: >
+    UNVERIFIED — candidate sourced from agy-gemini online research (2026-07-20), not yet
+    spot-checked via yt-dlp or listened to. Run yt-dlp --simulate --dump-json + a 2-3 episode
+    listen test per docs/SOURCE_GUIDE.md before promoting to status: active.
+    Official HKSAR government channel: Chief Executive policy addresses, Financial Secretary
+    budget speeches, departmental press conferences, health briefings — updated daily. Formal
+    press-briefing register, multiple distinct government-official speakers over time.

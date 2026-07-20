@@ -102,9 +102,18 @@ Which data source this segment came from.
 | Value | Meaning |
 |-------|---------|
 | `rthk` | Radio Television Hong Kong (including YouTube channel) |
-| `youtube` | YouTube channels (not RTHK) |
+| `youtube` | YouTube channels (not RTHK, general list) |
 | `podcast` | Podcast RSS feeds |
-| `hktv` | Other HK TV sources |
+| `hktv` | Other HK TV broadcasters (HOY, ViuTV, TVB, Now TV) |
+| `radio` | Other HK radio stations (D100, Commercial Radio, Metro Radio) |
+| `audiobook` | HK Cantonese audiobook / storytelling channels |
+| `gov` | HK government / public-sector speech archives (LegCo, ISD) |
+| `drama` | HK Cantonese radio drama (廣播劇) |
+| `edu` | HK university public lecture / open courseware channels |
+
+(`hktv`/`radio`/`audiobook`/`gov`/`drama`/`edu` added 2026-07-20, T31 — see
+`docs/SOURCE_GUIDE.md` and `sources/*_sources.yaml` for the per-channel candidate list;
+all seeded at `status: evaluate`, not yet spot-checked or promoted to `active`.)
 
 ---
 
@@ -374,7 +383,7 @@ REQUIRED_FIELDS = [
     "duration_sec","sample_rate","speaker_id",
     "gender","style","snr_db","dnsmos","english_ratio","created_at"
 ]
-SOURCE_ENUM  = {"rthk","youtube","podcast","hktv"}
+SOURCE_ENUM  = {"rthk","youtube","podcast","hktv","radio","audiobook","gov","drama","edu"}
 DOMAIN_ENUM  = {"documentary","news","talk_show","podcast","drama","vlog","educational","other"}
 GENDER_ENUM  = {"male","female","unknown"}
 STYLE_ENUM   = {"formal","casual","narration","interview"}

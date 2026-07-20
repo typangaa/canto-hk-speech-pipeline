@@ -1,0 +1,136 @@
+# HK University Public Lecture / Open Courseware Sources
+# Long-form (45-90min) single-speaker Cantonese-medium academic lectures.
+# Clean podium/lapel-mic audio, maps directly onto the "educational" domain —
+# currently under-represented in the corpus (helps domain diversity for the
+# acceptance criteria).
+#
+# Usage: python scripts/02_download.py --source edu
+# This file is read by 01_discover.py and 02_download.py.
+#
+# Schema: see docs/SOURCE_GUIDE.md
+# Status values: active | paused | done | skip | evaluate
+#
+# SEEDING NOTE (2026-07-20): every entry in this file was sourced from
+# agy-gemini online research and is UNVERIFIED — status is "evaluate" for
+# all entries until spot-checked. Do not download at scale before running
+# yt-dlp --simulate --dump-json + a 2-3 episode listen test per
+# docs/SOURCE_GUIDE.md and promoting the entry to status: active.
+#
+# ⚠️ ENGLISH/CANTONESE-MEDIUM MIXING CAVEAT: many HK university channels mix
+# English-medium and Cantonese-medium content on the same channel (different
+# faculties, different lecturers, different series). Verify each specific
+# playlist/handle is genuinely Cantonese-medium — do not trust a whole
+# channel just because one lecture series on it is in Cantonese. Some
+# channels may need per-playlist rather than per-channel scoping once
+# verified.
+
+# ──────────────────────────────────────────────
+# High Priority — University Public Lecture Channels
+# ──────────────────────────────────────────────
+
+- name: "Hong Kong Metropolitan University (HKMU) — Main channel"
+  url: "https://www.youtube.com/@HKMUChannel"
+  type: "channel"
+  source: "edu"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 80
+  status: "evaluate"
+  notes: >
+    UNVERIFIED — candidate sourced from agy-gemini online research (2026-07-20), not yet
+    spot-checked via yt-dlp or listened to. Run yt-dlp --simulate --dump-json + a 2-3 episode
+    listen test per docs/SOURCE_GUIDE.md before promoting to status: active. IMPORTANT: many
+    university channels mix English-medium and Cantonese-medium content — verify each specific
+    playlist/handle is Cantonese-medium (not English) before trusting the whole channel; some
+    lecture series may need per-playlist rather than per-channel scoping.
+    Hosts 《都大講堂》(HKMU Public Lecture Series): 45-90 min lectures on HK literature,
+    history, culture, translation, and sociology. 100+ full-length lectures, single speaker
+    per lecture. Described as the best university source found for this corpus — no login,
+    global access.
+
+- name: "HKMU — Humanities channel"
+  url: "https://www.youtube.com/@hkmuhlt"
+  type: "channel"
+  source: "edu"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 30
+  status: "evaluate"
+  notes: >
+    UNVERIFIED — candidate sourced from agy-gemini online research (2026-07-20), not yet
+    spot-checked via yt-dlp or listened to. Run yt-dlp --simulate --dump-json + a 2-3 episode
+    listen test per docs/SOURCE_GUIDE.md before promoting to status: active. IMPORTANT: many
+    university channels mix English-medium and Cantonese-medium content — verify each specific
+    playlist/handle is Cantonese-medium (not English) before trusting the whole channel; some
+    lecture series may need per-playlist rather than per-channel scoping.
+    Same 都大講堂 lecture series as HKMU's main channel, humanities-department focus
+    (literature, culture, translation).
+
+- name: "Chinese University of Hong Kong (CUHK)"
+  url: "https://www.youtube.com/@CUHKchannel"
+  type: "channel"
+  source: "edu"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 50
+  status: "evaluate"
+  notes: >
+    UNVERIFIED — candidate sourced from agy-gemini online research (2026-07-20), not yet
+    spot-checked via yt-dlp or listened to. Run yt-dlp --simulate --dump-json + a 2-3 episode
+    listen test per docs/SOURCE_GUIDE.md before promoting to status: active. IMPORTANT: many
+    university channels mix English-medium and Cantonese-medium content — verify each specific
+    playlist/handle is Cantonese-medium (not English) before trusting the whole channel; some
+    lecture series may need per-playlist rather than per-channel scoping.
+    #CUHKLecture playlist: 鴻儒開講 (Chinese Culture Masters), humanities seminars, and
+    public lectures. High volume, organized by playlist series — scope to the
+    #CUHKLecture / 鴻儒開講 playlists specifically once verified, not the whole channel.
+
+- name: "University of Hong Kong (HKU) — Main channel"
+  url: "https://www.youtube.com/@abouthku"
+  type: "channel"
+  source: "edu"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "medium"
+  estimated_hours: 20
+  status: "evaluate"
+  notes: >
+    UNVERIFIED — candidate sourced from agy-gemini online research (2026-07-20), not yet
+    spot-checked via yt-dlp or listened to. Run yt-dlp --simulate --dump-json + a 2-3 episode
+    listen test per docs/SOURCE_GUIDE.md before promoting to status: active. IMPORTANT: many
+    university channels mix English-medium and Cantonese-medium content — verify each specific
+    playlist/handle is Cantonese-medium (not English) before trusting the whole channel; some
+    lecture series may need per-playlist rather than per-channel scoping.
+    ⚠️ EXTRA CAUTION: HKU's main channel likely has significant English-medium content mixed
+    in (international faculty, English-medium instruction is the HKU default in many
+    faculties). Includes HK history seminars among other public lectures, medium volume.
+    Do NOT bulk-download this channel — identify and scope to specific Cantonese-medium
+    playlists (e.g. HK history/culture seminar series) before ingesting anything from it.
+
+- name: "HKU — School of Chinese"
+  url: "https://www.youtube.com/@schoolofchinesehku"
+  type: "channel"
+  source: "edu"
+  language: "yue"
+  domain: "educational"
+  style: "formal"
+  priority: "high"
+  estimated_hours: 30
+  status: "evaluate"
+  notes: >
+    UNVERIFIED — candidate sourced from agy-gemini online research (2026-07-20), not yet
+    spot-checked via yt-dlp or listened to. Run yt-dlp --simulate --dump-json + a 2-3 episode
+    listen test per docs/SOURCE_GUIDE.md before promoting to status: active. IMPORTANT: many
+    university channels mix English-medium and Cantonese-medium content — verify each specific
+    playlist/handle is Cantonese-medium (not English) before trusting the whole channel; some
+    lecture series may need per-playlist rather than per-channel scoping.
+    HKU School of Chinese public lectures (literature series, HK history/culture seminars).
+    Medium volume. More reliably Cantonese-medium than HKU's main channel given the
+    department's subject matter, but still verify per docs/SOURCE_GUIDE.md before trusting.

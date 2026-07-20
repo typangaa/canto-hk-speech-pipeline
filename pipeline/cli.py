@@ -1061,8 +1061,9 @@ def main() -> int:
 
     p_run = sub.add_parser("run", help="Run a DAG node via the orchestrator")
     run_sub = p_run.add_subparsers(dest="run_command", required=True)
-    p_run_download = run_sub.add_parser("ingest.download", help="download rthk/youtube/podcast audio, native container, zero transcode (2026-07-04 policy)")
-    p_run_download.add_argument("--source", default="all", choices=["rthk", "youtube", "podcast", "all"])
+    from pipeline.nodes.ingest_download import SOURCE_FILES as _INGEST_SOURCE_FILES
+    p_run_download = run_sub.add_parser("ingest.download", help="download audio for all registered sources (rthk/youtube/podcast/hktv/radio/audiobook/gov/drama/edu), native container, zero transcode (2026-07-04 policy)")
+    p_run_download.add_argument("--source", default="all", choices=list(_INGEST_SOURCE_FILES) + ["all"])
     p_run_download.add_argument("--dry-run", action="store_true")
     p_run_download.add_argument("--limit", type=int, default=None)
     p_run_download.add_argument("--cookies-from-browser", default=None,

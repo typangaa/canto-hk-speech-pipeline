@@ -70,10 +70,21 @@ for line in sys.stdin:
 " | head -20
 ```
 
-Listen to 2–3 episodes manually and check:
+Listen to 2–3 episodes manually and check, if doing manual review:
 1. Is it clearly HK Cantonese? (not Guangzhou, not Mandarin)
 2. Is the audio clean? (no heavy background music, no severe reverb)
 3. Are there multiple different speakers?
+
+**Manual listening is optional, not required** (clarified 2026-07-20, see DECISIONS.md
+same date). `status: evaluate` does not gate `ingest.download` — it is provenance
+metadata only, not a hard pre-approval step. The three checks above are already covered
+automatically, per raw file, source-blind, before any expensive GPU stage runs:
+language purity by `lang_screen.auto` (before `segment.diarize`), audio cleanliness by
+`pregate.snr` (before `asr.transcribe`), speaker count by `segment.diarize` itself. It's
+fine to add a candidate straight at `status: "evaluate"` (or `"active"`, functionally
+equivalent) and let the pipeline's own gates sort it out — manual listening is only worth
+doing if you want an early sanity check before spending download bandwidth on a source
+you suspect is bad.
 
 ### Step 2: Check yt-dlp compatibility
 
@@ -214,6 +225,36 @@ These are example categories to search — verify availability and content befor
 | Cantonese learning | 廣東話 podcast | Clear speech, good for baseline |
 
 Search platforms: Apple Podcasts, Spotify, Google Podcasts, RTHK podcasts page (`podcast.rthk.hk`).
+
+---
+
+## New Source Categories (2026-07-20, T31)
+
+Beyond RTHK/generic-YouTube/podcast, six new source categories were researched (via
+online search) to close domain-diversity gaps — 87% of the generic `youtube` raw rows
+had no `domain` tag, and the corpus skewed heavily toward RTHK+podcast for diversity.
+Each new category is a distinct distribution channel (own `sources/*_sources.yaml`,
+own `data/raw/{source}/` folder) but reuses the existing RSS/yt-dlp channel download
+mechanism unchanged — see `pipeline/nodes/ingest_download.py`'s `SOURCE_FILES` dict.
+
+All entries in all six new files are seeded at `status: "evaluate"` (unverified
+provenance — sourced from online research, not manually spot-checked). **This does not
+block `ingest.download` from picking them up** — see the "Manual listening is optional"
+note under Step 1 above and DECISIONS.md 2026-07-20 for why no source-level pre-approval
+gate is needed on top of the pipeline's existing per-file automated screens.
+
+| Category | File | Top candidate(s) | Notes |
+|----------|------|-------------------|-------|
+| `hktv` | `sources/hktv_sources.yaml` | HOY 78×Cable News (`@hoy78cablenews`), TVB NEWS (`@tvbnewsofficial`) | Avoid TVB Anywhere overseas channels (`@TVBVariety`, `@TVBBestDramaChannel`) — regionally geo-blocked. `viu.tv` full episodes are HK-IP geo-blocked; only `@viu1hk`/`@viutv` YouTube clips are in scope. |
+| `radio` | `sources/radio_sources.yaml` | D100 Radio (`@d100hk`) — 10,000+ VODs, 1–3h each | Commercial Radio (`@cr881903`) and Metro Radio (`@metro_broadcast`) full show archives are paywalled apps (881903.com / MetroPod) — only free YouTube clips are in scope, do not pursue the paid archives. |
+| `audiobook` | `sources/audiobook_sources.yaml` | 粵語有聲戲 (`@CantoneseStoryteller`, 100+h) | Single-narrator, clean studio audio — high value for TTS. Children's-storytelling channel (`@mr.sharkstories`) is a distinct register (slow, highly enunciated) — useful but skews style distribution if over-sampled. |
+| `gov` | `sources/gov_sources.yaml` | **LegCo (`@legcogovhken`) — 1,000+h, 100+ unique speakers, public record, no geo-block/login.** | Highest-confidence candidate in this round — directly helps the ≥100 unique speakers acceptance criterion. Avoid the simultaneous-interpretation audio track where present, use the primary Cantonese track. |
+| `drama` | `sources/drama_sources.yaml` | Listen Watch Learn (`@ListenWatchLearn_amtb`, 200+h) | ⚠️ Radio drama commonly mixes BGM/SFX under dialogue — higher DNSMOS-filter-yield risk than other categories (see "Quality Red Flags" #1 below). Test a small `--limit` batch through segment→transcribe→filter before bulk download. |
+| `edu` | `sources/edu_sources.yaml` | HKMU《都大講堂》(`@HKMUChannel`, 100+ full 45–90min lectures) | Long-form single-speaker lecture audio, directly fills the `educational` domain gap. University channels often mix English-medium content — verify Cantonese-medium per playlist, not just per channel (HKU's `@abouthku` flagged as highest risk here). |
+
+Research method: online search via `weir chat agy-gemini`, cross-checked against this
+guide's evaluation criteria — not yet verified by direct yt-dlp/listening. Treat every
+row above as a lead, not a confirmed source.
 
 ---
 

@@ -1,0 +1,89 @@
+# Radio Audio Sources
+# Non-RTHK Hong Kong commercial radio station YouTube channels
+#
+# RTHK's own radio content is already covered separately in rthk_sources.yaml /
+# podcast_sources.yaml — do not duplicate RTHK here. This file is scoped to the
+# other major HK radio broadcasters (D100, Commercial Radio, Metro Radio, ...).
+#
+# Usage: python scripts/02_download.py --source radio
+# This file is read by 01_discover.py and 02_download.py.
+#
+# Schema: see docs/SOURCE_GUIDE.md
+# Status values: active | paused | done | skip | evaluate
+#   evaluate = seeded from online research, not yet spot-checked or listened to;
+#              must pass a yt-dlp --simulate --dump-json + 2-3 episode listen test
+#              (per docs/SOURCE_GUIDE.md) before promoting to status: active.
+#
+# All entries below were seeded from agy-gemini online research (2026-07-20) and
+# are UNVERIFIED. Hard rule: this project never pursues paywalled/login-gated
+# content — where a station's full archive lives behind a paid app/membership,
+# only the free public YouTube channel is in scope; the paid archive must never
+# be accessed.
+
+# ──────────────────────────────────────────────
+# High Priority
+# ──────────────────────────────────────────────
+
+- name: "D100 Radio"
+  url: "https://www.youtube.com/@d100hk"
+  type: "channel"
+  source: "radio"
+  language: "yue"
+  domain: "talk_show"
+  style: "casual"
+  priority: "high"
+  estimated_hours: 500
+  status: "evaluate"
+  notes: >
+    UNVERIFIED — candidate sourced from agy-gemini online research (2026-07-20), not yet
+    spot-checked via yt-dlp or listened to. Run yt-dlp --simulate --dump-json + a 2-3 episode
+    listen test per docs/SOURCE_GUIDE.md before promoting to status: active.
+    Internet/network radio station: daily talk shows, news commentary, lifestyle, and
+    cooking programs (e.g. D100新聞天地, 為食麻甩騷). 600k+ subscribers, 10,000+ long-form
+    VODs (1-3 hours each), natural multi-speaker conversational Cantonese. Described in
+    research as the single best radio source found — prioritize verification of this one
+    first. Also has a legacy channel at youtube.com/user/d100hk; use the @d100hk handle
+    form for ingestion.
+
+# ──────────────────────────────────────────────
+# Medium Priority — free YouTube clips only, paid archives out of scope
+# ──────────────────────────────────────────────
+
+- name: "Commercial Radio (雷霆881 / 叱咤903)"
+  url: "https://www.youtube.com/@cr881903"
+  type: "channel"
+  source: "radio"
+  language: "yue"
+  domain: "talk_show"
+  style: "casual"
+  priority: "medium"
+  estimated_hours: 25
+  status: "evaluate"
+  notes: >
+    UNVERIFIED — candidate sourced from agy-gemini online research (2026-07-20), not yet
+    spot-checked via yt-dlp or listened to. Run yt-dlp --simulate --dump-json + a 2-3 episode
+    listen test per docs/SOURCE_GUIDE.md before promoting to status: active.
+    YouTube channel hosts highlight clips of major shows (在晴朗的一天出發, 口水多過浪花,
+    叱咤樂壇), thousands of interview/live clips. PAYWALL CAVEAT: full 2-hour show archives
+    require a paid membership on 881903.com — that paid archive is OUT OF SCOPE and must
+    never be pursued; only the free public YouTube channel clips are usable for this source.
+
+- name: "Metro Radio (新城電台)"
+  url: "https://www.youtube.com/@metro_broadcast"
+  type: "channel"
+  source: "radio"
+  language: "yue"
+  domain: "talk_show"
+  style: "casual"
+  priority: "medium"
+  estimated_hours: 20
+  status: "evaluate"
+  notes: >
+    UNVERIFIED — candidate sourced from agy-gemini online research (2026-07-20), not yet
+    spot-checked via yt-dlp or listened to. Run yt-dlp --simulate --dump-json + a 2-3 episode
+    listen test per docs/SOURCE_GUIDE.md before promoting to status: active.
+    Celebrity interviews, station events, and talk show clips on the free YouTube channel.
+    PAYWALL CAVEAT: full audio archives live inside the "MetroPod" app, which is
+    subscription-gated (only a 7-day free window) — that app content is OUT OF SCOPE and
+    must never be pursued; only the free public YouTube channel clips are usable for this
+    source.

@@ -45,8 +45,8 @@ def shard_root(key: str) -> Path:
 
 
 def raw_path(source: str) -> Path:
-    """Return raw dir for a named source (youtube / rthk / podcast)."""
-    key = f"raw_{source}"
-    if key not in STORAGE:
-        raise KeyError(f"Unknown raw source '{source}' — add raw_{source} to storage_layout.yaml")
-    return Path(STORAGE[key])
+    """Return raw dir for a named source. Derived from raw_root/source directly
+    (2026-07-20) rather than a hand-added raw_{source} yaml key per source — a
+    new source (see pipeline/nodes/ingest_download.py's SOURCE_FILES) no longer
+    needs a storage_layout.yaml edit to get a raw directory."""
+    return Path(STORAGE["raw_root"]) / source

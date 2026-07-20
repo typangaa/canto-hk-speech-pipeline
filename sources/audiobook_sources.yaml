@@ -1,0 +1,155 @@
+# HK Cantonese Audiobook / Storytelling Sources (有聲書 / 講故仔)
+# YouTube channels featuring single-narrator long-form Cantonese monologue —
+# fiction audiobooks, non-fiction book summaries, children's story reading.
+#
+# Why this source matters: single studio/home-mic narrator, minimal background
+# noise, long uninterrupted single-speaker turns — high acoustic cleanliness
+# and low diarization/VAD complexity relative to multi-speaker talk shows.
+# Valuable for TTS training data quality even though speaker diversity per
+# channel is low (one narrator per channel, sometimes for hundreds of hours).
+#
+# Usage: python -m pipeline.cli run ingest.download -- --source audiobook
+# Schema: see docs/SOURCE_GUIDE.md
+# Status values: active | paused | done | skip | evaluate
+#   evaluate = seeded from online research, not yet spot-checked via yt-dlp
+#   or listened to — do not download in bulk until promoted to "active".
+#
+# Seeded 2026-07-20 from agy-gemini online research. Every entry below is
+# UNVERIFIED: channel handles, hour estimates, and content descriptions have
+# not been confirmed against the live channel. Before promoting any entry to
+# status: active, run `yt-dlp --simulate --dump-json` against the channel URL
+# and listen to 2-3 episodes per docs/SOURCE_GUIDE.md.
+
+# ──────────────────────────────────────────────
+# High Priority
+# ──────────────────────────────────────────────
+
+- name: "粵語有聲戲"
+  url: "https://www.youtube.com/@CantoneseStoryteller"
+  type: "channel"
+  source: "audiobook"
+  language: "yue"
+  domain: "other"
+  style: "narration"
+  priority: "high"
+  estimated_hours: 100
+  status: "evaluate"
+  notes: >
+    UNVERIFIED — candidate sourced from agy-gemini online research (2026-07-20), not yet
+    spot-checked via yt-dlp or listened to. Run yt-dlp --simulate --dump-json + a 2-3 episode
+    listen test per docs/SOURCE_GUIDE.md before promoting to status: active.
+    Suspense/crime/tomb-raiding/ghost story fiction. Deep, expressive male narrator, clean
+    audio, 100+ hours available, long episodes (30 min – 2 hr each).
+
+# ──────────────────────────────────────────────
+# Medium Priority
+# ──────────────────────────────────────────────
+
+- name: "半山夜話"
+  url: "https://www.youtube.com/@ban-shan-ye-hua"
+  type: "channel"
+  source: "audiobook"
+  language: "yue"
+  domain: "other"
+  style: "narration"
+  priority: "medium"
+  estimated_hours: 50
+  status: "evaluate"
+  notes: >
+    UNVERIFIED — candidate sourced from agy-gemini online research (2026-07-20), not yet
+    spot-checked via yt-dlp or listened to. Run yt-dlp --simulate --dump-json + a 2-3 episode
+    listen test per docs/SOURCE_GUIDE.md before promoting to status: active.
+    Urban stories, family drama, life tales. Conversational female narrator, 50+ hours
+    available.
+
+- name: "小善說粵語有聲"
+  url: "https://www.youtube.com/@cantoneseaudiobooks"
+  type: "channel"
+  source: "audiobook"
+  language: "yue"
+  domain: "other"
+  style: "narration"
+  priority: "medium"
+  estimated_hours: 80
+  status: "evaluate"
+  notes: >
+    UNVERIFIED — candidate sourced from agy-gemini online research (2026-07-20), not yet
+    spot-checked via yt-dlp or listened to. Run yt-dlp --simulate --dump-json + a 2-3 episode
+    listen test per docs/SOURCE_GUIDE.md before promoting to status: active.
+    Detective fiction, sci-fi, and horror audiobooks. Clear, steady narration, 80+ hours
+    available.
+
+- name: "導聽書說"
+  url: "https://www.youtube.com/@user-qz7iy2zv8c"
+  type: "channel"
+  source: "audiobook"
+  language: "yue"
+  domain: "educational"
+  style: "narration"
+  priority: "medium"
+  estimated_hours: 30
+  status: "evaluate"
+  notes: >
+    UNVERIFIED — candidate sourced from agy-gemini online research (2026-07-20), not yet
+    spot-checked via yt-dlp or listened to. Run yt-dlp --simulate --dump-json + a 2-3 episode
+    listen test per docs/SOURCE_GUIDE.md before promoting to status: active.
+    Non-fiction book summaries covering finance and self-help. Clear, articulate monologue,
+    30+ hours available (15-40 min per book summary).
+
+- name: "粵心書房"
+  url: "https://www.youtube.com/@user-hk9ye6yv5t"
+  type: "channel"
+  source: "audiobook"
+  language: "yue"
+  domain: "educational"
+  style: "narration"
+  priority: "medium"
+  estimated_hours: 20
+  status: "evaluate"
+  notes: >
+    UNVERIFIED — candidate sourced from agy-gemini online research (2026-07-20), not yet
+    spot-checked via yt-dlp or listened to. Run yt-dlp --simulate --dump-json + a 2-3 episode
+    listen test per docs/SOURCE_GUIDE.md before promoting to status: active.
+    Psychology, brain science, and personal growth content. Gentle, clear female narrator,
+    20+ hours available.
+
+# ──────────────────────────────────────────────
+# Low Priority
+# ──────────────────────────────────────────────
+
+- name: "老娘有聲台 x 緣學堂"
+  url: "https://www.youtube.com/@CantonAudioBookXEndlessLove"
+  type: "channel"
+  source: "audiobook"
+  language: "yue"
+  domain: "other"
+  style: "narration"
+  priority: "low"
+  estimated_hours: 40
+  status: "evaluate"
+  notes: >
+    UNVERIFIED — candidate sourced from agy-gemini online research (2026-07-20), not yet
+    spot-checked via yt-dlp or listened to. Run yt-dlp --simulate --dump-json + a 2-3 episode
+    listen test per docs/SOURCE_GUIDE.md before promoting to status: active.
+    Philosophical, mindfulness, and classic book readings. Calm female voice, 40+ hours
+    available.
+
+- name: "鯊魚先生講故事"
+  url: "https://www.youtube.com/@mr.sharkstories"
+  type: "channel"
+  source: "audiobook"
+  language: "yue"
+  domain: "other"
+  style: "narration"
+  priority: "low"
+  estimated_hours: 15
+  status: "evaluate"
+  notes: >
+    UNVERIFIED — candidate sourced from agy-gemini online research (2026-07-20), not yet
+    spot-checked via yt-dlp or listened to. Run yt-dlp --simulate --dump-json + a 2-3 episode
+    listen test per docs/SOURCE_GUIDE.md before promoting to status: active.
+    Children's picture books and bedtime stories. Clear, deliberate, highly-enunciated
+    Cantonese, 15+ hours available. CAUTION: this is children's-register speech (simplified
+    vocabulary, slower/more exaggerated prosody) which may skew style distribution if
+    overweighted — useful for slow-rate TTS conditioning, but keep volume relative to other
+    sources in mind before scaling up ingestion.

@@ -1278,3 +1278,51 @@ earlier pass).
   (`canto-hk-g2p` local editable install has an unreleased API change, "too many values to
   unpack"), traced to the sibling `canto-g2p` project's in-progress dev work, not caused by
   this doc-only pass (no pipeline logic files were touched beyond comments).
+
+## 2026-07-20 — T31: 6 new source categories added; `evaluate` status confirmed as
+non-gating (no source-level pre-approval gate built)
+
+**Added 6 new source categories** to close domain-diversity gaps (87% of the generic
+`youtube` raw rows had no `domain` tag; corpus diversity leaned almost entirely on
+RTHK+podcast): `hktv` (HOY/ViuTV/TVB/NowTV), `radio` (D100/Commercial/Metro),
+`audiobook` (有聲書/講故仔), `gov` (LegCo/ISD), `drama` (廣播劇), `edu` (HKMU/CUHK/HKU
+lectures). Candidates researched via `weir chat agy-gemini` online search, written into
+new `sources/{hktv,radio,audiobook,gov,drama,edu}_sources.yaml` (25 entries total, all
+`status: "evaluate"`) by 6 parallel subagents. `pipeline/nodes/ingest_download.py`'s
+`SOURCE_FILES` dict, `pipeline/cli.py`'s `--source` choices (now dynamic from
+`SOURCE_FILES.keys()`, closing a pre-existing drift where `hktv` — already in
+`docs/MANIFEST_SCHEMA.md`'s `SOURCE_ENUM` — was missing from the CLI), and
+`config/storage_layout.py`'s `raw_path()` (simplified to `raw_root/source`, dropping the
+requirement for a hand-added `raw_{source}` yaml key — that function had zero call sites,
+free to simplify) were updated accordingly. `gov` (LegCo, 100+ unique speakers) and `edu`
+are the highest-confidence candidates for the ≥100-unique-speakers acceptance criterion;
+`drama` carries extra filter-yield risk (BGM/SFX under dialogue can suppress DNSMOS).
+
+**Investigated and rejected: a source-level pre-approval gate.** While building this,
+found that `discover_active_entries()` only excludes `skip`/`done`/`paused` — `evaluate`
+entries are downloaded exactly like `active` ones (confirmed empirically: 3 `youtube` +
+5 `podcast` currently-`evaluate` entries already have `raw_files` rows). Initially framed
+this as a bug (deny-list should be an allow-list requiring `status == "active"`) and
+proposed fixing it, then proposed an automated small-sample pipeline test-run as a
+replacement for `docs/SOURCE_GUIDE.md`'s manual-listening evaluate step (owner does not
+do manual per-source review, so a human-gated `evaluate → active` promotion was never
+going to happen).
+
+**Owner rejected both fixes, correctly** — neither is needed. `lang_screen.auto` already
+runs on every raw file immediately after download, before `segment.diarize`, and skips
+the (expensive, GPU) diarization step entirely for raw files it decisively classifies as
+Mandarin-dominant. `pregate.snr` already runs before `asr.transcribe` and skips segments
+with poor DNSMOS/SNR before spending (expensive, GPU) ASR time on them. Both are
+automatic, per-file, source-blind — they already provide exactly the "cheap check before
+expensive GPU work" protection a source-level gate would add, just one layer lower and
+without needing any new node. The only marginal cost of `evaluate` not gating downloads
+is bandwidth/disk on content later auto-rejected by these gates — cheap, and this rig has
+hundreds of GB free across all 3 drives.
+
+**Conclusion — `status: evaluate` vs `active` is provenance metadata, not a download
+gate.** Left `discover_active_entries()` unchanged (deny-list, not allow-list). Corrected
+`CLAUDE.md`'s Data Sources section and `docs/SOURCE_GUIDE.md`'s Step 1 + new-categories
+note (both previously implied `evaluate` blocks/requires manual listening before
+download — now state plainly that it doesn't and none is needed). Do not re-propose a
+source-level pre-approval mechanism without first checking whether `lang_screen.auto` /
+`pregate.snr` already cover the concern — they almost certainly do.

@@ -210,12 +210,38 @@ Threshold history/rationale: DECISIONS.md + `docs/FINDINGS_ASR_AGREEMENT_THRESHO
 | RTHK (expansion) | `sources/rthk_sources.yaml` | High | 200–500h |
 | YouTube HK Cantonese | `sources/youtube_channels.yaml` | High | varies |
 | HK Cantonese Podcasts | `sources/podcast_sources.yaml` | Medium | 50–200h |
-| Other HK TV | `sources/hktv_sources.yaml` (not yet created) | Low | TBD |
+| Other HK TV (HOY/ViuTV/TVB/NowTV) | `sources/hktv_sources.yaml` | Medium | ~500h (est.) |
+| Other HK radio (D100/Commercial/Metro) | `sources/radio_sources.yaml` | Medium | ~550h (est.) |
+| HK Cantonese audiobooks | `sources/audiobook_sources.yaml` | Medium | ~335h (est.) |
+| HK gov/public-sector speech (LegCo/ISD) | `sources/gov_sources.yaml` | High | ~1,500h (est.) |
+| HK Cantonese radio drama (廣播劇) | `sources/drama_sources.yaml` | Low–Medium | ~250h (est.) |
+| HK university lectures | `sources/edu_sources.yaml` | High | ~210h (est.) |
 
 Source research guide: `docs/SOURCE_GUIDE.md`. RTHK publishes on YouTube
-(`@rthkhongkong` + sub-channels) — target programs with multiple presenters and diverse
-styles. (The legacy-corpus re-ingest is long resolved — filename lists archived at
-`metadata/legacy_filenames/*.txt`; see DECISIONS.md.)
+(`@RTHK` + sub-channels, handle updated 2026-07-19 from the retired `@rthkhongkong`) —
+target programs with multiple presenters and diverse styles. (The legacy-corpus re-ingest
+is long resolved — filename lists archived at `metadata/legacy_filenames/*.txt`; see
+DECISIONS.md.)
+
+**2026-07-20 (T31) expansion**: the 6 new source categories above (`hktv`/`radio`/
+`audiobook`/`gov`/`drama`/`edu`) were seeded from online research (channel handles,
+volume estimates) into `sources/*_sources.yaml`, all at `status: "evaluate"`.
+
+**`status: evaluate` vs `active` is provenance metadata, NOT a download gate** (corrected
+2026-07-20 — see DECISIONS.md same date). `ingest.download`'s `discover_active_entries()`
+only excludes `skip`/`done`/`paused`; `evaluate` entries are downloaded exactly like
+`active` ones. This is intentional, not a bug: no human listening step gates these
+sources (owner does not do manual per-source review), and none is needed — the expensive
+GPU stages are already protected automatically, per raw file, regardless of source, by
+`lang_screen.auto` (rejects Mandarin-dominant raw files before `segment.diarize` ever
+runs on them) and `pregate.snr` (rejects low-SNR/DNSMOS segments before `asr.transcribe`
+spends GPU time on them) — see the Pipeline Architecture table above. A source-level
+pre-approval gate would just duplicate that per-file screening one layer up for no
+added protection. `gov` (LegCo, 100+ unique speakers) and `edu` (HKMU/CUHK/HKU) are the
+highest-confidence candidates; `drama` carries extra filter-yield risk (BGM/SFX under
+dialogue commonly suppresses DNSMOS — see the file's header caution) and `radio`'s
+Commercial/Metro entries are YouTube-clip-only (their full show archives are paywalled
+apps, out of scope).
 
 ---
 
