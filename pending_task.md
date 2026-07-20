@@ -339,9 +339,27 @@ what actually landed and when.)
   (`test_manifest_build_matches_expected_corpus_totals`, off by 4 rows against its
   live-catalog baseline) is the known baseline-drift pattern, unrelated to this
   upgrade (no g2p rows were reprocessed this round; see "Not done" below).
-- **Not done**: corpus-wide `g2p` reprocess to retroactively correct the ~20 words'
-  worth of existing rows — same "not automatically revisited by anti-join discovery"
-  caveat as T24's v1.7.0 note; still queued, not scheduled this round.
+- **Follow-up done same day (2026-07-20)**: corpus-wide reprocess + manifest re-export
+  completed. Scanned `asr_agreement.best_text` for all 17 `variant_words.tsv` entries;
+  found 961 manifest-eligible (`filters.pass = TRUE`) segments already converted under
+  `provenance = 'g2p_node'` that contain one — 894 of them `緊係` alone. Reset those
+  961 rows' `provenance` to a temporary marker (`g2p_variant_alias_reprocess_2026_07_20`)
+  so `g2p` node's anti-join discovery would pick them up again; ran `pipe run g2p`
+  (961/961 converted, 100% accept, `provenance` overwritten back to the standard
+  `'g2p_node'` by the node's own upsert — no non-standard state left behind).
+  Sampled the flipped `緊係` rows for a segmentation-collision risk (the alias fires on
+  any `緊係` 2-char match, but `講緊係` sentences are usually the unrelated `講緊`
+  aspect-marker + `係` copula, not the idiom) — confirmed the segmenter's longest-match
+  correctly prefers `講緊` as its own dictionary word first, so the alias only actually
+  fired for genuine `梗係`-meaning usages in a 15-sample spot check. Then ran
+  `pipe run manifest.export`: 594,006 entries / 1,328.6h / 8,682 speakers (count
+  effectively unchanged, only jyutping content updated) — verified 1,133 `gang2 hai6`
+  readings now present in `metadata/manifest.jsonl`, including former `緊係`
+  mis-readings.
+- **Not done**: the other ~16 lower-frequency alias words (訓覺/岩岩/林住/禁掣/etc.)
+  had 0 hits each in the manifest-eligible scope this round except 果度(5)/係度(58)/
+  念住(2)/令女(2) — those were included in the same 961-row reset above, so nothing
+  further queued here.
 
 ### T27. Surface polyphone-candidate ambiguity in `pipe calibrate serve`'s live preview — done 2026-07-19
 - **What**: T24's "Not done" list item 2 ("wire `convert_candidates()` into `pipe
