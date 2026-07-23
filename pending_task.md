@@ -321,6 +321,25 @@ what actually landed and when.)
 
 > Entries dated 2026-07-16 and earlier rotated out to `DECISIONS.md` (2026-07-19 cleanup pass) to keep this file to the recent working window — same rotation `PROGRESS.md` uses. Full history is in `DECISIONS.md`, chronological, nothing lost.
 
+### T32. Upgrade `canto-hk-g2p` 2.1.0 → 2.3.0 (segmentation-shadow pruning fix) + corpus-wide g2p reprocess — done 2026-07-22
+- **What**: owner reported v2.3.0 released. Reinstalled (`uv pip install -e ~/Documents/canto-g2p`,
+  refreshing stale 2.1.0 dist-info metadata — the editable `.so` had actually already been
+  rebuilt at v2.3.0 HEAD, which is why `test_candidate_preview_unambiguous_text_returns_empty_list`
+  was already failing before this task started). v2.3.0 prunes 79,610 purely-compositional
+  segmentation-dict entries (e.g. 我瞓/早瞓) that used to greedily shadow real compounds
+  mid-string — fixes the previously-flagged 瞓覺 ("to sleep") mis-resolution bug (was
+  resolving as gok3 "to feel" instead of gaau3). See DECISIONS.md 2026-07-22 for the full
+  writeup, code fallout, and current tier audio-hour distribution.
+- **Reprocess**: 768,663 `g2p` rows retagged stale, 737,375 reconverted (318s, ~2,320/s,
+  99.996% accept rate unchanged), `manifest.build`/`manifest.export` re-run (594,006
+  entries / 1328.6h / 8,682 speakers — unchanged, this fix changes text content not
+  eligibility). `label.store` NOT re-run (no g2p dependency).
+- **Verify**: `tests/test_g2p_node.py` 27/27 (fixed the stale-unambiguous fixture, added a
+  瞓覺 regression guard). Full suite 519 passed / 1 pre-existing unrelated failure
+  (`test_manifest_build_matches_expected_corpus_totals` stale baseline, already tracked
+  separately in this file). `pipe catalog verify` 17/17 PASS. Spot-checked 10/10 sampled
+  `瞓覺`-containing segments (885 total in corpus) now resolve `fan3 gaau3` correctly.
+
 ### T30. Add `g2p.jyutping_cs` — code-switch-aware Jyutping (English/punct kept inline) — done 2026-07-20
 - **What**: proposed by a downstream consumer (canto-tts, sibling repo) after the T29 g2p
   2.1.0 upgrade surfaced a real drift risk — canto-tts's `convert_corpus_to_moss.py`

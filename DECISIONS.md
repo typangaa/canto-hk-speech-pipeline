@@ -1326,3 +1326,402 @@ note (both previously implied `evaluate` blocks/requires manual listening before
 download — now state plainly that it doesn't and none is needed). Do not re-propose a
 source-level pre-approval mechanism without first checking whether `lang_screen.auto` /
 `pregate.snr` already cover the concern — they almost certainly do.
+
+## 2026-07-21 — Pause-token P0/P1: `align.chars` node built + GPU-optimized, bucket
+thresholds frozen (handoff from `canto-tts/docs/PAUSE_TOKEN_CALIBRATION_HANDOFF.md`)
+
+**Context**: `canto-tts` has `<pause-short>`/`<pause-long>` tokens already in its vocab
+(engine side ready, see the handoff doc), waiting on this pipeline to produce the actual
+data. Full plan: `docs/PAUSE_TOKEN_PUNCTUATION_PLAN.md` (P0–P5). This entry covers P0
+(forced alignment) and P1 (calibration) — both now done; P2 (`pause.plan` reconciliation
+node) is next.
+
+**P0 — new node `align.chars`** (`pipeline/nodes/align.py`, new `alignments` table):
+char-level forced alignment via `Qwen/Qwen3-ForcedAligner-0.6B-hf`, scoped to gold+auto_gold
+(279,348 segments, 100% coverage, 0 errors). Required first because the plan's own §0
+measurement found VAD-gap-count only lines up with punctuation-count 12.2% of the time —
+sequence-matching gaps to punctuation is not viable, forced alignment is the only way to
+get a trustworthy per-character timestamp.
+
+**Isolated venv required**: Qwen3-ForcedAligner needs an unreleased transformers dev build
+(pinned commit `29985e67cccdddef7e336d7e53840500359d30a3`), which is binary-incompatible
+with `qwen_asr` (asr.transcribe's active backend, pinned to `transformers==4.57.6` with a
+decorator-signature dependency the dev build breaks). Cannot coexist in one interpreter —
+`align.chars`'s worker subprocess runs from a second dedicated venv, `.venv_align/`, spawned
+from (not merged into) the shared `.venv`. Full install recipe in `align.py`'s module
+docstring. The shared `.venv` was verified untouched (`transformers==4.57.6` intact,
+`asr.transcribe` unaffected) after this work.
+
+**GPU utilization fix (same day, post-P0)**: the first full run hit only 28-32% GPU
+utilization at ~41 rows/s combined (2× RTX 4090). Root cause, found by direct
+investigation, was two stacked bugs: (1) `forward_batch()` looped a single-item forward
+call per row instead of using the aligner's genuinely-batched API (confirmed via direct
+test: `prepare_forced_aligner_inputs()` accepts list inputs and produces one padded batch
+tensor for a single `model()` call); (2) `worker_main()` decoded a whole batch, then ran
+GPU inference, fully serially, with the supervisor also holding its device-pool slot for
+the full send+receive round-trip (no prefetch). Fixed by porting `asr.py`'s exact 3-stage
+producer-consumer pattern (decode-thread/GPU-thread overlap) plus double-buffered dispatch,
+and raising default `batch_size` 16→96 to use the previously-idle VRAM headroom (2.6-4.5GB
+of 24GB was in use; now runs 19-22GB). Result: ~87-94 rows/s sustained in production (the
+full backlog run: 242,720 segments in 2,782s = 87.3/s), a ~2.1-2.3× improvement. `torch.compile`
+was tested and rejected — 33% faster per-forward once warmed, but the corpus's continuously
+varying segment duration (3-20s) triggers a ~35-40s recompile on nearly every batch shape, so
+it would be a net loss in production, not a win. Correctness of the batching change was
+independently verified twice (byte-exact character reconstruction vs. `best_text` on real
+rows, monotonic in-range timestamps, no padding/batch-index leakage) before trusting it for
+the full 279k-row run.
+
+**P1 — punctuation-acoustic calibration** (`docs/PAUSE_CALIBRATION_REPORT.md`,
+`metadata/labels/pause_calibration.json`): walked all 646,001 fully-flanked mid-sentence
+punctuation instances (，。？！、；：) against `alignments.chars`, full scope, no sampling
+needed (completed in ~10s). Key findings: 29.3% of mid-sentence punctuation has no
+measurable acoustic pause (Δt<80ms, i.e. qwen3_asr's LM hallucinating punctuation with zero
+acoustic basis — worst for `！` 56%/`？` 46%, least for `；` 12%/`。` 17%); marks differ in a
+prosodically sensible order (。>；>，>？/、>：>！ by mean Δt); the earlier §0 all-gaps VAD
+prior (p90=0.26s) undercounted vs. this punctuation-anchored measurement (p90=0.48s
+pooled) because it diluted punctuation pauses with shorter non-punctuation gaps; segment-final
+("trailing") punctuation measures systematically shorter (。: p50 0.40s mid-segment vs 0.16s
+trailing) because `segment.vad_cut` already trimmed the true post-utterance silence before
+the segment master was written; the independent VAD-gap cross-check came back weak (5.8%
+overall match) — treated as a non-validating, independent signal, not used to adjust the
+aligner-based numbers.
+
+**Owner decision (P1 human gate, frozen — see `pause_calibration.json`'s `owner_decisions`
+block for full rationale)**:
+1. **Uniform (pooled) thresholds across all 7 marks**, not per-mark — rejected per-mark
+   because the punctuation mark itself is preserved in `text_pause` (token inserted after
+   the mark, mark identity already visible to the model), so the token's job is to convey
+   an absolute acoustic-duration category, not a mark-relative one; per-mark would also
+   require 14 frozen constants instead of 2, and `；`'s thin sample (n=1,025) would get its
+   own low-confidence threshold instead of borrowing the pooled distribution's power.
+2. **no_pause cutoff = 0.08s**, **long cutoff = 0.35s** (the plan's original industry-prior
+   numbers, confirmed by the real distribution: no_pause 29.3% / short 43.8% / long
+   26.9% — a workable three-way split, not the degenerate short-only case the earlier
+   cruder VAD prior worried about).
+3. **Trailing-tail punctuation gets no verdict and no `<pause-*>` token at all** — no
+   reliable acoustic pause survives `vad_cut`'s trim for it to anchor to.
+4. **No separate canto-tts sign-off round required** — owner decision stands alone as the
+   P1 gate. `pause_calibration.json` is the authoritative file canto-tts should
+   pin/copy into `core/control_schema.py`'s comment.
+
+**Threshold values are now frozen per the plan's own rule ("凍結咗就永不再郁") — do not
+change `pause_calibration.json`'s `bucket_rule` without a new explicit owner decision.**
+
+**P2 — `pause.plan` node built and run over the full scope** (same day, 2026-07-21):
+`pipeline/nodes/pause_plan.py` (new `pause_plan` table) re-walks `best_text` vs
+`alignments.chars` per segment (same algorithm as the P1 report) and applies the frozen
+`bucket_rule` to every mid-sentence punctuation mark, writing `{offset, mark, kind,
+delta_t, verdict}` per event plus per-row `n_no_pause`/`n_short`/`n_long` counts.
+100% coverage (279,348/279,348), 646,001 `normal`-kind events (matches the P1 report's
+n exactly), 8,869 segments (3.2%, matches the report exactly) marked `unalignable: true`
+(char-walk didn't fully consume `alignments.chars` — written with `plan: []`, never
+silently retried, same precedent as `g2p.py`).
+
+**Reconciled a ~2-point discrepancy vs the P1 report's published percentages** (report:
+no_pause 29.3%/short 43.8%; live `pause_plan` table: no_pause 27.24%/short 45.88%; long
+bucket matches almost exactly, 26.89% vs 26.9%). Root cause confirmed by direct repro, not
+a threshold or node bug: aligner timestamps are exact multiples of the 0.04s frame stride,
+so many genuine "exactly 2 frames" (0.08s) gaps hit IEEE-754 float subtraction noise —
+e.g. `0.32 - 0.24 == 0.07999999999999999` in Python, which tests `< 0.08` as **True**
+(wrongly `no_pause`) if compared before rounding, vs. `False` (correctly `short`) once
+rounded to 4dp first. `pause_plan.py` rounds `delta_t` to 4 decimals BEFORE calling
+`_verdict()` (the numerically correct order, verified: `repr()` of raw
+`chars[i].start - chars[i-1].end` for several real cases shows exactly this
+`0.0799999999999999x` pattern); the P1 report's earlier ad-hoc analysis script most likely
+compared the raw unrounded float, inconsistently misclassifying a subset of true-0.08s
+gaps. Independently re-verified via two paths (fresh in-process recompute bypassing the
+persisted table entirely, and a from-scratch reimplementation written only from the module
+docstring) — both reproduce the *live table's* 27.24%/45.88%/26.89% split, confirming the
+table's numbers (not the report's) are the correct, reproducible ones going forward.
+**Does not affect the frozen threshold values** (0.08s/0.35s unchanged) and does not
+change the P1 conclusion — the three-way split (no_pause ~27% / short ~46% / long ~27%)
+is still healthy, not a short-only degenerate case. `docs/PAUSE_CALIBRATION_REPORT.md` and
+`pause_calibration.json`'s reference stats are left as originally published (historical
+record of the P1 gate's own numbers); this note is the reconciliation for anyone who
+diffs the report against the live `pause_plan` table and wonders why they don't match
+exactly.
+
+Next: P3 — extend `label.store`/`manifest.export` with a `text_pause` field (original
+punctuation preserved + `<pause-*>` token inserted after `short`/`long` verdicts, `no_pause`
+mid-sentence marks stripped, `trailing_tail` marks untouched/no token) and a `punct_audit`
+summary field, per the plan's P3 section.
+
+**P3 — `label.store` + `manifest.export` extended with additive pause-token fields**
+(same day, 2026-07-21): both nodes LEFT JOIN `pause_plan` (`provenance='pause_plan'`), so
+the new fields are populated only for the gold/auto_gold scope P0–P2 covered and OMITTED
+(not null) for silver/bronze — no schema change to those tiers' output.
+- `manifest.py`: new `build_text_pause(text, plan)` walks `text` once, inserting
+  `<pause-short>`/`<pause-long>` right after marks verdicted `short`/`long`, stripping
+  marks verdicted `no_pause`, leaving `trailing_tail`/`leading_tail` marks (no verdict)
+  untouched. Canonical `text` is never mutated — `text_pause` is a fresh derived string.
+  Defensive against text/plan drift (e.g. a gold segment's `best_text` edited by
+  `calibrate serve` *after* the P0 alignment that produced `plan` ran): any plan event
+  whose recorded `mark` no longer matches the character at its `offset` is skipped, so a
+  stale plan can only under-annotate, never corrupt output. `manifest.jsonl` entries also
+  gain `punct_audit: {n_punct, n_no_pause, n_short, n_long}`, copied straight from
+  `pause_plan`'s own precomputed columns — an `unalignable` row still gets all-zero counts
+  (informative, not omitted, same "empty is informative" precedent as `labels_prosody`
+  gaps).
+- `label_store.py`: `control.pause` gains `plan`/`calibration_version`/`unalignable` keys
+  (the last only when true) alongside the pre-existing VAD-gap `gaps`/`total_sec` keys —
+  independent sub-fields, a segment can have either, both, or neither. `calibration_version`
+  here is `pause_plan.calibration_version` (the frozen `pause_calibration.json`'s version),
+  a DIFFERENT value from `labels.jsonl`'s top-level `calibration_version`
+  (`label_calibrate.py`'s rate/pitch constants) — documented explicitly in the module
+  docstring to avoid conflating the two.
+- Verified against the real catalog (not just synthetic unit tests): sampled 2,000
+  auto_gold manifest entries via `run_manifest_build(min_tier='auto_gold', limit=2000)` —
+  all 2,000 carried `text_pause`/`punct_audit`; spot-checked 5 by hand (no_pause commas
+  correctly stripped, short/long tokens correctly placed, trailing `。` correctly left
+  alone, `unalignable` segments correctly left as an exact `text` copy with all-zero
+  counts) and cross-checked the same 5 ids' `label_store.py` output independently —
+  `plan`/verdicts matched exactly between both code paths, as expected since both read the
+  same `pause_plan` rows.
+- 12 new unit tests added (`tests/test_manifest_node.py`: `build_text_pause` + `build_entry`
+  pause-field cases; `tests/test_label_store_node.py`: `build_label_rows` pause-plan cases,
+  new `scratch_conn` DuckDB fixture matching `test_manifest_node.py`'s pattern). Full suite:
+  494 passed, 2 pre-existing failures confirmed unrelated (verified via `git stash` —
+  both fail identically on the pre-P3 tree): `test_manifest_build_matches_expected_corpus_totals`
+  (baseline-count drift, 594010 vs live 594006, natural catalog drift) and
+  `test_candidate_preview_unambiguous_text_returns_empty_list` (canto-hk-g2p
+  `candidate_preview` behaviour, unrelated to this work).
+
+Next: P4 — extend `pipe calibrate serve` with a pause-preview mode (gap/punctuation
+timeline + rendered `text_pause` + playback) and human-listen QC on ≥30 segments, per the
+plan's P4 section. QC gate: if it fails, the only permitted way back is reopening P1's
+bucket thresholds (a new owner decision) — not a P2/P3 code fix.
+
+**P4 (tooling) — `pipe calibrate serve` gets a "Pause QC" mode; the ≥30-segment human
+listen itself is still outstanding** (2026-07-22)
+
+Owner design decisions before building (asked via AskUserQuestion): ① QC verdicts recorded
+in a new DuckDB table, not folded into `flag_reason` free text or kept off-catalog; ② QC
+sample scoped to `gold`-tier segments only (not `auto_gold`) — text itself is already
+human-verified there, so a perceived-vs-plan mismatch can only mean the pause token is
+wrong, never confounded by unverified ASR text; ③ the pause-preview toggle hangs off the
+existing text-verify review card (shared meta/player/waveform) rather than a fully separate
+tool.
+
+- New table `pause_qc_review` (`schema.sql`): one row per punctuation event judged,
+  PK `(id, punct_offset)`. Column is `punct_offset`, not `offset` — verified by hand that
+  `CREATE TABLE t (offset INTEGER)` fails to parse in DuckDB (`offset` is a grammar
+  keyword, collides with `LIMIT n OFFSET m`). `punct_offset = -1` is a reserved sentinel for
+  "reviewer skipped this whole segment" (unclear audio, etc.) — excluded from
+  `pause_qc_report()`'s match-rate aggregation but still counts as "already seen" so the
+  segment isn't resurfaced.
+- `pause_plan.py`: `compute_pause_plan()` gained an opt-in `include_timestamps=False`
+  kwarg — when `True`, each entry also carries `t_start`/`t_end` (the same flanking
+  `alignments.chars` boundaries `delta_t` is derived from). Purely additive; the corpus-wide
+  `pause.plan` node (`pause_plan_one`/`run_pause_plan`) never passes it, so the stored
+  `pause_plan.plan` shape (and P3's `text_pause`/`punct_audit` consumers) is untouched — no
+  reprocess needed. `calibrate.py`'s new `pause_preview()` is the only caller, and it
+  computes fresh per request from `alignments.chars`/`asr_agreement.best_text` rather than
+  reading the stored `pause_plan` table (which deliberately never carries timestamps).
+- `calibrate.py` gains a second, independent review flow (own section, below
+  `run_calibrate_progress`): `pause_preview()` (live per-segment plan+timestamps+
+  `text_pause`, any tier — powers the plain "Pause preview" toggle), `get_pause_qc_item()`
+  (merges segment/audio fields + preview + prior review, for the QC queue),
+  `pause_qc_next()` (gold-tier, has an alignable `pause_plan` row with ≥1 punctuation event,
+  not yet in `pause_qc_review`), `record_pause_qc()`/`record_pause_qc_skip()` (write
+  straight to the catalog — **no offline buffer**, unlike the text-verify flow, since a
+  ~30-segment QC session is short and interactive, not a backlog review that needs to
+  coexist with multi-hour batch jobs holding the writer lock), `pause_qc_report()` (the QC
+  gate's pass/fail signal: per plan-verdict bucket, `perceived_verdict == plan_verdict`
+  match rate + `position_ok` rate — one 3-way perceived-verdict comparison covers checks
+  ②short/long-distinguishable and ③no_pause-correctness from the plan's P4 spec at once,
+  ①position is a separate boolean axis).
+- `calibrate_server.py`: `GET /api/pause_preview?id=` (any tier, read-only, powers the
+  toggle in the normal review card); `GET /api/pause_qc/{next,item,report}` +
+  `POST /api/pause_qc/submit` (`{id, events: [...]}` or `{id, skip: true}`) for the
+  dedicated QC mode. `GET /api/audio` gained a fallback query (`tiers.tier='gold'`) since
+  Pause QC items never pass through `calibration_review` (gold segments are already
+  `decision='verified'` there) — keeps the endpoint scoped to a legitimate review context
+  rather than becoming an arbitrary-id audio server. UI: a `#modeTabs` pair ("Text Verify" /
+  "Pause QC") switches the shared review card between the existing `#textVerifyPanel` and a
+  new `#pauseQcPanel` (per-punctuation-event rows: mark, Δt, plan verdict badge, a seek
+  button that jumps to `t_start − 0.3s`, three perceived-verdict buttons, a position-OK
+  checkbox); `drawWaveform()` gained optional colour-coded marker overlays (grey/amber/
+  orange for no_pause/short/long) shared by both the toggle and QC mode. Keyboard shortcuts
+  are gated to `mode==='verify'` (Space still works in both) so Pause QC's per-event
+  buttons aren't accidentally triggered by the text-verify letter shortcuts.
+- New CLI: `pipe calibrate pause-qc-report` (read-only wrapper around `pause_qc_report()`).
+- Verified: 20 new unit tests (`tests/test_pause_plan_node.py` for
+  `compute_pause_plan(..., include_timestamps=...)`; `tests/test_calibrate_node.py` for the
+  full Pause QC function set, incl. gold/non-gold/unalignable/zero-punct/already-reviewed
+  `pause_qc_next()` scoping and `pause_qc_report()`'s match/position-ok aggregation). Full
+  suite: 517 passed, same 2 pre-existing unrelated failures as P3's entry above (confirmed
+  unchanged). Live-catalog checks: `pipe catalog verify` passes cleanly against the
+  production `corpus.duckdb` after the schema addition (17/17 checks); 153 gold-tier
+  segments are currently Pause-QC-eligible (`unalignable=FALSE AND n_punct>0`), well over
+  the plan's ≥30 target.
+
+Next: the actual P4 human-listen QC session (≥30 of the 153 eligible gold segments, via
+`pipe calibrate serve`'s new "Pause QC" tab) is still the owner's to do — the tooling above
+only makes it possible. Once judged, `pipe calibrate pause-qc-report` gives the pass/fail
+read for the QC gate. Then P5 (handoff to canto-tts).
+
+## 2026-07-22 — Pause calibration v2: QC-driven cutoff recalibration (no_pause 0.08→0.16, long 0.35→0.48)
+
+**Context**: owner ran the P4 human Pause-QC session (`pipe calibrate serve` → "Pause QC"
+tab): 29 gold-tier segments reviewed (1 skipped), 71 punctuation events judged. Aggregate
+via `pipe calibrate pause-qc-report`:
+
+```
+plan_verdict   n   match_rate  position_ok_rate
+no_pause      23      100%         100%
+short         37      70.3%        100%
+long          11      63.6%        100%
+```
+
+`position_ok_rate` (check ①, token position) was 100% throughout — no issue there. The
+`no_pause` bucket (check ③, "is a stripped mark really pause-free?") was a clean 100%
+match — the strip-the-mark behaviour in `manifest.py:build_text_pause()` is fully
+validated and untouched by this change. The problem was isolated to check ②
+(short/long perceptual separation), and turned out **not to be random noise** — a
+delta_t-binned confusion matrix (queried directly from `pause_qc_review` joined against
+`pause_plan.plan`) showed the mismatches concentrated almost entirely at the two v1 cut
+points themselves:
+
+```
+no_pause/short boundary (v1 cutoff = 0.08s):
+  delta_t=0.08  n=11  match=18%   <- exactly at the v1 cutoff; 9/11 perceived no_pause
+  delta_t=0.16  n=8   match=88%
+  delta_t=0.24  n=7   match=100%
+  delta_t=0.32  n=11  match=91%
+
+short/long boundary (v1 cutoff = 0.35s):
+  delta_t=0.40  n=5   match=40%   <- just above the v1 cutoff; 3/5 perceived short
+  delta_t=0.48  n=4   match=75%
+  delta_t=0.64  n=1   match=100%
+  delta_t=0.72  n=1   match=100%
+```
+
+Both v1 thresholds sat inside a perceptual dead zone: values right at 0.08s mostly sound
+like no pause at all, and values just past 0.35s mostly still sound like a short pause,
+not a long one. Match rate only stabilizes once delta_t reaches ~0.16s / ~0.48s.
+
+**Decision**: bumped `metadata/labels/pause_calibration.json` to
+`version: "2026-07-22-9b73455-v2"` (previous: `2026-07-21-9b73455-v1`, values preserved
+in that field's own audit trail plus here): `2_no_pause_cutoff_sec` 0.08 → **0.16**,
+`3_long_cutoff_sec` 0.35 → **0.48** — both raised to the nearest point on the aligner's
+native 0.04s frame grid with directly-observed good match_rate in the QC sample.
+`owner_decisions.1`'s uniform-across-marks rationale is unaffected — only the two shared
+cut points moved. `owner_decisions.6_p4_qc_recalibration` and the new
+`p4_qc_recalibration_evidence` section in the JSON carry the same numbers for future
+audit. **Caveat, stated in the file itself**: n=71 is a QC spot-check sample, not a full
+recalibration corpus (v1 came from 646,001 pooled points) — the 0.08–0.16s and
+0.35–0.48s bands were not densely sampled, so these are the best defensible grid points
+given the evidence, not a precisely-fitted boundary. Re-open if a larger QC pass says
+otherwise.
+
+**Code fallout, verified**: `pause_plan.py`'s `_NO_PAUSE_CUTOFF`/`_LONG_CUTOFF` load from
+the JSON at import time, so `_verdict()` picks up the new cutoffs automatically — no code
+change needed. `tests/test_calibrate_node.py`'s `_PAUSE_CHARS` fixture (used by
+`test_pause_preview_computes_plan_with_timestamps_and_text_pause` and friends) had its
+gap timings tied to the *old* thresholds (0.10s/0.40s gaps); retimed to 0.20s/0.60s gaps
+so the test still demonstrates one genuine short + one genuine long verdict under v2.
+Full targeted suite (`test_pause_plan_node.py` + `test_calibrate_node.py` +
+`test_manifest_node.py`): 143 passed.
+
+**Not yet done — deliberately out of scope this round**: the corpus-wide `pause_plan`
+reprocess. Per `pause_plan.py`'s own module docstring, bumping `calibration_version`
+alone does **not** retroactively recompute the ~270k already-computed `pause_plan` rows
+(discovery anti-joins on `provenance='pause_plan'` row-existence, not on
+`calibration_version`) — they still carry `calibration_version: "...v1"` and v1-derived
+verdicts/tokens until a manual one-time provenance reset + rerun:
+
+```sql
+UPDATE pause_plan SET provenance = 'pause_plan_stale_v1'
+WHERE calibration_version = '2026-07-21-9b73455-v1';
+```
+followed by `pipe run pause.plan` (or `pipe run-many`) to repopulate under v2, then a
+fresh `manifest.export`/`label.store` pass so downstream `text_pause`/`punct_audit`
+reflect the new buckets. This touches every gold/auto_gold segment and any manifest/label
+export already taken from this corpus, so it's held for an explicit owner go-ahead rather
+than run automatically alongside the calibration-file edit.
+
+**Update, same day**: owner gave the go-ahead. Reprocess executed:
+1. `UPDATE pause_plan SET provenance='pause_plan_stale_v1' WHERE calibration_version='2026-07-21-9b73455-v1'` — all 279,348 rows retagged.
+2. `pipe run pause.plan` — 279,348 recomputed in 13s (20.9k/s), unalignable rate unchanged at 3.2% (8,869), all rows now `calibration_version="2026-07-22-9b73455-v2"`, 0 stale rows left (upsert replaced in place). Verdict totals shifted as expected: `n_no_pause` 175,946 → 241,008, `n_short` 296,370 → 309,158, `n_long` 173,685 → 95,835 (sum stays 646,001 both times — same underlying flanked-punctuation population, just rebucketed).
+3. `pipe run manifest.build` + `pipe run manifest.export` — 594,006 entries, 1328.6h, 8,682 speakers (unchanged from pre-recalibration baseline — recalibration only changes `text_pause`/`punct_audit` field *contents*, not manifest membership). `metadata/manifest.jsonl`/`train.jsonl`/`val.jsonl` rewritten.
+4. `pipe run label.store` — 1,241,586 rows written (`with_pause_plan=279,341`), `metadata/labels.jsonl` rewritten.
+5. Verified: full test suite 517 passed / 2 pre-existing unrelated failures (same as before this change — `test_manifest_build_matches_expected_corpus_totals` baseline drift, `test_candidate_preview_unambiguous_text_returns_empty_list` g2p dictionary drift, neither touches pause logic). `pipe catalog verify` — all 17 checks PASSED against the live production catalog after the reprocess. Spot-checked segment `63ec9c14a570` in the freshly exported `manifest.jsonl`: `punct_audit` unchanged for this particular segment (its delta_t values, 0.24s/0.32s, sit in the `short` bucket under both v1 and v2 — this one just didn't straddle either moved cutoff), confirming the reprocess ran without corrupting already-correct entries.
+
+P4 is now fully done end-to-end: tooling, human QC, recalibration, and full corpus + manifest + label reprocess under the frozen v2 thresholds. Next: P5 (handoff to canto-tts).
+
+---
+
+## 2026-07-22 — canto-hk-g2p 2.1.0 → 2.3.0: segmentation-shadow pruning fix, corpus-wide g2p reprocess
+
+**Decision**: Reinstall `canto-hk-g2p` v2.3.0 (`uv pip install -e ~/Documents/canto-g2p`,
+refreshing dist-info from stale 2.1.0 metadata) and corpus-wide reprocess the `g2p` table,
+unlike the deferred-to-`pending_task.md` handling of the v1.7.0/v2.1.0 upgrades — this one
+is a real content fix, not a metadata-only bump.
+
+**What changed upstream (canto-g2p v2.3.0, 2026-07-21, commit `d006b75`)**: `segment.rs`'s
+greedy leftmost-longest segmenter had 73.4% of its multi-char dict entries (81,944/111,596)
+be purely-compositional (reading == char-by-char concatenation, e.g. 我瞓/早瞓/未瞓/要瞓).
+These could greedily consume a prefix and shadow a real compound starting mid-match — e.g.
+`我瞓覺先` matched 我+瞓 first, orphaning `覺` into ambiguous ranked fallback (`gok3`
+"to feel") instead of the correct `瞓覺`-compound reading (`gaau3` "to sleep") — this is
+the exact 瞓覺 bug flagged against canto-tts training data in an earlier session. v2.3.0
+prunes these entries, each verified per-entry (not assumed) via a fixed-point re-segmentation
+check that `Pipeline.convert()` stays byte-identical for every input the entry doesn't
+actually disambiguate. `word.bin` shrank 141,835 → 61,729 entries.
+
+**Effect on this node** (`pipeline/nodes/g2p.py`, docstring updated in place):
+1. `jyutping`/`jyutping_cs` are unchanged for the vast majority of text (finer
+   per-character tokens space-join to the same string the coarser word-level token used
+   to produce) — except for the narrow set of previously-shadowed compounds (瞓覺-family
+   confirmed fixed; unknown how many other compounds were silently affected corpus-wide),
+   where the resolved reading is now genuinely correct instead of wrong.
+2. `candidate_preview()` (calibrate UI) now surfaces per-character polyphone ambiguity for
+   common words that used to resolve silently as one dict entry (e.g. 心臟病, 香港, 教訓)
+   — the tool doing its job more thoroughly post-pruning, not a regression.
+
+**Code fallout**: `tests/test_g2p_node.py::test_candidate_preview_unambiguous_text_returns_empty_list`
+was already failing pre-upgrade (canto-g2p's editable install rebuilds its `.so` straight
+from `~/Documents/canto-g2p` source at HEAD, so the compiled extension had silently already
+picked up v2.3.0 behaviour before today's `dist-info` metadata refresh) — its `心臟病中風`
+fixture no longer qualifies as unambiguous, swapped for `早晨` (still a single
+certain-confidence dict entry). Added
+`test_candidate_preview_segmentation_shadow_fix_v2_3_0` as an explicit regression guard on
+`我瞓覺先` → `ngo5 fan3 gaau3 sin1`.
+
+**Corpus-wide reprocess executed**:
+1. `UPDATE g2p SET provenance='g2p_node_stale_v2.1.0' WHERE provenance='g2p_node'` — 768,663
+   rows retagged (a 5,000-row throughput test ran first and is included in this count, no
+   correctness issue — those rows were simply reprocessed twice, both times under v2.3.0).
+2. `pipe run g2p` — 737,375 rows reconverted in 318s (~2,320/s), 737,347 accepted (99.996%,
+   unchanged accept rate — the phonological-inventory validity gate is unaffected by
+   segmentation-boundary changes since it only inspects `jyutping`'s own token shapes, and
+   those tokens' readings didn't change).
+3. `pipe run manifest.build` + `pipe run manifest.export` — 594,006 entries / 1328.6h /
+   8,682 speakers, **unchanged** from pre-upgrade (gold=188, auto_gold=274,674,
+   silver=152,900, bronze=166,244) — expected, since the g2p fix changes text content, not
+   `valid_fraction`-gate eligibility, for the near-totality of affected segments.
+   `metadata/manifest.jsonl`/`train.jsonl`/`val.jsonl` rewritten. `label.store` NOT rerun —
+   `pipeline/nodes/label_store.py` has no dependency on the `g2p` table.
+4. Verified: `tests/test_g2p_node.py` 27/27 passed. Full suite: 519 passed / 1 pre-existing
+   unrelated failure (`test_manifest_build_matches_expected_corpus_totals`, stale baseline —
+   already tracked in `pending_task.md`, unrelated to g2p). `pipe catalog verify` — 17/17
+   PASSED against the live production catalog. Spot-checked 10/10 sampled segments
+   containing `瞓覺` in `asr_agreement.best_text` (885 total in corpus) — all 10 now resolve
+   `fan3 gaau3` correctly in the freshly reprocessed `g2p.jyutping`.
+
+**Current tier audio-hour distribution** (manifest-eligible pool, `filters.pass=TRUE` AND
+`g2p.valid_fraction>=0.80` AND non-empty jyutping — same join `manifest.build` uses):
+
+| tier | segments | hours | % of eligible pool |
+|------|---------:|------:|--------------------:|
+| gold | 188 | 0.4 | 0.0% |
+| auto_gold | 274,674 | 633.6 | 36.9% |
+| silver | 152,900 | 325.6 | 19.0% |
+| bronze | 166,244 | 369.0 | 21.5% |
+| **eligible total** | **594,006** | **1,328.6** | **100%** |
+| excluded (reference, not manifest-eligible) | 169,341 | 388.4 | — |
+
+Well clear of the ≥100h/≥100-speaker acceptance floor (8,682 unique speakers). `gold`
+(human-verified) remains a tiny fraction (0.4h) — P4's calibrate-serve QC pass was a
+29-segment spot-check, not a bulk verification run; growing `gold` requires more
+`pipe calibrate serve` sessions, tracked separately, not part of this g2p change.
