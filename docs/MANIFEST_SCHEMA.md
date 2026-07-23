@@ -33,9 +33,15 @@
   "snr_db":         35.2,
   "dnsmos":         3.8,
   "english_ratio":  0.02,
-  "created_at":     "2026-06-09"
+  "created_at":     "2026-06-09",
+  "text_pause":     "心臟病中風<pause-short>這些常見的心腦血管疾病",
+  "punct_audit":    {"n_punct": 1, "n_no_pause": 0, "n_short": 1, "n_long": 0}
 }
 ```
+
+`text_pause`/`punct_audit` are ADDITIVE and OPTIONAL — present only for gold/auto_gold-tier
+segments that have a `pause_plan` row (docs/PAUSE_TOKEN_PUNCTUATION_PLAN.md P0–P3); omitted
+entirely for silver/bronze. See their own Field Reference entries below.
 
 ---
 
@@ -364,6 +370,48 @@ Fraction of alphabetic characters that are English (ASCII a-z), rounded to 3 dec
 ISO date (YYYY-MM-DD) when this manifest entry was created.
 
 **Format**: `str(date.today())` — e.g., `"2026-06-09"`
+
+---
+
+### `text_pause` — string, optional (added 2026-07-21, P3)
+
+Derived copy of `text` with `<pause-short>`/`<pause-long>` literal vocab tokens inserted
+after mid-sentence punctuation marks (，。？！、；：) that the frozen
+`metadata/labels/pause_calibration.json` bucket_rule verdicted `short`/`long` (a real,
+forced-aligned acoustic gap flanks the mark). Marks verdicted `no_pause` (qwen3_asr
+hallucinated the mark with no acoustic basis — ~29% of mid-sentence punctuation
+corpus-wide, see `docs/PAUSE_CALIBRATION_REPORT.md`) are **stripped** from this field
+only. Segment-final (`trailing_tail`) marks are left untouched (owner decision: `vad_cut`
+already trims true post-utterance silence, so trailing Δt is not a real pause — see
+`pause_calibration.json`'s `owner_decisions.4`).
+
+**`text` itself is never modified** — `text_pause` is a strictly additive, derived view;
+canto-tts consumes it directly as literal vocab (`docs/PAUSE_TOKEN_CALIBRATION_HANDOFF.md`
+§2.3), while `text` remains available unchanged for any other consumer.
+
+**Present only when**: the segment's tier is `gold`/`auto_gold` AND `pause.plan` (P2) has
+run for it. Omitted (not null) otherwise.
+
+---
+
+### `punct_audit` — object, optional (added 2026-07-21, P3)
+
+Per-segment summary of the pause-plan reconciliation, copied straight from
+`pause_plan`'s own precomputed columns:
+
+```json
+{"n_punct": 3, "n_no_pause": 1, "n_short": 1, "n_long": 1}
+```
+
+`n_punct` counts every mid-sentence + trailing/leading punctuation event found;
+`n_no_pause`/`n_short`/`n_long` sum only `kind="normal"` (fully-flanked) events' verdicts
+— they will not sum to `n_punct` when the segment has trailing/leading marks, which is
+expected (see `pipeline/nodes/pause_plan.py`'s module docstring). All-zero counts are a
+valid, informative value (e.g. a segment with no mid-sentence punctuation, or one flagged
+`unalignable` by P2) — not omitted.
+
+**Present only when**: same condition as `text_pause` above (they are always present or
+absent together).
 
 ---
 

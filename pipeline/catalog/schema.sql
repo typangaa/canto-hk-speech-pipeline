@@ -375,6 +375,71 @@ CREATE TABLE IF NOT EXISTS labels_prosody (
     voiced_sec   DOUBLE
 );
 
+-- align.chars (pipeline/nodes/align.py, docs/PAUSE_TOKEN_PUNCTUATION_PLAN.md P0):
+-- char-level forced-alignment timestamps from Qwen3-ForcedAligner-0.6B-hf, scoped to
+-- gold+auto_gold tiers (asr_agreement.best_text). `chars` is JSON
+-- [[char_text, start_sec, end_sec], ...] in original best_text order — for CJK input
+-- this model's "word" granularity resolves to one entry per character (verified
+-- 2026-07-21), hence the column name `chars` rather than `units`. A NULL `chars` value
+-- marks an unreadable-audio/alignment-failure row (so discover()'s anti-join on
+-- provenance='qwen3_aligner' stops resurfacing it) rather than an all-zero placeholder.
+CREATE TABLE IF NOT EXISTS alignments (
+    id         TEXT PRIMARY KEY,
+    chars      JSON,
+    model      TEXT,
+    provenance TEXT
+);
+
+-- pause.plan (pipeline/nodes/pause_plan.py, docs/PAUSE_TOKEN_PUNCTUATION_PLAN.md P2):
+-- per-segment punctuation-anchored pause plan, reconciled from `alignments.chars` against
+-- the FROZEN metadata/labels/pause_calibration.json bucket thresholds. `plan` is JSON
+-- [{offset, mark, kind, delta_t, verdict}, ...], one entry per mid-sentence punctuation
+-- mark (，。？！、；：) found in `asr_agreement.best_text`, in original text order.
+-- `unalignable=TRUE` + `plan=[]` marks a segment whose character-walk did not fully
+-- consume `alignments.chars` (~3.2% corpus-wide, see PAUSE_CALIBRATION_REPORT.md §6) --
+-- written so idempotent anti-join discovery stops resurfacing a permanently-bad segment,
+-- same "always write a row even on reject" precedent as g2p.py/asr.py.
+CREATE TABLE IF NOT EXISTS pause_plan (
+    id                  TEXT PRIMARY KEY,
+    plan                JSON,
+    n_punct             INTEGER,
+    n_no_pause          INTEGER,
+    n_short             INTEGER,
+    n_long              INTEGER,
+    unalignable         BOOLEAN,
+    calibration_version TEXT,
+    provenance          TEXT
+);
+
+-- pause.qc (pipeline/nodes/calibrate.py, docs/PAUSE_TOKEN_PUNCTUATION_PLAN.md P4):
+-- human-listen QC verdicts recorded via `pipe calibrate serve`'s "Pause QC" mode, one row
+-- per punctuation event reviewed (punct_offset ties back to the matching
+-- pause_plan.plan[i].offset entry for the same id -- named punct_offset rather than
+-- offset because OFFSET is a reserved word in DuckDB's grammar, verified by hand:
+-- `CREATE TABLE t (offset INTEGER)` fails to parse). `punct_offset = -1` is a reserved
+-- sentinel for "reviewer skipped this whole segment" (e.g. unclear audio) -- such rows
+-- carry no mark/verdict and are excluded from pause_qc_report()'s match-rate
+-- aggregation, but still count as "already seen" so pause_qc_next() does not resurface
+-- the segment. `plan_verdict` is what pause_plan.py computed (no_pause/short/long);
+-- `perceived_verdict` is what the reviewer actually heard (same 3-way vocabulary) --
+-- comparing the two in aggregate is the QC gate's pass/fail signal (see
+-- PAUSE_TOKEN_PUNCTUATION_PLAN.md P4: checks ①position ②short/long distinguishability
+-- ③no_pause correctness collapse into one perceived-vs-plan match rate). `position_ok`
+-- is a separate axis: the token's insertion point lines up with the audible pause
+-- regardless of which bucket it landed in.
+CREATE TABLE IF NOT EXISTS pause_qc_review (
+    id                TEXT,
+    punct_offset      INTEGER,
+    mark              TEXT,
+    plan_verdict      TEXT,
+    perceived_verdict TEXT,
+    position_ok       BOOLEAN,
+    note              TEXT,
+    reviewed_at       TIMESTAMP,
+    provenance        TEXT,
+    PRIMARY KEY (id, punct_offset)
+);
+
 -- Future: per-segment emotion classification probabilities from an emotion model.
 CREATE TABLE IF NOT EXISTS labels_emotion (
     id   TEXT PRIMARY KEY,

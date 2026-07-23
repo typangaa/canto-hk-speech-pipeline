@@ -66,6 +66,26 @@ them in glob-then-by-speaker order, an unreconstructable and non-meaningful orde
 is a deliberate, documented formatting change: split MEMBERSHIP is preserved 1:1, but line
 ORDER within each split file is not byte-identical to a pre-P4 export. `docs/MANIFEST_SCHEMA.md`
 does not require any particular line order, only correct membership/no-speaker-leakage.
+
+P3 pause-token fields (docs/PAUSE_TOKEN_PUNCTUATION_PLAN.md P3)
+-----------------------------------------------------------------
+Two ADDITIVE fields, LEFT JOINed off `pause_plan` (pipeline/nodes/pause_plan.py, P2):
+canonical `text` is never touched (owner decision (1), frozen 2026-07-21).
+  - `text_pause`: a derived copy of `text` with `<pause-short>`/`<pause-long>` literal
+    tokens inserted after mid-sentence punctuation marks the frozen
+    metadata/labels/pause_calibration.json bucket_rule verdicts as short/long; marks
+    verdicted `no_pause` (LM-hallucinated, no acoustic basis) are stripped from this
+    field only; `trailing_tail`/`leading_tail` marks (no verdict) are left untouched.
+    See `build_text_pause()` below.
+  - `punct_audit`: `{n_punct, n_no_pause, n_short, n_long}` summary copied straight from
+    `pause_plan`'s own precomputed columns.
+`pause_plan` only has rows for the gold/auto_gold scope P0/P2 were run against -- silver/
+bronze rows have no `pause_plan` match (LEFT JOIN -> NULL), so both fields are OMITTED
+entirely for those rows (LABEL_FRAMEWORK_SPEC.md §7 "unreliable -> omit, never null").
+A `pause_plan` row with `unalignable=TRUE` still joins (plan='[]', all counts 0) --
+`text_pause` degrades to an exact copy of `text` and `punct_audit` reports all-zero
+counts, which is itself informative (mirrors label_store.py's "empty list is
+informative" treatment of prosody gaps), not omitted.
 """
 
 import json
@@ -159,13 +179,15 @@ MANIFEST_DISCOVER_SQL = """
         a.best_text, a.text_verified, a.agreement,
         g.jyutping, g.jyutping_cs,
         f.snr_db, f.dnsmos, f.english_ratio,
-        t.tier
+        t.tier,
+        pp.plan, pp.n_punct, pp.n_no_pause, pp.n_short, pp.n_long
     FROM segments s
     JOIN asr_agreement a ON s.id = a.id
     JOIN g2p g ON s.id = g.id
     JOIN filters f ON s.id = f.id
     JOIN tiers t ON s.id = t.id
     LEFT JOIN quality_tiers qt ON s.id = qt.id
+    LEFT JOIN pause_plan pp ON s.id = pp.id AND pp.provenance = 'pause_plan'
     WHERE
         (f.pass = TRUE OR (f.pass IS NULL AND f.provenance IS NULL))
         AND (g.valid_fraction >= 0.80 OR (g.valid_fraction IS NULL AND g.provenance IS NULL))
@@ -199,6 +221,63 @@ def _fetch_asr_candidates_by_id(conn) -> dict[str, list[dict]]:
     }
 
 
+# P3 pause-token literal vocab tokens (docs/PAUSE_TOKEN_CALIBRATION_HANDOFF.md §2.3 --
+# canto-tts's engine-side vocab already reserves these two exact strings).
+PAUSE_TOKENS = {"short": "<pause-short>", "long": "<pause-long>"}
+
+
+def build_text_pause(text: str, plan: list[dict] | None) -> str:
+    """Derive the P3 `text_pause` convenience field from `text` + a `pause_plan.plan`
+    list (see module docstring's "P3 pause-token fields" section). Never mutates or
+    reads back `text` in-place -- always returns a fresh string; `text` itself
+    (the canonical field) is never touched by this function's caller.
+
+    Per event (kind="normal" only get a verdict):
+      - verdict="no_pause": the punctuation mark is dropped (no acoustic basis).
+      - verdict="short"/"long": mark is kept, `<pause-short>`/`<pause-long>` is
+        appended immediately after it.
+      - no verdict (trailing_tail/leading_tail): mark is left untouched.
+
+    Defensive against text/plan drift (e.g. a gold segment's `best_text` edited by
+    `calibrate serve` after the P0 alignment that produced `plan` ran): any event
+    whose recorded `mark` no longer matches the character at its `offset` in `text`
+    is silently skipped, so a stale plan can only under-annotate, never corrupt text.
+    """
+    if not plan:
+        return text
+
+    events_by_offset: dict[int, dict] = {}
+    for ev in plan:
+        offset = ev.get("offset")
+        mark = ev.get("mark")
+        if offset is None or not (0 <= offset < len(text)):
+            continue
+        if text[offset] != mark:
+            continue  # drift guard -- skip rather than corrupt
+        events_by_offset[offset] = ev
+
+    if not events_by_offset:
+        return text
+
+    out: list[str] = []
+    for i, ch in enumerate(text):
+        ev = events_by_offset.get(i)
+        if ev is None:
+            out.append(ch)
+            continue
+        verdict = ev.get("verdict")
+        if verdict is None:
+            out.append(ch)  # trailing_tail / leading_tail: untouched
+            continue
+        if verdict == "no_pause":
+            continue  # strip -- no acoustic basis (pause_calibration.json)
+        out.append(ch)
+        token = PAUSE_TOKENS.get(verdict)
+        if token:
+            out.append(token)
+    return "".join(out)
+
+
 def build_entry(row: tuple, asr_candidates: list[dict]) -> dict:
     """Pure logic: one catalog row + its asr_candidates -> one manifest.jsonl entry.
     Field order and rounding match docs/MANIFEST_SCHEMA.md exactly."""
@@ -209,16 +288,18 @@ def build_entry(row: tuple, asr_candidates: list[dict]) -> dict:
         jyutping, jyutping_cs,
         snr_db, dnsmos, english_ratio,
         tier,
+        pause_plan_raw, n_punct, n_no_pause, n_short, n_long,
     ) = row
 
-    return {
+    text = best_text or ""
+    entry = {
         "id": seg_id,
         "audio_path": audio_path,
         "source": source or "",
         "source_url": source_url or "",
         "program": program or "",
         "domain": domain or "other",
-        "text": best_text or "",
+        "text": text,
         "text_verified": bool(text_verified),
         "asr_candidates": asr_candidates,
         "asr_agreement": round(float(agreement), 3),
@@ -235,6 +316,20 @@ def build_entry(row: tuple, asr_candidates: list[dict]) -> dict:
         "created_at": str(created_at) if created_at else str(date.today()),
         "tier": tier,
     }
+
+    # P3 additive pause-token fields -- only present when pause_plan has a row for
+    # this id (gold/auto_gold scope, see module docstring); omitted otherwise.
+    if pause_plan_raw is not None:
+        plan = json.loads(pause_plan_raw) if isinstance(pause_plan_raw, str) else pause_plan_raw
+        entry["text_pause"] = build_text_pause(text, plan)
+        entry["punct_audit"] = {
+            "n_punct": n_punct or 0,
+            "n_no_pause": n_no_pause or 0,
+            "n_short": n_short or 0,
+            "n_long": n_long or 0,
+        }
+
+    return entry
 
 
 def discover(

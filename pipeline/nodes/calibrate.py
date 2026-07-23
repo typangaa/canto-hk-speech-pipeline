@@ -50,6 +50,13 @@ interactively in the browser tool; see calibrate_server.py / record_decision
 below for how 'pending' rows become 'verified'/'skipped'/'rejected' and how
 a 'verified' decision propagates into asr_agreement.text_verified and
 tiers.tier='gold'.
+
+Pause QC (P4, added 2026-07-22, docs/PAUSE_TOKEN_PUNCTUATION_PLAN.md): a second,
+separate review flow lives in this module too -- pause_preview()/get_pause_qc_item()/
+pause_qc_next()/record_pause_qc()/pause_qc_report() -- for human-listen QC of the
+pause-token plan pause_plan.py (P2) computes. See that block's own comment (below
+run_calibrate_progress) for why it's not folded into the calibration_review flow
+above.
 """
 
 import json
@@ -809,6 +816,230 @@ def run_calibrate_progress(*, conn=None) -> dict:
     conn = conn or connect_ro(CATALOG_PATH)
     try:
         return progress_report(conn)
+    finally:
+        if owns_conn:
+            conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Pause QC (P4, docs/PAUSE_TOKEN_PUNCTUATION_PLAN.md) -- human-listen QC for
+# the pause-token plan produced by pause_plan.py (P2). Deliberately NOT part
+# of the text-verify calibration_review flow above: gold segments are already
+# `decision='verified'` there (so next_pending()'s pending-only queue would
+# never resurface them), and QC scope is gold-only (owner decision,
+# 2026-07-22) precisely so the perceived-vs-plan comparison below isn't
+# confounded by not-yet-human-verified ASR text on silver/bronze/auto_gold.
+# Writes straight to the catalog (no offline-buffer path like
+# append_pending_decision() above) -- Pause QC is a short, interactive,
+# low-volume session (~30 segments, per the plan's P4 QC gate) run while the
+# catalog is free, not a long-running backlog review that needs to coexist
+# with multi-hour batch DAG jobs holding the writer lock.
+# ---------------------------------------------------------------------------
+
+PAUSE_QC_VERDICTS = ("no_pause", "short", "long")
+
+# Reserved `pause_qc_review.punct_offset` sentinel for "reviewer skipped this
+# whole segment" (e.g. unclear audio) -- real punctuation offsets are always >= 0.
+PAUSE_QC_SKIP_OFFSET = -1
+
+
+def pause_preview(conn, seg_id: str) -> dict | None:
+    """Live per-punctuation pause-QC view for one segment: audio timestamps +
+    the rendered `text_pause` string, computed FRESH from `alignments.chars` +
+    `asr_agreement.best_text` against the frozen calibration (via
+    compute_pause_plan(..., include_timestamps=True)) rather than read back
+    from the stored `pause_plan` table -- see that flag's docstring for why
+    (the corpus-wide table intentionally never carries timestamps). Returns
+    None if this id has no forced-alignment row (P0 `align.chars` hasn't run
+    or failed for it) -- the caller uses that to hide the pause-preview UI."""
+    from pipeline.nodes.manifest import build_text_pause
+    from pipeline.nodes.pause_plan import CALIBRATION_VERSION, compute_pause_plan
+
+    row = conn.execute(
+        """
+        SELECT a.best_text, al.chars, s.duration_sec
+        FROM asr_agreement a
+        JOIN alignments al ON a.id = al.id AND al.provenance = 'qwen3_aligner' AND al.chars IS NOT NULL
+        JOIN segments s ON a.id = s.id
+        WHERE a.id = ?
+        """,
+        [seg_id],
+    ).fetchone()
+    if row is None:
+        return None
+    best_text, chars_raw, duration_sec = row
+    chars = json.loads(chars_raw) if isinstance(chars_raw, str) else chars_raw
+    plan, unalignable = compute_pause_plan(best_text, chars, duration_sec, include_timestamps=True)
+    text_pause = best_text if unalignable else build_text_pause(best_text, plan)
+    return {
+        "plan": plan,
+        "text_pause": text_pause,
+        "calibration_version": CALIBRATION_VERSION,
+        "unalignable": unalignable,
+    }
+
+
+def get_pause_qc_item(conn, seg_id: str) -> dict | None:
+    """One segment's full Pause-QC review context: base segment/ASR fields +
+    pause_preview()'s per-event timestamps/text_pause + any review already
+    recorded for it (so reopening a segment via the QC history panel shows
+    prior verdicts instead of a blank form). Returns None if the segment
+    doesn't exist or has no forced-alignment row (nothing to QC)."""
+    row = conn.execute(
+        """
+        SELECT s.id, s.audio_path, s.duration_sec, s.source, s.program, a.best_text
+        FROM segments s
+        JOIN asr_agreement a ON a.id = s.id
+        WHERE s.id = ?
+        """,
+        [seg_id],
+    ).fetchone()
+    if row is None:
+        return None
+    preview = pause_preview(conn, seg_id)
+    if preview is None:
+        return None
+    seg_id_, audio_path, duration_sec, source, program, best_text = row
+    existing = conn.execute(
+        "SELECT punct_offset, mark, plan_verdict, perceived_verdict, position_ok, note "
+        "FROM pause_qc_review WHERE id = ? ORDER BY punct_offset",
+        [seg_id],
+    ).fetchall()
+    return {
+        "id": seg_id_,
+        "audio_path": audio_path,
+        "duration_sec": duration_sec,
+        "source": source,
+        "program": program,
+        "best_text": best_text,
+        **preview,
+        "existing_review": [
+            {
+                "offset": o, "mark": m, "plan_verdict": pv,
+                "perceived_verdict": rv, "position_ok": ok, "note": n,
+            }
+            for o, m, pv, rv, ok, n in existing
+        ],
+    }
+
+
+def pause_qc_next(conn) -> str | None:
+    """Next gold-tier segment eligible for Pause QC (has a real, alignable
+    pause_plan row with at least one punctuation event) that hasn't been
+    reviewed yet (no pause_qc_review rows at all, including the skip
+    sentinel) -- or None if the eligible population is exhausted."""
+    row = conn.execute("""
+        SELECT t.id
+        FROM tiers t
+        JOIN pause_plan p ON t.id = p.id AND p.provenance = 'pause_plan'
+                          AND p.unalignable = FALSE AND p.n_punct > 0
+        WHERE t.tier = 'gold'
+          AND NOT EXISTS (SELECT 1 FROM pause_qc_review q WHERE q.id = t.id)
+        ORDER BY random()
+        LIMIT 1
+    """).fetchone()
+    return row[0] if row else None
+
+
+def record_pause_qc(conn, seg_id: str, events: list[dict]) -> int:
+    """Write one Pause-QC review pass for *seg_id* -- one row per punctuation
+    event the reviewer judged. Each `events` item: {offset, mark, plan_verdict,
+    perceived_verdict, position_ok, note} (offset matches pause_plan.plan[i]'s
+    own "offset" key -- stored as `punct_offset`, see schema.sql's comment on
+    why the column can't be named `offset`). plan_verdict/perceived_verdict
+    must each be one of PAUSE_QC_VERDICTS when present. Called by
+    calibrate_server.py's POST /api/pause_qc/submit. Returns the number of
+    rows written."""
+    from pipeline.catalog.catalog import upsert_rows
+
+    if not events:
+        raise ValueError("record_pause_qc: events must be non-empty (use record_pause_qc_skip to skip)")
+    now = time.strftime("%Y-%m-%d %H:%M:%S")
+    rows = []
+    for ev in events:
+        for key in ("plan_verdict", "perceived_verdict"):
+            v = ev.get(key)
+            if v is not None and v not in PAUSE_QC_VERDICTS:
+                raise ValueError(f"record_pause_qc: {key} must be one of {PAUSE_QC_VERDICTS}, got {v!r}")
+        rows.append({
+            "id": seg_id,
+            "punct_offset": ev["offset"],
+            "mark": ev.get("mark"),
+            "plan_verdict": ev.get("plan_verdict"),
+            "perceived_verdict": ev.get("perceived_verdict"),
+            "position_ok": ev.get("position_ok"),
+            "note": ev.get("note"),
+            "reviewed_at": now,
+            "provenance": "pause_qc",
+        })
+    upsert_rows(conn, "pause_qc_review", rows, ["id", "punct_offset"])
+    return len(rows)
+
+
+def record_pause_qc_skip(conn, seg_id: str, note: str | None = None) -> None:
+    """Mark *seg_id* as reviewed-but-skipped (e.g. unclear audio) -- writes a
+    single sentinel row (punct_offset=PAUSE_QC_SKIP_OFFSET) so pause_qc_next()
+    does not resurface it, without polluting pause_qc_report()'s match-rate
+    stats (which excludes punct_offset=PAUSE_QC_SKIP_OFFSET rows)."""
+    from pipeline.catalog.catalog import upsert_rows
+
+    upsert_rows(conn, "pause_qc_review", [{
+        "id": seg_id, "punct_offset": PAUSE_QC_SKIP_OFFSET, "mark": None,
+        "plan_verdict": None, "perceived_verdict": None, "position_ok": None,
+        "note": note, "reviewed_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "provenance": "pause_qc",
+    }], ["id", "punct_offset"])
+
+
+def pause_qc_report(conn) -> dict:
+    """Aggregate the P4 QC gate's pass/fail signal: per plan_verdict bucket,
+    what fraction of reviewed events had a perceived_verdict matching the
+    pipeline's own verdict (plan's checks ②short/long distinguishability and
+    ③no_pause correctness collapse into this one perceived-vs-plan
+    comparison -- see PAUSE_TOKEN_PUNCTUATION_PLAN.md P4), and what fraction
+    were position_ok (check ①). Skip-sentinel rows are excluded from both
+    (they carry no verdict) but still count toward n_segments_reviewed."""
+    n_segments = conn.execute("SELECT count(DISTINCT id) FROM pause_qc_review").fetchone()[0]
+    n_skipped = conn.execute(
+        "SELECT count(*) FROM pause_qc_review WHERE punct_offset = ?", [PAUSE_QC_SKIP_OFFSET]
+    ).fetchone()[0]
+    rows = conn.execute(
+        "SELECT plan_verdict, perceived_verdict, position_ok FROM pause_qc_review "
+        "WHERE punct_offset != ? AND plan_verdict IS NOT NULL",
+        [PAUSE_QC_SKIP_OFFSET],
+    ).fetchall()
+    by_verdict: dict[str, dict] = {}
+    for plan_verdict, perceived_verdict, position_ok in rows:
+        b = by_verdict.setdefault(plan_verdict, {"n": 0, "match": 0, "position_ok": 0})
+        b["n"] += 1
+        if perceived_verdict == plan_verdict:
+            b["match"] += 1
+        if position_ok:
+            b["position_ok"] += 1
+    by_plan_verdict = {
+        v: {
+            "n": b["n"],
+            "match_rate": round(b["match"] / b["n"], 3) if b["n"] else None,
+            "position_ok_rate": round(b["position_ok"] / b["n"], 3) if b["n"] else None,
+        }
+        for v, b in by_verdict.items()
+    }
+    return {
+        "n_segments_reviewed": n_segments,
+        "n_segments_skipped": n_skipped,
+        "n_events_reviewed": len(rows),
+        "by_plan_verdict": by_plan_verdict,
+    }
+
+
+def run_pause_qc_report(*, conn=None) -> dict:
+    """Read-only wrapper around pause_qc_report() for `pipe calibrate pause-qc-report`."""
+    from pipeline.catalog.catalog import CATALOG_PATH, connect_ro
+
+    owns_conn = conn is None
+    conn = conn or connect_ro(CATALOG_PATH)
+    try:
+        return pause_qc_report(conn)
     finally:
         if owns_conn:
             conn.close()

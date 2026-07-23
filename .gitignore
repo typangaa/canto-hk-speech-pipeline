@@ -8,6 +8,7 @@ wheels/
 
 # Virtual environments
 .venv
+.venv_align
 
 # Dataset — audio and derived files (never committed; large, copyright-restricted)
 data/

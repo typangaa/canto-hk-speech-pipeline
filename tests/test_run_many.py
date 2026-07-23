@@ -6,6 +6,7 @@ import pytest
 from pipeline.catalog.catalog import init_schema, upsert_rows
 from pipeline.cli import split_run_many_groups
 from pipeline.nodes import ingest_download
+from pipeline.nodes.align import run_align_chars
 from pipeline.nodes.asr import run_asr_agreement, run_asr_transcribe
 from pipeline.nodes.filter import (
     run_filter_acoustic,
@@ -13,6 +14,7 @@ from pipeline.nodes.filter import (
     run_filter_text,
 )
 from pipeline.nodes.g2p import run_g2p
+from pipeline.nodes.pause_plan import run_pause_plan
 from pipeline.nodes.ingest_download import run_ingest_commit
 from pipeline.nodes.ingest_probe import run_ingest_probe
 from pipeline.nodes.label_music import run_label_music
@@ -253,6 +255,17 @@ def test_run_g2p_uses_injected_conn(scratch_conn, monkeypatch):
     assert result == {"processed": 0, "errors": 0}
 
 
+def test_run_pause_plan_uses_injected_conn(scratch_conn, monkeypatch):
+    def _boom(*a, **kw):
+        raise AssertionError("run_pause_plan must not call connect() when conn is given")
+
+    monkeypatch.setattr("pipeline.catalog.catalog.connect", _boom)
+
+    result = asyncio.run(run_pause_plan(conn=scratch_conn))
+
+    assert result == {"processed": 0, "errors": 0}
+
+
 def test_run_ingest_probe_uses_injected_conn(scratch_conn, monkeypatch):
     def _boom(*a, **kw):
         raise AssertionError("run_ingest_probe must not call connect() when conn is given")
@@ -282,6 +295,17 @@ def test_run_label_prosody_uses_injected_conn(scratch_conn, monkeypatch):
     monkeypatch.setattr("pipeline.catalog.catalog.connect", _boom)
 
     result = asyncio.run(run_label_prosody(conn=scratch_conn))
+
+    assert result == {"processed": 0, "errors": 0}
+
+
+def test_run_align_chars_uses_injected_conn(scratch_conn, monkeypatch):
+    def _boom(*a, **kw):
+        raise AssertionError("run_align_chars must not call connect() when conn is given")
+
+    monkeypatch.setattr("pipeline.catalog.catalog.connect", _boom)
+
+    result = asyncio.run(run_align_chars(["cuda:0"], conn=scratch_conn))
 
     assert result == {"processed": 0, "errors": 0}
 

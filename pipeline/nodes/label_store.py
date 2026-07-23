@@ -25,11 +25,28 @@ Per-line output shape (spec § 7):
     "control": {
       "rate":  {"raw": <float>, "bucket": "<slow|normal|fast>"},
       "pitch": {"raw_hz": <float>, "z": <float>, "bucket": "<low|normal|high>"},
-      "pause": {"gaps": [[start, dur], ...], "total_sec": <float>}
+      "pause": {
+        "gaps": [[start, dur], ...], "total_sec": <float>,   # VAD-gap based (unchanged)
+        "plan": [{"offset":..,"mark":..,"kind":..,"delta_t":..,"verdict":..}, ...],  # P3, additive
+        "calibration_version": "<pause_calibration.json version>",  # P3, additive
+        "unalignable": true   # P3, additive, present ONLY when true
+      }
     },
     "calibration_version": "<version string>",
     "provenance": {"rate": "jyutping+silero", "pitch": "parselmouth"}
   }
+
+P3 pause-token addition (docs/PAUSE_TOKEN_PUNCTUATION_PLAN.md P3): `control.pause` gains
+three additive keys sourced from `pause_plan` (pipeline/nodes/pause_plan.py, P2) --
+`plan`/`calibration_version`/`unalignable` -- alongside the pre-existing `gaps`/
+`total_sec` VAD-gap keys (unchanged). `pause_plan` only covers the gold/auto_gold scope
+P0/P2 ran against, so these three keys are present only for that scope; the existing
+`gaps`/`total_sec` keys are independently gated on `labels_prosody` coverage (95.2% for
+that same scope) -- a segment can therefore have either sub-object without the other, or
+both. `calibration_version` here is `pause_plan.calibration_version` (the FROZEN
+metadata/labels/pause_calibration.json's version), a DIFFERENT value from this file's
+top-level `calibration_version` (label_calibrate.py's rate/pitch constants) -- do not
+conflate the two.
 
 Keys are omitted entirely (not set to null) when the underlying detector has
 not produced a result for this segment (spec § 7: "unreliable attributes --
@@ -175,27 +192,35 @@ SELECT
     lp.f0_median_hz,
     lp.gaps,
     -- filter column for rate eligibility
-    f.english_ratio
+    f.english_ratio,
+    -- pause plan (P3, gold/auto_gold scope only)
+    pp.plan,
+    pp.calibration_version,
+    pp.unalignable
 FROM segments AS s
 LEFT JOIN labels_lang    AS ll ON ll.id = s.id
 LEFT JOIN labels_overlap AS lo ON lo.id = s.id
 LEFT JOIN labels_music   AS lm ON lm.id = s.id
 LEFT JOIN labels_prosody AS lp ON lp.id = s.id
 LEFT JOIN filters        AS f  ON f.id  = s.id
+LEFT JOIN pause_plan     AS pp ON pp.id = s.id AND pp.provenance = 'pause_plan'
 ORDER BY s.id
 """
 
 # Named column positions (must match SELECT order above)
-_COL_ID            = 0
-_COL_SPEAKER_ID    = 1
-_COL_LANG          = 2
-_COL_CMN_PROB      = 3
-_COL_OVERLAP_RATIO = 4
-_COL_MUSIC_PROB    = 5
-_COL_RATE_RAW      = 6
-_COL_F0_HZ         = 7
-_COL_GAPS          = 8
-_COL_ENGLISH_RATIO = 9
+_COL_ID                    = 0
+_COL_SPEAKER_ID            = 1
+_COL_LANG                  = 2
+_COL_CMN_PROB              = 3
+_COL_OVERLAP_RATIO         = 4
+_COL_MUSIC_PROB            = 5
+_COL_RATE_RAW              = 6
+_COL_F0_HZ                 = 7
+_COL_GAPS                  = 8
+_COL_ENGLISH_RATIO         = 9
+_COL_PAUSE_PLAN            = 10
+_COL_PAUSE_CALIB_VERSION   = 11
+_COL_PAUSE_UNALIGNABLE     = 12
 
 
 # Sentinel object used internally by build_label_rows to signal a skipped
@@ -250,6 +275,9 @@ def build_label_rows(conn, calibration: dict) -> Iterator[dict]:
         f0_hz: float | None         = row[_COL_F0_HZ]
         gaps_raw                    = row[_COL_GAPS]   # JSON string or None
         english_ratio: float | None = row[_COL_ENGLISH_RATIO]
+        pause_plan_raw              = row[_COL_PAUSE_PLAN]              # JSON string or None
+        pause_calib_version: str | None = row[_COL_PAUSE_CALIB_VERSION]
+        pause_unalignable: bool | None  = row[_COL_PAUSE_UNALIGNABLE]
 
         # ── quality dict ───────────────────────────────────────────────────
         # Omit whole keys when the underlying detector has no result.
@@ -318,6 +346,27 @@ def build_label_rows(conn, calibration: dict) -> Iterator[dict]:
                 # pause provenance is not listed in spec § 7 (silero implied via
                 # prosody provenance); do not add a "pause" key to provenance.
 
+        # pause plan (P3, additive): include if pause_plan has a row for this segment
+        # (gold/auto_gold scope only). Independent of the gaps block above -- a segment
+        # can have either, both, or neither sub-object under control.pause.
+        if pause_plan_raw is not None:
+            try:
+                plan: list = json.loads(pause_plan_raw)
+            except (json.JSONDecodeError, TypeError) as exc:
+                log.warning(
+                    "label_store: could not parse pause_plan.plan JSON for id=%s (%s) -- skipping",
+                    seg_id,
+                    exc,
+                )
+                plan = None
+
+            if plan is not None:
+                pause_ctrl = control.setdefault("pause", {})
+                pause_ctrl["plan"] = plan
+                pause_ctrl["calibration_version"] = pause_calib_version
+                if pause_unalignable:
+                    pause_ctrl["unalignable"] = True
+
         # ── assemble record ────────────────────────────────────────────────
         record: dict = {"id": seg_id}
         if quality:
@@ -353,7 +402,8 @@ def run_label_store() -> dict:
       ``skipped_no_quality`` -- segments with no lang/overlap/music label (omitted)
       ``with_rate``          -- segments that have a rate bucket
       ``with_pitch``         -- segments that have a pitch bucket
-      ``with_pause``         -- segments that have pause data
+      ``with_pause``         -- segments that have pause data (gaps and/or plan)
+      ``with_pause_plan``    -- segments that have P3 pause_plan data specifically
     """
     log.info("label_store: starting label store build")
     t0 = time.monotonic()
@@ -374,6 +424,7 @@ def run_label_store() -> dict:
     n_rate = 0
     n_pitch = 0
     n_pause = 0
+    n_pause_plan = 0
 
     with connect_ro() as conn, out_path.open("w", encoding="utf-8") as fh:
         for record in build_label_rows(conn, calibration):
@@ -398,6 +449,8 @@ def run_label_store() -> dict:
                 n_pitch += 1
             if "pause" in ctrl:
                 n_pause += 1
+                if "plan" in ctrl["pause"]:
+                    n_pause_plan += 1
 
             if n_written % 50_000 == 0:
                 log.info(
@@ -407,12 +460,13 @@ def run_label_store() -> dict:
     elapsed = time.monotonic() - t0
     log.info(
         "label_store: done -- wrote %d rows, skipped %d (no quality)  "
-        "|  rate=%d  pitch=%d  pause=%d  |  %.1fs  ->  %s",
+        "|  rate=%d  pitch=%d  pause=%d (plan=%d)  |  %.1fs  ->  %s",
         n_written,
         n_skipped,
         n_rate,
         n_pitch,
         n_pause,
+        n_pause_plan,
         elapsed,
         out_path,
     )
@@ -424,6 +478,7 @@ def run_label_store() -> dict:
         "with_rate": n_rate,
         "with_pitch": n_pitch,
         "with_pause": n_pause,
+        "with_pause_plan": n_pause_plan,
     }
 
 

@@ -63,6 +63,16 @@ blocking or erroring out:
     reads 'pending' in the DB until the next flush, so every read endpoint
     needs this overlay to avoid re-serving it, and to keep the stats/history
     panels accurate for the reviewer's own session.
+
+Pause QC mode (P4, added 2026-07-22, docs/PAUSE_TOKEN_PUNCTUATION_PLAN.md): the
+/api/pause_qc/* endpoints and the browser UI's "Pause QC" tab are a second,
+independent review flow for human-listening QC of pause_plan.py's (P2) pause-token
+plan -- gold-tier segments only (see pipeline/nodes/calibrate.py's "Pause QC" section
+for why). Unlike the flow above, it has NO offline-buffer/snapshot fallback: writes go
+straight through record_pause_qc()/record_pause_qc_skip() to the live catalog. This is
+deliberate, not an oversight -- Pause QC is a short (~30-segment), one-off interactive
+session run while the catalog is free, not a long-running backlog review that needs to
+survive a multi-hour batch DAG job holding the writer lock.
 """
 
 import argparse
@@ -79,18 +89,25 @@ import duckdb
 
 from pipeline.catalog.catalog import CATALOG_PATH, connect, connect_ro
 from pipeline.nodes.calibrate import (
+    PAUSE_QC_VERDICTS,
     PENDING_DECISIONS_PATH,
     SNAPSHOT_PATH,
     _levenshtein,
     append_pending_decision,
     get_item,
+    get_pause_qc_item,
     jyutping_preview,
     list_batches,
     list_history,
     list_sources,
     load_pending_decisions,
     next_pending,
+    pause_preview,
+    pause_qc_next,
+    pause_qc_report,
     queue_stats,
+    record_pause_qc,
+    record_pause_qc_skip,
     run_calibrate_prune_excluded,
     run_calibrate_sample,
     summary_stats,
@@ -544,15 +561,62 @@ def _build_app(default_batch: str | None):
                 self._send_json(preview)
                 return
 
+            # Read-only pause-preview overlay for the NORMAL text-verify card (any
+            # tier, not just gold) -- distinct from /api/pause_qc/* below, which is
+            # the dedicated gold-only QC recording flow. Returns preview: null when
+            # this id has no forced-alignment row yet (P0 hasn't reached it) so the
+            # UI can just hide the toggle instead of erroring.
+            if parsed.path == "/api/pause_preview":
+                seg_id = qs.get("id", [None])[0]
+                if not seg_id:
+                    self.send_error(400, "missing id")
+                    return
+                preview = _read(pause_preview, seg_id)
+                self._send_json({"preview": preview})
+                return
+
+            # ---- Pause QC (P4) -- see calibrate.py's "Pause QC" section for why
+            # this is a separate flow from calibration_review above: no offline
+            # buffer, no snapshot fallback -- it's a short live-catalog session.
+            if parsed.path == "/api/pause_qc/next":
+                seg_id = _read(pause_qc_next)
+                item = _read(get_pause_qc_item, seg_id) if seg_id else None
+                self._send_json({"item": item})
+                return
+
+            if parsed.path == "/api/pause_qc/item":
+                seg_id = qs.get("id", [None])[0]
+                if not seg_id:
+                    self.send_error(400, "missing id")
+                    return
+                item = _read(get_pause_qc_item, seg_id)
+                self._send_json({"item": item})
+                return
+
+            if parsed.path == "/api/pause_qc/report":
+                self._send_json(_read(pause_qc_report))
+                return
+
             if parsed.path == "/api/audio":
                 seg_id = qs.get("id", [None])[0]
                 if not seg_id:
                     self.send_error(400, "missing id")
                     return
+                # Scoped to ids that are legitimately in SOME review context --
+                # either the text-verify queue (calibration_review) or a
+                # gold-tier Pause QC candidate (tiers.tier='gold') -- not an
+                # arbitrary-id audio server. The second query is the fallback
+                # for Pause QC items, which never pass through
+                # calibration_review (gold segments are already 'verified'
+                # there, see get_pause_qc_item()'s module-docstring rationale).
                 audio_path_str, _mode = _read_or_offline(
                     lambda conn: conn.execute(
                         "SELECT s.audio_path FROM calibration_review c "
                         "JOIN segments s ON c.id = s.id WHERE c.id = ?",
+                        [seg_id],
+                    ).fetchone() or conn.execute(
+                        "SELECT s.audio_path FROM segments s "
+                        "JOIN tiers t ON t.id = s.id AND t.tier = 'gold' WHERE s.id = ?",
                         [seg_id],
                     ).fetchone(),
                     lambda: ((_offline_get_item(seg_id) or {}).get("audio_path"),),
@@ -584,6 +648,29 @@ def _build_app(default_batch: str | None):
                 self._send_json({"error": str(exc)}, status=503)
 
         def _do_POST(self):
+            if self.path == "/api/pause_qc/submit":
+                length = int(self.headers.get("Content-Length", 0))
+                try:
+                    payload = json.loads(self.rfile.read(length))
+                    seg_id = payload["id"]
+                except (KeyError, json.JSONDecodeError):
+                    self.send_error(400, "malformed request body")
+                    return
+                try:
+                    if payload.get("skip"):
+                        _write(lambda conn: record_pause_qc_skip(conn, seg_id, payload.get("note")))
+                    else:
+                        events = payload.get("events") or []
+                        if not events:
+                            self._send_json({"error": "events must be non-empty (or set skip: true)"}, status=400)
+                            return
+                        _write(lambda conn: record_pause_qc(conn, seg_id, events))
+                except ValueError as exc:
+                    self._send_json({"error": str(exc)}, status=400)
+                    return
+                self._send_json({"ok": True})
+                return
+
             if self.path == "/api/refill":
                 length = int(self.headers.get("Content-Length", 0))
                 try:
@@ -853,10 +940,53 @@ _PAGE_HTML = r"""<!doctype html>
   #summary-empty { color: var(--dim); font-size: 0.82rem; }
   #offline-banner { display: none; background: var(--warn); color: #1c1300; font-size: 0.8rem;
                      font-weight: 600; padding: 0.5rem 0.9rem; border-radius: 8px; margin-bottom: 0.8rem; }
+
+  /* ---- mode tabs (Text Verify / Pause QC, P4) ---- */
+  #modeTabs { display: flex; gap: 0.5rem; margin-bottom: 0.8rem; }
+  .mode-btn { background: var(--panel-2); color: var(--muted); border: 1px solid var(--border);
+              border-radius: 7px; padding: 0.4rem 0.9rem; font-size: 0.82rem; cursor: pointer; }
+  .mode-btn.active { color: var(--accent); border-color: var(--accent); background: var(--panel); }
+
+  /* ---- pause-preview toggle (text-verify card) + text_pause rendering (both modes) ---- */
+  .pause-toggle-row { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.5rem; }
+  .pause-toggle { font-size: 0.8rem; color: var(--muted); cursor: pointer; display: flex; align-items: center; gap: 0.3rem; }
+  .text-pause-view { font-size: 0.95rem; line-height: 1.7; padding: 0.6rem 0.75rem; margin-bottom: 0.8rem;
+                      background: var(--panel-2); border: 1px solid var(--border); border-radius: 7px; }
+  .pause-tok { display: inline-block; font-size: 0.68rem; font-weight: 600; border-radius: 999px;
+               padding: 0.05rem 0.4rem; margin: 0 0.15rem; vertical-align: middle; }
+  .pause-tok.short { background: var(--warn); color: #1c1300; }
+  .pause-tok.long { background: #c9642a; color: white; }
+
+  /* ---- Pause QC event rows ---- */
+  #pauseQcEvents { display: flex; flex-direction: column; gap: 0.45rem; margin-bottom: 1rem; }
+  .pause-event { display: flex; align-items: center; gap: 0.6rem; padding: 0.5rem 0.7rem;
+                 background: var(--panel-2); border: 1px solid var(--border); border-radius: 7px;
+                 font-size: 0.82rem; flex-wrap: wrap; }
+  .pause-event.pe-tail { opacity: 0.55; }
+  .pe-mark { font-size: 1.1rem; font-weight: 600; min-width: 1.4rem; text-align: center; }
+  .pe-delta { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .pe-plan-badge { font-size: 0.7rem; padding: 0.1rem 0.5rem; border-radius: 999px; border: 1px solid var(--border); }
+  .pe-plan-badge.no_pause { color: var(--dim); }
+  .pe-plan-badge.short { color: var(--warn); border-color: var(--warn); }
+  .pe-plan-badge.long { color: #e08a4a; border-color: #e08a4a; }
+  .pe-seek { background: transparent; color: var(--accent); border: 1px solid var(--accent);
+             border-radius: 999px; width: 1.8rem; height: 1.8rem; cursor: pointer; }
+  .pe-verdict-group { display: flex; gap: 0.3rem; }
+  .pe-verdict { background: var(--panel); color: var(--muted); border: 1px solid var(--border);
+                border-radius: 5px; padding: 0.25rem 0.5rem; font-size: 0.76rem; cursor: pointer; }
+  .pe-verdict.active { background: var(--accent); color: #0c1220; border-color: var(--accent); font-weight: 600; }
+  .pe-pos-ok { display: flex; align-items: center; gap: 0.3rem; color: var(--dim); font-size: 0.76rem;
+               margin-left: auto; white-space: nowrap; }
+  #pauseQcProgress { margin-top: 0.6rem; }
+  #pauseQcDone { display: none; color: var(--muted); }
 </style>
 </head>
 <body>
 <h1>CANTO CORPUS &mdash; TEXT CALIBRATION</h1>
+<div id="modeTabs">
+  <button class="mode-btn active" id="modeVerifyBtn" type="button">Text Verify</button>
+  <button class="mode-btn" id="modePauseQcBtn" type="button" title="Human-listen QC for the pause-token plan (P4, gold-tier only)">Pause QC</button>
+</div>
 <div id="offline-banner"></div>
 
 <div id="topbar">
@@ -920,35 +1050,58 @@ _PAGE_HTML = r"""<!doctype html>
         <button class="pbtn" data-speed="1.5">1.5×</button>
       </div>
       <canvas id="waveform" width="760" height="56" title="Click to seek"></canvas>
-      <div class="candidates" id="candidates"></div>
-      <div id="particles"><span class="plabel">Particles:</span></div>
-      <textarea id="text" autofocus></textarea>
-      <div id="jyutping-preview"></div>
-      <div class="editor-row">
-        <span>Click a candidate's <b>Insert</b> button (or press 1–4) to copy it in — the text box never changes on its own.</span>
-        <button id="undoBtn" disabled>↩ Undo insert</button>
+
+      <div id="textVerifyPanel">
+        <div class="pause-toggle-row">
+          <label class="pause-toggle"><input type="checkbox" id="pausePreviewToggle"> Pause preview (P4)</label>
+          <span id="pausePreviewNote" style="display:none"></span>
+        </div>
+        <div id="textPauseView" class="text-pause-view" style="display:none"></div>
+        <div class="candidates" id="candidates"></div>
+        <div id="particles"><span class="plabel">Particles:</span></div>
+        <textarea id="text" autofocus></textarea>
+        <div id="jyutping-preview"></div>
+        <div class="editor-row">
+          <span>Click a candidate's <b>Insert</b> button (or press 1–4) to copy it in — the text box never changes on its own.</span>
+          <button id="undoBtn" disabled>↩ Undo insert</button>
+        </div>
+        <div class="actions">
+          <button class="action" id="verify">Verify (Enter)</button>
+          <button class="action" id="skip">Skip (S)</button>
+          <button class="action" id="reject">Reject (D)</button>
+          <button class="action" id="mandarin" title="Not HK Cantonese -- rejects and records the reason">Mandarin (M)</button>
+          <button class="action" id="englishOnly" title="Segment is English-only, not Cantonese -- rejects and records the reason">English only (E)</button>
+          <button class="action" id="otherLanguage" title="Not HK Cantonese, not Mandarin/English (e.g. another dialect/language) -- rejects and records the reason">Other language (O)</button>
+          <button class="action" id="multiSpeaker" title="Audio has more than one speaker -- rejects and records the reason (T9)">Multi-speaker (N)</button>
+          <button class="action" id="wrongSpeakerId" title="Audio is single-speaker but filed under the wrong speaker_id -- flags only, does NOT exclude (T9)">Wrong speaker ID (W)</button>
+          <button class="action" id="flag">Flag issue (F)</button>
+        </div>
+        <div id="flag-box">
+          <input id="flag-reason" placeholder="What's wrong? (segmentation, wrong language, corrupt audio…)">
+          <button id="flag-confirm">Confirm flag</button>
+          <button id="flag-cancel">Cancel</button>
+        </div>
+        <div class="hint">Space replays/pauses audio when the text box isn't focused. Highlighted diff: <ins>green</ins> = candidate adds this, <del>red</del> = candidate removes this (relative to the box's current text). Click the waveform to seek.</div>
       </div>
-      <div class="actions">
-        <button class="action" id="verify">Verify (Enter)</button>
-        <button class="action" id="skip">Skip (S)</button>
-        <button class="action" id="reject">Reject (D)</button>
-        <button class="action" id="mandarin" title="Not HK Cantonese -- rejects and records the reason">Mandarin (M)</button>
-        <button class="action" id="englishOnly" title="Segment is English-only, not Cantonese -- rejects and records the reason">English only (E)</button>
-        <button class="action" id="otherLanguage" title="Not HK Cantonese, not Mandarin/English (e.g. another dialect/language) -- rejects and records the reason">Other language (O)</button>
-        <button class="action" id="multiSpeaker" title="Audio has more than one speaker -- rejects and records the reason (T9)">Multi-speaker (N)</button>
-        <button class="action" id="wrongSpeakerId" title="Audio is single-speaker but filed under the wrong speaker_id -- flags only, does NOT exclude (T9)">Wrong speaker ID (W)</button>
-        <button class="action" id="flag">Flag issue (F)</button>
+
+      <div id="pauseQcPanel" style="display:none">
+        <div id="pauseQcTextPause" class="text-pause-view"></div>
+        <div id="pauseQcEvents"></div>
+        <div class="actions">
+          <button class="action" id="pauseQcSubmit" disabled>Submit &amp; Next</button>
+          <button class="action" id="pauseQcSkip" style="background:var(--panel-2);color:var(--text);border:1px solid var(--border) !important">Skip segment (unclear audio)</button>
+        </div>
+        <div class="hint" id="pauseQcProgress"></div>
       </div>
-      <div id="flag-box">
-        <input id="flag-reason" placeholder="What's wrong? (segmentation, wrong language, corrupt audio…)">
-        <button id="flag-confirm">Confirm flag</button>
-        <button id="flag-cancel">Cancel</button>
-      </div>
-      <div class="hint">Space replays/pauses audio when the text box isn't focused. Highlighted diff: <ins>green</ins> = candidate adds this, <del>red</del> = candidate removes this (relative to the box's current text). Click the waveform to seek.</div>
     </div>
     <div id="done">
       Queue empty for this filter — no pending segments left.<br>
       <button id="doneRefillBtn">↻ Queue a new sample</button>
+    </div>
+    <div id="pauseQcDone">
+      No gold-tier segments left to QC (or none eligible yet — pause.plan/align.chars must
+      have run first). See <code>pipe calibrate pause-qc-report</code> for the aggregate
+      match-rate gate result.
     </div>
 
     <div id="summary">
@@ -1037,6 +1190,16 @@ function charDiff(a, b) {
 
 function escapeHtml(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// ---- P4: render a text_pause string (literal <pause-short>/<pause-long> tokens,
+// see manifest.py's PAUSE_TOKENS) as coloured pills -- escapeHtml() first so any
+// other angle bracket in the source text stays inert, THEN replace the exact
+// escaped literal token substrings with markup (never the other way round). ----
+function renderTextPauseHtml(textPause) {
+  return escapeHtml(textPause || '')
+    .replace(/&lt;pause-short&gt;/g, '<span class="pause-tok short">⏸ short</span>')
+    .replace(/&lt;pause-long&gt;/g, '<span class="pause-tok long">⏸⏸ long</span>');
 }
 
 function renderDiffHtml(current, candidate) {
@@ -1184,15 +1347,26 @@ async function refreshFilterOptions() {
 }
 
 // ---- waveform: decode via Web Audio API, draw peaks, click-to-seek ----
-async function drawWaveform(url) {
+// markers (P4, optional): [{t_start, t_end, verdict}, ...] audio-timeline pause
+// events, drawn as translucent colour blocks on top of the peaks -- used by both
+// the text-verify "Pause preview" toggle and the Pause QC mode. durationSec lets
+// callers pin marker positions to the segment's known duration (segments.duration_sec)
+// rather than depending on decodeAudioData succeeding.
+const PAUSE_VERDICT_COLORS = {
+  no_pause: 'rgba(140,140,140,0.3)', short: 'rgba(185,138,58,0.55)', long: 'rgba(224,138,74,0.6)',
+};
+
+async function drawWaveform(url, markers, durationSec) {
   const canvas = document.getElementById('waveform');
   const ctx = canvas.getContext('2d');
   canvas.width = canvas.clientWidth || 760;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
+  let decodedDuration = durationSec || null;
   try {
     if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     const buf = await (await fetch(url)).arrayBuffer();
     const audioBuffer = await audioCtx.decodeAudioData(buf);
+    decodedDuration = decodedDuration || audioBuffer.duration;
     const data = audioBuffer.getChannelData(0);
     const width = canvas.width, height = canvas.height, amp = height / 2;
     const step = Math.max(1, Math.ceil(data.length / width));
@@ -1212,6 +1386,16 @@ async function drawWaveform(url) {
     ctx.font = '12px sans-serif';
     ctx.fillText('(waveform unavailable)', 8, canvas.height / 2);
   }
+  if (markers && markers.length && decodedDuration) {
+    const width = canvas.width, height = canvas.height;
+    for (const m of markers) {
+      if (m.t_start == null || m.t_end == null) continue;
+      ctx.fillStyle = PAUSE_VERDICT_COLORS[m.verdict] || 'rgba(255,255,255,0.12)';
+      const x0 = Math.max(0, (m.t_start / decodedDuration) * width);
+      const x1 = Math.min(width, (m.t_end / decodedDuration) * width);
+      ctx.fillRect(x0, 0, Math.max(1.5, x1 - x0), height);
+    }
+  }
 }
 
 document.getElementById('waveform').addEventListener('click', (e) => {
@@ -1223,12 +1407,48 @@ document.getElementById('waveform').addEventListener('click', (e) => {
   player.play().catch(() => {});
 });
 
+// ---- P4: pause-preview toggle for the normal text-verify card -- read-only,
+// fetches /api/pause_preview on demand (opt-in, see renderItem()'s reset) and
+// overlays timeline markers + the rendered text_pause string. ----
+document.getElementById('pausePreviewToggle').onchange = async (e) => {
+  const note = document.getElementById('pausePreviewNote');
+  const view = document.getElementById('textPauseView');
+  if (!e.target.checked || !current) {
+    view.style.display = 'none';
+    note.style.display = 'none';
+    if (current) drawWaveform(document.getElementById('player').src);
+    return;
+  }
+  const r = await fetch('/api/pause_preview?' + qs({ id: current.id }));
+  const { preview } = await r.json();
+  if (!preview) {
+    note.textContent = '(no forced-alignment data for this segment -- align.chars/pause_plan hasn\'t reached it)';
+    note.style.display = 'inline';
+    view.style.display = 'none';
+    e.target.checked = false;
+    return;
+  }
+  note.style.display = 'none';
+  view.style.display = 'block';
+  view.innerHTML = preview.unalignable
+    ? '<span style="color:var(--dim)">(unalignable -- text/alignment fell out of sync, no pause plan for this segment)</span>'
+    : renderTextPauseHtml(preview.text_pause);
+  drawWaveform(document.getElementById('player').src, preview.plan, current.duration_sec);
+};
+
 // ---- rendering a review item (shared by loadNext / openItem) ----
 function renderItem(item) {
   current = item;
   undoStack = [];
   document.getElementById('undoBtn').disabled = true;
   document.getElementById('flag-box').style.display = 'none';
+  // Pause preview (P4) is opt-in per segment -- reset on every new item rather
+  // than auto-fetching /api/pause_preview for segments the reviewer never asks
+  // to see it for (most text-verify segments are silver/bronze with no
+  // pause_plan row anyway).
+  document.getElementById('pausePreviewToggle').checked = false;
+  document.getElementById('textPauseView').style.display = 'none';
+  document.getElementById('pausePreviewNote').style.display = 'none';
 
   const agreementCls = item.agreement < 0.65 ? 'low' : '';
   let metaHtml =
@@ -1548,8 +1768,176 @@ document.getElementById('text').addEventListener('input', () => {
   }, 150);
 });
 
+// ---------------------------------------------------------------------------
+// Pause QC (P4, docs/PAUSE_TOKEN_PUNCTUATION_PLAN.md) -- a second, independent
+// review flow (gold-tier only) sharing the #review card's meta/player/waveform
+// with the text-verify flow above, but with its own controls
+// (#pauseQcPanel) and its own catalog endpoints (/api/pause_qc/*, no offline
+// buffer -- see calibrate_server.py's module docstring).
+// ---------------------------------------------------------------------------
+
+const PAUSE_QC_VERDICTS = ['no_pause', 'short', 'long'];
+let mode = 'verify';
+let pauseQcItem = null;
+let pauseQcJudgments = {};   // offset -> {perceived_verdict, position_ok}
+
+function normalPauseEvents(item) {
+  return item.plan.filter((e) => e.kind === 'normal');
+}
+
+function updatePauseQcSubmitState() {
+  const total = pauseQcItem ? normalPauseEvents(pauseQcItem).length : 0;
+  const judged = Object.values(pauseQcJudgments).filter((j) => j.perceived_verdict).length;
+  document.getElementById('pauseQcSubmit').disabled = total === 0 || judged < total;
+}
+
+function renderPauseQcItem(item) {
+  pauseQcItem = item;
+  pauseQcJudgments = {};
+  document.getElementById('review').style.display = '';
+  document.getElementById('pauseQcPanel').style.display = '';
+  document.getElementById('pauseQcDone').style.display = 'none';
+
+  document.getElementById('meta').innerHTML =
+    `<span>${item.source}</span><span>${item.program || ''}</span>` +
+    `<span>${item.duration_sec?.toFixed(1)}s</span>` +
+    `<span class="decision-pill verified">gold</span>`;
+
+  const audioUrl = '/api/audio?id=' + encodeURIComponent(item.id);
+  const player = document.getElementById('player');
+  player.src = audioUrl;
+  player.loop = document.getElementById('loopBtn').classList.contains('active');
+  drawWaveform(audioUrl, item.plan, item.duration_sec);
+
+  document.getElementById('pauseQcTextPause').innerHTML = renderTextPauseHtml(item.text_pause);
+
+  const box = document.getElementById('pauseQcEvents');
+  box.innerHTML = '';
+  for (const ev of item.plan) {
+    const row = document.createElement('div');
+    if (ev.kind !== 'normal') {
+      // trailing_tail/leading_tail marks never get a verdict/token (see
+      // pause_plan.py's owner_decisions.4) -- shown for context only, nothing
+      // to judge here.
+      row.className = 'pause-event pe-tail';
+      row.innerHTML = `<span class="pe-mark">${escapeHtml(ev.mark)}</span>` +
+        `<span class="pe-delta">${ev.kind} (not tokenised)</span>`;
+      box.appendChild(row);
+      continue;
+    }
+    row.className = 'pause-event';
+    row.innerHTML =
+      `<span class="pe-mark">${escapeHtml(ev.mark)}</span>` +
+      `<span class="pe-delta">Δt ${ev.delta_t.toFixed(2)}s</span>` +
+      `<span class="pe-plan-badge ${ev.verdict}">plan: ${ev.verdict}</span>` +
+      `<button class="pe-seek" type="button" title="Play from just before this pause">▶</button>` +
+      `<span class="pe-verdict-group">${PAUSE_QC_VERDICTS.map((v) =>
+        `<button class="pe-verdict" data-verdict="${v}">${v}</button>`).join('')}</span>` +
+      `<label class="pe-pos-ok"><input type="checkbox" checked> position OK</label>`;
+    row.querySelector('.pe-seek').onclick = () => {
+      player.currentTime = Math.max(0, ev.t_start - 0.3);
+      player.play().catch(() => {});
+    };
+    row.querySelectorAll('.pe-verdict').forEach((btn) => {
+      btn.onclick = () => {
+        row.querySelectorAll('.pe-verdict').forEach((b) => b.classList.remove('active'));
+        btn.classList.add('active');
+        const j = pauseQcJudgments[ev.offset] || {};
+        j.perceived_verdict = btn.dataset.verdict;
+        pauseQcJudgments[ev.offset] = j;
+        updatePauseQcSubmitState();
+      };
+    });
+    row.querySelector('.pe-pos-ok input').onchange = (e) => {
+      const j = pauseQcJudgments[ev.offset] || {};
+      j.position_ok = e.target.checked;
+      pauseQcJudgments[ev.offset] = j;
+    };
+    box.appendChild(row);
+  }
+  updatePauseQcSubmitState();
+  refreshPauseQcProgress();
+  if (document.getElementById('autoplayBtn').classList.contains('active')) {
+    player.play().catch(() => {});
+  }
+}
+
+async function loadPauseQcNext() {
+  const r = await fetch('/api/pause_qc/next');
+  const { item } = await r.json();
+  if (!item) {
+    pauseQcItem = null;
+    document.getElementById('review').style.display = 'none';
+    document.getElementById('pauseQcDone').style.display = 'block';
+    refreshPauseQcProgress();
+    return;
+  }
+  renderPauseQcItem(item);
+}
+
+async function submitPauseQc() {
+  if (!pauseQcItem) return;
+  const events = normalPauseEvents(pauseQcItem).map((e) => {
+    const j = pauseQcJudgments[e.offset] || {};
+    return {
+      offset: e.offset, mark: e.mark, plan_verdict: e.verdict,
+      perceived_verdict: j.perceived_verdict,
+      position_ok: j.position_ok !== undefined ? j.position_ok : true,
+    };
+  });
+  await fetch('/api/pause_qc/submit', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: pauseQcItem.id, events }),
+  });
+  loadPauseQcNext();
+}
+document.getElementById('pauseQcSubmit').onclick = submitPauseQc;
+
+async function skipPauseQc() {
+  if (!pauseQcItem) return;
+  await fetch('/api/pause_qc/submit', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: pauseQcItem.id, skip: true }),
+  });
+  loadPauseQcNext();
+}
+document.getElementById('pauseQcSkip').onclick = skipPauseQc;
+
+async function refreshPauseQcProgress() {
+  const r = await fetch('/api/pause_qc/report');
+  const rep = await r.json();
+  const parts = Object.entries(rep.by_plan_verdict).map(
+    ([v, s]) => `${v}: match ${Math.round((s.match_rate || 0) * 100)}% / position-ok ${Math.round((s.position_ok_rate || 0) * 100)}% (n=${s.n})`
+  );
+  document.getElementById('pauseQcProgress').textContent =
+    `${rep.n_segments_reviewed} segment(s) reviewed (${rep.n_segments_skipped} skipped) — ` +
+    (parts.length ? parts.join(' · ') : 'no events judged yet');
+}
+
+function setMode(newMode) {
+  if (mode === newMode) return;
+  mode = newMode;
+  document.getElementById('modeVerifyBtn').classList.toggle('active', mode === 'verify');
+  document.getElementById('modePauseQcBtn').classList.toggle('active', mode === 'pause_qc');
+  document.getElementById('textVerifyPanel').style.display = mode === 'verify' ? '' : 'none';
+  document.getElementById('pauseQcPanel').style.display = 'none';
+  document.getElementById('pauseQcDone').style.display = 'none';
+  document.getElementById('done').style.display = 'none';
+  document.getElementById('review').style.display = '';
+  if (mode === 'verify') loadNext(); else loadPauseQcNext();
+}
+document.getElementById('modeVerifyBtn').onclick = () => setMode('verify');
+document.getElementById('modePauseQcBtn').onclick = () => setMode('pause_qc');
+
 // ---- keyboard shortcuts ----
 document.addEventListener('keydown', (e) => {
+  if (e.key === ' ' && document.activeElement !== document.getElementById('text')) {
+    e.preventDefault();
+    const p = document.getElementById('player');
+    p.paused ? p.play() : p.pause();
+    return;
+  }
+  if (mode !== 'verify') return;   // Pause QC mode has no letter shortcuts -- click-only
   const inBox = document.activeElement === document.getElementById('text');
   const inFlagReason = document.activeElement === document.getElementById('flag-reason');
   const inMinAgreement = document.activeElement === document.getElementById('minAgreementInput');
@@ -1563,11 +1951,7 @@ document.addEventListener('keydown', (e) => {
   else if (e.key.toLowerCase() === 'n' && !inBox) { submit('rejected', 'not_single_speaker'); }
   else if (e.key.toLowerCase() === 'w' && !inBox) { submit('flagged', 'wrong_speaker_id'); }
   else if (e.key.toLowerCase() === 'f' && !inBox) { openFlagBox(); }
-  else if (e.key === ' ' && !inBox) {
-    e.preventDefault();
-    const p = document.getElementById('player');
-    p.paused ? p.play() : p.pause();
-  } else if (e.key === 'b' && !inBox) { document.getElementById('backBtn').click(); }
+  else if (e.key === 'b' && !inBox) { document.getElementById('backBtn').click(); }
   else if (/^[1-4]$/.test(e.key) && !inBox && current) {
     const idx = parseInt(e.key, 10) - 1;
     if (current.candidates[idx]) applyCandidate(current.candidates[idx].text);

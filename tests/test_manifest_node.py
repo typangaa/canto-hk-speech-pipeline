@@ -1,3 +1,5 @@
+import json
+
 import duckdb
 import pytest
 
@@ -11,6 +13,7 @@ from pipeline.nodes.manifest import (
     _stratified_split_new_entries,
     _tiers_at_or_above,
     build_entry,
+    build_text_pause,
     discover,
     train_val_split,
 )
@@ -24,6 +27,7 @@ def _row(**overrides):
         "nei5 hou2", "nei5 hou2",
         35.2, 3.8, 0.02,
         "silver",
+        None, None, None, None, None,
     )
     if not overrides:
         return base
@@ -34,6 +38,7 @@ def _row(**overrides):
         "jyutping", "jyutping_cs",
         "snr_db", "dnsmos", "english_ratio",
         "tier",
+        "pause_plan_raw", "n_punct", "n_no_pause", "n_short", "n_long",
     ]
     d = dict(zip(fields, base))
     d.update(overrides)
@@ -73,6 +78,89 @@ def test_build_entry_none_gender_style_default_unknown_formal():
 def test_build_entry_missing_created_at_falls_back_to_today():
     entry = build_entry(_row(created_at=None), [])
     assert entry["created_at"]  # non-empty ISO-ish string
+
+
+# ---------------------------------------------------------------------------
+# P3 pause-token fields -- build_text_pause() / build_entry() additive fields
+# ---------------------------------------------------------------------------
+
+def test_build_text_pause_no_plan_returns_text_unchanged():
+    assert build_text_pause("你好，世界。", None) == "你好，世界。"
+    assert build_text_pause("你好，世界。", []) == "你好，世界。"
+
+
+def test_build_text_pause_short_verdict_inserts_token_after_mark():
+    text = "你好，世界"
+    plan = [{"offset": 2, "mark": "，", "kind": "normal", "delta_t": 0.2, "verdict": "short"}]
+    assert build_text_pause(text, plan) == "你好，<pause-short>世界"
+
+
+def test_build_text_pause_long_verdict_inserts_token_after_mark():
+    text = "你好，世界"
+    plan = [{"offset": 2, "mark": "，", "kind": "normal", "delta_t": 0.5, "verdict": "long"}]
+    assert build_text_pause(text, plan) == "你好，<pause-long>世界"
+
+
+def test_build_text_pause_no_pause_verdict_strips_mark():
+    text = "你好，世界"
+    plan = [{"offset": 2, "mark": "，", "kind": "normal", "delta_t": 0.01, "verdict": "no_pause"}]
+    assert build_text_pause(text, plan) == "你好世界"
+
+
+def test_build_text_pause_trailing_tail_left_untouched():
+    text = "你好世界。"
+    plan = [{"offset": 4, "mark": "。", "kind": "trailing_tail", "delta_t": 0.1}]
+    assert build_text_pause(text, plan) == "你好世界。"
+
+
+def test_build_text_pause_multiple_marks_mixed_verdicts():
+    text = "甲，乙，丙。"
+    plan = [
+        {"offset": 1, "mark": "，", "kind": "normal", "delta_t": 0.01, "verdict": "no_pause"},
+        {"offset": 3, "mark": "，", "kind": "normal", "delta_t": 0.5, "verdict": "long"},
+        {"offset": 5, "mark": "。", "kind": "trailing_tail", "delta_t": 0.1},
+    ]
+    assert build_text_pause(text, plan) == "甲乙，<pause-long>丙。"
+
+
+def test_build_text_pause_drift_guard_skips_stale_offset():
+    # `plan` was computed against different text -- offset 2 is '世' here, not '，'.
+    text = "你好世界"
+    plan = [{"offset": 2, "mark": "，", "kind": "normal", "delta_t": 0.2, "verdict": "short"}]
+    assert build_text_pause(text, plan) == "你好世界"
+
+
+def test_build_entry_omits_pause_fields_when_no_pause_plan_row():
+    entry = build_entry(_row(), [])
+    assert "text_pause" not in entry
+    assert "punct_audit" not in entry
+
+
+def test_build_entry_includes_pause_fields_when_pause_plan_row_present():
+    plan_json = json.dumps([
+        {"offset": 2, "mark": "，", "kind": "normal", "delta_t": 0.01, "verdict": "no_pause"},
+    ])
+    entry = build_entry(
+        _row(
+            best_text="你好，世界", pause_plan_raw=plan_json,
+            n_punct=1, n_no_pause=1, n_short=0, n_long=0,
+        ),
+        [],
+    )
+    assert entry["text_pause"] == "你好世界"
+    assert entry["punct_audit"] == {"n_punct": 1, "n_no_pause": 1, "n_short": 0, "n_long": 0}
+
+
+def test_build_entry_pause_plan_unalignable_all_zero_counts_not_omitted():
+    entry = build_entry(
+        _row(
+            best_text="你好世界", pause_plan_raw="[]",
+            n_punct=0, n_no_pause=0, n_short=0, n_long=0,
+        ),
+        [],
+    )
+    assert entry["text_pause"] == "你好世界"
+    assert entry["punct_audit"] == {"n_punct": 0, "n_no_pause": 0, "n_short": 0, "n_long": 0}
 
 
 def test_included_tiers_excludes_the_excluded_sentinel():
@@ -183,6 +271,22 @@ def _seed_manifest_row(conn, seg_id, *, tier, agreement=0.9, english_ratio=0.0, 
             "INSERT INTO quality_tiers (id, quality_tier, provenance) VALUES (?, ?, 'quality_tier_assign')",
             [seg_id, quality_tier],
         )
+
+
+def test_discover_joins_pause_plan_when_present(scratch_conn):
+    conn = scratch_conn
+    _seed_manifest_row(conn, "ag1", tier="auto_gold")
+    _seed_manifest_row(conn, "sv1", tier="silver")
+    conn.execute(
+        "INSERT INTO pause_plan (id, plan, n_punct, n_no_pause, n_short, n_long, "
+        "unalignable, calibration_version, provenance) "
+        "VALUES ('ag1', '[]', 0, 0, 0, 0, FALSE, 'v1', 'pause_plan')"
+    )
+
+    ag1 = next(row for row in discover(conn) if row[0] == "ag1")
+    sv1 = next(row for row in discover(conn) if row[0] == "sv1")
+    assert ag1[-5] == "[]"  # pp.plan
+    assert sv1[-5] is None  # no pause_plan row for silver -> LEFT JOIN NULL
 
 
 def test_discover_min_tier_auto_gold_includes_gold_excludes_silver(scratch_conn):

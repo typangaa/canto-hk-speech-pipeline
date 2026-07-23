@@ -182,6 +182,27 @@ def cmd_run_label_suite(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_run_align_chars(args: argparse.Namespace) -> int:
+    import asyncio
+    import logging
+
+    from pipeline.nodes.align import run_align_chars
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    devices = [d.strip() for d in args.devices.split(",")]
+    result = asyncio.run(run_align_chars(
+        devices,
+        gpu_policy=args.gpu_policy,
+        batch_size=args.batch,
+        mem_fraction=args.mem_fraction,
+        limit=args.limit,
+        prefetch=args.prefetch,
+        io_workers=args.io_workers,
+    ))
+    print(f"\nDone: {result}")
+    return 0
+
+
 def _check_asr_models_enabled(model_keys: list[str]) -> None:
     """Guard rail (added 2026-07-10, DECISIONS.md): refuse to dispatch any ASR model
     ASR_MODELS marks disabled (currently whisper_v3 and canto_ft, both retired for
@@ -290,6 +311,18 @@ def cmd_run_g2p(args: argparse.Namespace) -> int:
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     result = asyncio.run(run_g2p(batch_size=args.batch, limit=args.limit))
+    print(f"\nDone: {result}")
+    return 0
+
+
+def cmd_run_pause_plan(args: argparse.Namespace) -> int:
+    import asyncio
+    import logging
+
+    from pipeline.nodes.pause_plan import run_pause_plan
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    result = asyncio.run(run_pause_plan(batch_size=args.batch, limit=args.limit))
     print(f"\nDone: {result}")
     return 0
 
@@ -519,6 +552,11 @@ async def _run_many_adapt_g2p(args: argparse.Namespace, conn) -> dict:
     return await run_g2p(conn=conn, batch_size=args.batch, limit=args.limit)
 
 
+async def _run_many_adapt_pause_plan(args: argparse.Namespace, conn) -> dict:
+    from pipeline.nodes.pause_plan import run_pause_plan
+    return await run_pause_plan(conn=conn, batch_size=args.batch, limit=args.limit)
+
+
 async def _run_many_adapt_ingest_probe(args: argparse.Namespace, conn) -> dict:
     from pipeline.nodes.ingest_probe import run_ingest_probe
     return await run_ingest_probe(
@@ -544,6 +582,21 @@ async def _run_many_adapt_label_prosody(args: argparse.Namespace, conn) -> dict:
     return await run_label_prosody(
         conn=conn, n_workers=args.workers, threads_per_worker=args.threads,
         batch_size=args.batch, limit=args.limit,
+    )
+
+
+async def _run_many_adapt_align_chars(args: argparse.Namespace, conn) -> dict:
+    from pipeline.nodes.align import run_align_chars
+    devices = [d.strip() for d in args.devices.split(",")]
+    return await run_align_chars(
+        devices,
+        conn=conn,
+        gpu_policy=args.gpu_policy,
+        batch_size=args.batch,
+        mem_fraction=args.mem_fraction,
+        limit=args.limit,
+        prefetch=args.prefetch,
+        io_workers=args.io_workers,
     )
 
 
@@ -606,9 +659,11 @@ RUN_MANY_ADAPTERS = {
     "segment.vad_cut": _run_many_adapt_segment_vad_cut,
     "pregate.snr": _run_many_adapt_pregate_snr,
     "g2p": _run_many_adapt_g2p,
+    "pause.plan": _run_many_adapt_pause_plan,
     "ingest.probe": _run_many_adapt_ingest_probe,
     "label.suite": _run_many_adapt_label_suite,
     "label.prosody": _run_many_adapt_label_prosody,
+    "align.chars": _run_many_adapt_align_chars,
     "recover.orphans": _run_many_adapt_recover_orphans,
     "recover.reingest_pending": _run_many_adapt_reingest_pending,
     "embed.backfill": _run_many_adapt_embed_backfill,
@@ -882,6 +937,24 @@ def cmd_calibrate_progress(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_calibrate_pause_qc_report(args: argparse.Namespace) -> int:
+    from pipeline.nodes.calibrate import run_pause_qc_report
+
+    report = run_pause_qc_report()
+    print(f"\nPause QC (P4): {report['n_segments_reviewed']} segment(s) reviewed "
+          f"({report['n_segments_skipped']} skipped), {report['n_events_reviewed']} event(s) judged")
+    if not report["by_plan_verdict"]:
+        print("  no events judged yet")
+        return 0
+    print(f"\n{'plan_verdict':<14}{'n':>6}{'match_rate':>13}{'position_ok_rate':>18}")
+    for verdict in ("no_pause", "short", "long"):
+        s = report["by_plan_verdict"].get(verdict)
+        if not s:
+            continue
+        print(f"{verdict:<14}{s['n']:>6}{s['match_rate']:>13}{s['position_ok_rate']:>18}")
+    return 0
+
+
 def cmd_run_manifest_build(args: argparse.Namespace) -> int:
     import logging
 
@@ -1058,6 +1131,13 @@ def main() -> int:
              "offline decision buffer first (2026-07-19, T25)",
     )
     p_calibrate_prune.set_defaults(func=cmd_calibrate_prune_excluded)
+    p_calibrate_pause_qc_report = calibrate_sub.add_parser(
+        "pause-qc-report",
+        help="P4 (PAUSE_TOKEN_PUNCTUATION_PLAN.md): aggregate perceived-vs-plan match rate "
+             "+ position_ok rate from the 'Pause QC' mode in 'pipe calibrate serve' -- the "
+             "QC gate's pass/fail signal, read-only",
+    )
+    p_calibrate_pause_qc_report.set_defaults(func=cmd_calibrate_pause_qc_report)
 
     p_run = sub.add_parser("run", help="Run a DAG node via the orchestrator")
     run_sub = p_run.add_subparsers(dest="run_command", required=True)
@@ -1102,6 +1182,24 @@ def main() -> int:
                                    "needs more headroom than label.music's single-model 0.15")
     p_run_suite.add_argument("--limit", type=int, default=None)
     p_run_suite.set_defaults(func=cmd_run_label_suite)
+    p_run_align = run_sub.add_parser("align.chars", help="P0 (docs/PAUSE_TOKEN_PUNCTUATION_PLAN.md): char-level forced alignment via Qwen3-ForcedAligner, gold+auto_gold scope only")
+    p_run_align.add_argument("--devices", default="cuda:0,cuda:1",
+                              help="comma-separated device list, one worker per device")
+    p_run_align.add_argument("--gpu-policy", default="cap", choices=["yield", "cap", "exempt"])
+    p_run_align.add_argument("--batch", type=int, default=64,
+                              help="real batched forward pass (2026-07-21) — see "
+                                   "run_align_chars docstring for the VRAM measurement "
+                                   "behind this default")
+    p_run_align.add_argument("--mem-fraction", type=float, default=None)
+    p_run_align.add_argument("--limit", type=int, default=None,
+                              help="use --limit 200 for the pilot run + manual spot-check "
+                                   "before a full gold+auto_gold pass (PAUSE_TOKEN_PUNCTUATION_PLAN.md P0)")
+    p_run_align.add_argument("--prefetch", type=int, default=2,
+                              help="tasks kept in flight per worker so CPU decode of batch N+1 "
+                                   "overlaps GPU forward of batch N (1 = old sequential behaviour)")
+    p_run_align.add_argument("--io-workers", type=int, default=16,
+                              help="decode+resample thread-pool size inside each worker subprocess")
+    p_run_align.set_defaults(func=cmd_run_align_chars)
     p_run_diarize = run_sub.add_parser("segment.diarize", help="P3: pyannote speaker diarization (reuse-first, GPU fallback)")
     p_run_diarize.add_argument("--devices", default="cuda:0,cuda:1",
                                 help="comma-separated device list, one worker per device (only spawned for cache misses)")
@@ -1198,6 +1296,10 @@ def main() -> int:
     p_run_g2p.add_argument("--batch", type=int, default=2000)
     p_run_g2p.add_argument("--limit", type=int, default=None)
     p_run_g2p.set_defaults(func=cmd_run_g2p)
+    p_run_pause_plan = run_sub.add_parser("pause.plan", help="P2 (PAUSE_TOKEN_PUNCTUATION_PLAN.md): punctuation-anchored pause plan from alignments.chars (CPU, in-supervisor)")
+    p_run_pause_plan.add_argument("--batch", type=int, default=5000)
+    p_run_pause_plan.add_argument("--limit", type=int, default=None)
+    p_run_pause_plan.set_defaults(func=cmd_run_pause_plan)
     p_run_music = run_sub.add_parser("label.music", help="P1 pilot: PANNs music-family tagging")
     p_run_music.add_argument("--devices", default="cuda:0,cuda:1",
                               help="comma-separated device list, one worker per device")

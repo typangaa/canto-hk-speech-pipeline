@@ -223,6 +223,16 @@ def bucket(name, raw, *, speaker_stats=None, params=None) -> str:
 - **upstream 只出 raw**。downstream:`<pause-short>`(0.3–0.6s)/`<pause-long>`(>0.6s)嘅閾值 +
   gap→token 位置 mapping(v2.0 保守:只喺標點位)+ token 注入。
 
+> **2026-07-21 update**:呢個 boundary 決定已被 `docs/PAUSE_TOKEN_PUNCTUATION_PLAN.md`
+> owner 拍板③修訂 ——VAD gap 同標點嘅對應率只有 12.2%(順序對應法唔可行),改用
+> forced-alignment(`align.chars` P0)算每個標點嘅實際 Δt,**upstream 依然出 raw pause
+> plan(SSOT,`pause_plan` 表,`labels.jsonl` 嘅 `control.pause.plan`),但額外都出埋一個
+> 已插 `<pause-short>`/`<pause-long>` token 嘅 convenience 欄位**(manifest 嘅
+> `text_pause`,P3)——canonical `text`/raw plan 唔變,呢個純粹加多一個 downstream 直接可用
+> 嘅 view,唔算違反「tokenizer 留 downstream」原意(插嘅係字面 marker,唔係 phoneme
+> token)。閾值凍結值見 `metadata/labels/pause_calibration.json`(0.08s / 0.35s,唔係呢度
+> 原先草擬嘅 0.3/0.6s)。
+
 ### 8.4 `emotion`(唯一弱標,⚠ gated)
 - `emotion2vec` → class softmax + conf。
 - `conf < floor`(初 0.6,spot-check 校準)→ omit。

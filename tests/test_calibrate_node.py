@@ -11,23 +11,30 @@ from pipeline.nodes.calibrate import (
     MANDARIN_FLAG_REASON,
     NOT_SINGLE_SPEAKER_FLAG_REASON,
     OTHER_LANGUAGE_FLAG_REASON,
+    PAUSE_QC_SKIP_OFFSET,
     QA_SAMPLE_RATE_BY_TIER,
     WRONG_SPEAKER_ID_FLAG_REASON,
     _levenshtein,
     append_pending_decision,
     discover,
     get_item,
+    get_pause_qc_item,
     jyutping_preview,
     list_batches,
     list_history,
     list_sources,
     load_pending_decisions,
     next_pending,
+    pause_preview,
+    pause_qc_next,
+    pause_qc_report,
     pending_queue_rows,
     progress_report,
     prune_excluded_pending,
     queue_stats,
     record_decision,
+    record_pause_qc,
+    record_pause_qc_skip,
     recommended_sample_n,
     run_calibrate_export_snapshot,
     run_calibrate_flush_pending,
@@ -68,6 +75,52 @@ def _seed_segment(conn, seg_id, *, passes_filter=True, agreement=0.7, source="po
             "INSERT INTO tiers (id, tier, provenance) VALUES (?, ?, 'tier_assign')",
             [seg_id, tier],
         )
+
+
+# ---------------------------------------------------------------------------
+# Pause QC (P4) fixtures
+# ---------------------------------------------------------------------------
+
+# Chars for "你好世界明天" with a deliberate short gap (好->世, 0.20s) and a
+# deliberate long gap (界->明, 0.60s) so pause_preview()'s frozen calibration
+# (no_pause<0.16s, short<0.48s, long>=0.48s -- metadata/labels/pause_calibration.json,
+# v2 2026-07-22) yields one of each verdict from a single segment.
+_PAUSE_CHARS = [
+    ["你", 0.00, 0.10], ["好", 0.10, 0.20],
+    ["世", 0.40, 0.50], ["界", 0.50, 0.60],
+    ["明", 1.20, 1.30], ["天", 1.30, 1.40],
+]
+_PAUSE_TEXT = "你好，世界。明天。"  # -> short @ offset2, long @ offset5, trailing_tail @ offset8
+
+
+def _seed_pause_segment(conn, seg_id, *, tier="gold", best_text=_PAUSE_TEXT, chars=None, duration_sec=1.7):
+    conn.execute(
+        "INSERT INTO segments (id, audio_path, source, duration_sec, program) "
+        "VALUES (?, ?, 'rthk', ?, 'test-program')",
+        [seg_id, f"/tmp/{seg_id}.flac", duration_sec],
+    )
+    conn.execute(
+        "INSERT INTO asr_agreement (id, agreement, best_text, text_verified) VALUES (?, 0.95, ?, TRUE)",
+        [seg_id, best_text],
+    )
+    if tier is not None:
+        conn.execute(
+            "INSERT INTO tiers (id, tier, provenance) VALUES (?, ?, 'tier_assign')",
+            [seg_id, tier],
+        )
+    conn.execute(
+        "INSERT INTO alignments (id, chars, model, provenance) VALUES (?, ?, 'qwen3-aligner', 'qwen3_aligner')",
+        [seg_id, json.dumps(chars if chars is not None else _PAUSE_CHARS)],
+    )
+
+
+def _seed_pause_plan_row(conn, seg_id, *, n_punct=2, unalignable=False):
+    conn.execute(
+        "INSERT INTO pause_plan (id, plan, n_punct, n_no_pause, n_short, n_long, "
+        "unalignable, calibration_version, provenance) "
+        "VALUES (?, '[]', ?, 0, 0, 0, ?, 'v1', 'pause_plan')",
+        [seg_id, n_punct, unalignable],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -966,3 +1019,180 @@ def test_progress_report_empty_queue(scratch_conn):
     report = progress_report(scratch_conn)
     assert report["totals"] == {"total": 0, "pending": 0, "reviewed": 0}
     assert report["breakdown"] == {}
+
+
+# ---------------------------------------------------------------------------
+# Pause QC (P4, docs/PAUSE_TOKEN_PUNCTUATION_PLAN.md) -- pause_preview(),
+# get_pause_qc_item(), pause_qc_next(), record_pause_qc()/record_pause_qc_skip(),
+# pause_qc_report()
+# ---------------------------------------------------------------------------
+
+def test_pause_preview_returns_none_without_alignment_row(scratch_conn):
+    conn = scratch_conn
+    _seed_segment(conn, "s1")  # no alignments row
+    assert pause_preview(conn, "s1") is None
+
+
+def test_pause_preview_computes_plan_with_timestamps_and_text_pause(scratch_conn):
+    conn = scratch_conn
+    _seed_pause_segment(conn, "s1")
+
+    preview = pause_preview(conn, "s1")
+
+    assert preview["unalignable"] is False
+    verdicts = {e["mark"]: e.get("verdict") for e in preview["plan"] if e["kind"] == "normal"}
+    assert verdicts == {"，": "short", "。": "long"}
+    for e in preview["plan"]:
+        if e["kind"] == "normal":
+            assert "t_start" in e and "t_end" in e
+    assert "<pause-short>" in preview["text_pause"]
+    assert "<pause-long>" in preview["text_pause"]
+
+
+def test_pause_preview_unalignable_keeps_original_text(scratch_conn):
+    conn = scratch_conn
+    # chars too long for the text -> desync (mirrors test_pause_plan_node.py's case)
+    bad_chars = _PAUSE_CHARS + [["你", 1.20, 1.30]]
+    _seed_pause_segment(conn, "s1", chars=bad_chars)
+
+    preview = pause_preview(conn, "s1")
+
+    assert preview["unalignable"] is True
+    assert preview["plan"] == []
+    assert preview["text_pause"] == _PAUSE_TEXT
+
+
+def test_get_pause_qc_item_merges_segment_fields_and_preview(scratch_conn):
+    conn = scratch_conn
+    _seed_pause_segment(conn, "s1")
+
+    item = get_pause_qc_item(conn, "s1")
+
+    assert item["id"] == "s1"
+    assert item["source"] == "rthk"
+    assert item["best_text"] == _PAUSE_TEXT
+    assert item["existing_review"] == []
+    assert len(item["plan"]) == 3  # short, long, trailing_tail
+
+
+def test_get_pause_qc_item_includes_prior_review(scratch_conn):
+    conn = scratch_conn
+    _seed_pause_segment(conn, "s1")
+    record_pause_qc(conn, "s1", [
+        {"offset": 2, "mark": "，", "plan_verdict": "short", "perceived_verdict": "short", "position_ok": True},
+    ])
+
+    item = get_pause_qc_item(conn, "s1")
+    assert item["existing_review"] == [
+        {"offset": 2, "mark": "，", "plan_verdict": "short", "perceived_verdict": "short",
+         "position_ok": True, "note": None},
+    ]
+
+
+def test_get_pause_qc_item_unknown_id_returns_none(scratch_conn):
+    assert get_pause_qc_item(scratch_conn, "nope") is None
+
+
+def test_get_pause_qc_item_returns_none_without_alignment_row(scratch_conn):
+    conn = scratch_conn
+    _seed_segment(conn, "s1")
+    assert get_pause_qc_item(conn, "s1") is None
+
+
+def test_pause_qc_next_picks_gold_segment_with_eligible_pause_plan(scratch_conn):
+    conn = scratch_conn
+    _seed_pause_segment(conn, "s1")
+    _seed_pause_plan_row(conn, "s1")
+    assert pause_qc_next(conn) == "s1"
+
+
+def test_pause_qc_next_excludes_non_gold_tier(scratch_conn):
+    conn = scratch_conn
+    _seed_pause_segment(conn, "s1", tier="auto_gold")
+    _seed_pause_plan_row(conn, "s1")
+    assert pause_qc_next(conn) is None
+
+
+def test_pause_qc_next_excludes_unalignable_or_zero_punct(scratch_conn):
+    conn = scratch_conn
+    _seed_pause_segment(conn, "unalignable1")
+    _seed_pause_plan_row(conn, "unalignable1", unalignable=True)
+    _seed_pause_segment(conn, "nopunct1")
+    _seed_pause_plan_row(conn, "nopunct1", n_punct=0)
+
+    assert pause_qc_next(conn) is None
+
+
+def test_pause_qc_next_excludes_already_reviewed(scratch_conn):
+    conn = scratch_conn
+    _seed_pause_segment(conn, "s1")
+    _seed_pause_plan_row(conn, "s1")
+    record_pause_qc_skip(conn, "s1")
+
+    assert pause_qc_next(conn) is None
+
+
+def test_record_pause_qc_writes_one_row_per_event(scratch_conn):
+    conn = scratch_conn
+    _seed_pause_segment(conn, "s1")
+
+    n = record_pause_qc(conn, "s1", [
+        {"offset": 2, "mark": "，", "plan_verdict": "short", "perceived_verdict": "short", "position_ok": True},
+        {"offset": 5, "mark": "。", "plan_verdict": "long", "perceived_verdict": "short", "position_ok": False},
+    ])
+
+    assert n == 2
+    rows = conn.execute(
+        "SELECT punct_offset, plan_verdict, perceived_verdict, position_ok "
+        "FROM pause_qc_review WHERE id = 's1' ORDER BY punct_offset"
+    ).fetchall()
+    assert rows == [(2, "short", "short", True), (5, "long", "short", False)]
+
+
+def test_record_pause_qc_rejects_empty_events(scratch_conn):
+    with pytest.raises(ValueError):
+        record_pause_qc(scratch_conn, "s1", [])
+
+
+def test_record_pause_qc_rejects_invalid_verdict(scratch_conn):
+    with pytest.raises(ValueError):
+        record_pause_qc(scratch_conn, "s1", [
+            {"offset": 2, "mark": "，", "plan_verdict": "short", "perceived_verdict": "bogus"},
+        ])
+
+
+def test_record_pause_qc_skip_writes_sentinel_row(scratch_conn):
+    conn = scratch_conn
+    record_pause_qc_skip(conn, "s1", note="audio unclear")
+
+    row = conn.execute(
+        "SELECT punct_offset, plan_verdict, note FROM pause_qc_review WHERE id = 's1'"
+    ).fetchone()
+    assert row == (PAUSE_QC_SKIP_OFFSET, None, "audio unclear")
+
+
+def test_pause_qc_report_aggregates_match_and_position_ok_rates(scratch_conn):
+    conn = scratch_conn
+    _seed_pause_segment(conn, "s1")
+    record_pause_qc(conn, "s1", [
+        {"offset": 2, "mark": "，", "plan_verdict": "short", "perceived_verdict": "short", "position_ok": True},
+        {"offset": 5, "mark": "。", "plan_verdict": "long", "perceived_verdict": "short", "position_ok": False},
+    ])
+    report = pause_qc_report(conn)
+
+    assert report["n_segments_reviewed"] == 1
+    assert report["n_events_reviewed"] == 2
+    assert report["by_plan_verdict"]["short"] == {"n": 1, "match_rate": 1.0, "position_ok_rate": 1.0}
+    assert report["by_plan_verdict"]["long"] == {"n": 1, "match_rate": 0.0, "position_ok_rate": 0.0}
+
+
+def test_pause_qc_report_excludes_skip_sentinel_from_match_stats(scratch_conn):
+    conn = scratch_conn
+    record_pause_qc_skip(conn, "skipped1", note="unclear")
+
+    report = pause_qc_report(conn)
+
+    assert report["n_segments_reviewed"] == 1
+    assert report["n_segments_skipped"] == 1
+    assert report["n_events_reviewed"] == 0
+    assert report["by_plan_verdict"] == {}
