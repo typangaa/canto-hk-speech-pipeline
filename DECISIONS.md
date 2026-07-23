@@ -1741,14 +1741,24 @@ side) shows the conversion already ran: 628.6h train (272,238 records, auto_gold
 progress at time of writing. Updated `docs/PAUSE_TOKEN_PUNCTUATION_PLAN.md`'s status
 header, P5 section, and TL;DR to reflect this.
 
-**Gap found**: the plan's §0 finding — `segment.vad_cut`'s 300ms silence-based segment
-boundary makes long pauses (≥0.48s under v2 calibration) structurally rare *within* a
-single segment (within-segment gap distribution: p50=0.23s, p90=0.26s) — was never
-relayed to canto-tts. Grepped canto-tts's full docs tree for "vad_cut"/"300ms"/"structural":
-zero mentions. Practical consequence: canto-tts's `<pause-long>` token will see much less
-training signal than `<pause-short>`, purely from this pipeline's segmentation boundary
-choice, not from any bug on either side. Left unresolved — owner wants to discuss before
-this gets written into canto-tts's docs.
+**"Gap found" — retracted same day**: initially flagged the plan's §0 finding
+(`segment.vad_cut`'s 300ms silence-based segment boundary supposedly makes long pauses
+structurally rare *within* a segment, citing §0's within-segment VAD-gap distribution
+p50=0.23s/p90=0.26s) as an unrelayed risk to canto-tts. **This was wrong** — verified
+directly against the actual `pause_plan` table and canto-tts's already-encoded training
+data before writing anything into canto-tts: `pause_plan` has 95,835 `long`-verdict
+events out of 646,001 classified mid-sentence marks (14.8%), present in 77,220/279,348
+segments (27.6%); canto-tts's `data/v7_pause_gold_full/v7_pause_train.jsonl` (encoded
+2026-07-23) contains 189,432 `<pause-long>` tokens against 607,162 `<pause-short>`
+(23.8% of the short+long total) — a healthy, usable sample, not near-zero. The error:
+§0's VAD-gap number measures Silero VAD's own silence detection, which is a *different*
+quantity from the forced-aligner's per-character Δt that `pause_plan` actually buckets
+on — §0 itself explains why VAD-gap counting was abandoned (only 12.2% VAD-gap/
+punctuation correspondence) in favor of forced alignment; its VAD-gap stat was never a
+claim about the final calibrated data, only about why the original (VAD-gap-based)
+approach had to be replaced. Conflating the two led to a false "structural starvation"
+claim. `docs/PAUSE_TOKEN_PUNCTUATION_PLAN.md` §0 now carries a correction note; nothing
+needs to be relayed to canto-tts on this point.
 
 **T1 reclassified**: owner decision — Pilot QA batch review (`pending_task.md` T1) is no
 longer a Tier 1 data-trust-critical blocker. It remains valuable (only path to grow `gold`

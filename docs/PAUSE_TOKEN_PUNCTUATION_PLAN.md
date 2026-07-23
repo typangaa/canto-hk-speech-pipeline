@@ -9,9 +9,10 @@
 > `metadata/train.jsonl`/`val.jsonl`(`text_pause` 欄位)+ `pause_calibration.json`,
 > `core/control_schema.py` 抄低嘅 `calibration_version`/`git_rev` 同呢邊實際版本完全
 > 對得上(`9b73455`,v2),`convert_corpus_to_moss.py --insert-pause-tokens` 已跑完
-> (628.6h train / 5.4h val,pause marker 對齊率 99.96%),GPU encode 進行緊。**唯一未
-> 交低嘅係 §0 嘅 vad_cut 結構性發現**——canto-tts docs 冇提過,已知會影響
-> `<pause-long>` 訓練訊號量,待補。詳見 DECISIONS.md 2026-07-23。
+> (628.6h train / 5.4h val,pause marker 對齊率 99.96%),GPU encode 進行緊。**§0 嘅
+> vad_cut 結構性發現已核實係過時/唔適用**(2026-07-23 更正,見下方 §0 備註同
+> DECISIONS.md)——`<pause-long>` 喺實際訓練數據入面樣本充足(189,432 個 token,
+> 佔 short+long 總數 23.8%),唔存在原先擔心嘅結構性稀缺,冇嘢要再交低。
 > **緣起**:`canto-tts/docs/PAUSE_TOKEN_CALIBRATION_HANDOFF.md`(engine 側已備好
 > `<pause-short>`/`<pause-long>` vocab,等 pipeline 出數據)
 > **先讀**:`docs/LABEL_FRAMEWORK_SPEC.md` §8.3(pause raw 層已落地)、`docs/MANIFEST_SCHEMA.md`
@@ -38,6 +39,19 @@
 屬於邊個標點;上表 12.2% 就係順序對應法嘅命中率上限。Alignment 令每個字有時間戳,
 標點處嘅實際停頓 Δt = `start(下一字) − end(上一字)`,直接可量,仲順便審計到
 qwen3_asr 憑 LM 亂加、聲學上冇停頓嘅標點(industry 已知 zero-length comma 問題)。
+
+> **2026-07-23 更正**:上表「within-segment gap 分佈」一行(VAD 自己嘅 gap 偵測,
+> p90=0.26s)當初俾人誤讀成「最終 pause_plan 嘅 long 分桶會近乎冧樣本」,但呢個
+> 只係「點解要轉用 forced alignment」嘅論證(VAD gap 本身量錯嘢,同標點對唔上),
+> **唔係最終數據嘅真實分佈**——forced-alignment 量出嚟嘅 Δt 同 VAD 自己嘅 silence
+> gap 係兩件唔同嘢(VAD 靠 speech-probability threshold 判斷,aligner 靠逐字時間戳),
+> 兩者唔對應。核實實際 `pause_plan` 表:long 有 95,835 個(佔 646,001 個已分類標點
+> 嘅 14.8%),77,220/279,348(27.6%)個 segment 至少有一個 long。canto-tts 實際
+> encode 出嚟嘅 `data/v7_pause_gold_full/v7_pause_train.jsonl`:`<pause-short>`
+> 607,162 個、`<pause-long>` 189,432 個(long 佔 short+long 總數 23.8%)——樣本量
+> 健康,唔存在結構性稀缺。呢個更正推翻咗之前(同一日)喺 DECISIONS.md/PROGRESS.md
+> 寫低「要交低呢個發現畀 canto-tts」嘅講法,冇嘢要交,詳見 DECISIONS.md 2026-07-23
+> 嘅更正 entry。
 
 **Industry 參照**(詳見 agy-gemini 報告 + arXiv 2302.13652 / 2604.21164):
 explicit break token 流派(NaturalSpeech 2/3、CosyVoice 2)慣用
@@ -137,11 +151,13 @@ reconciliation 三段式:Δt<80ms → 標點無聲學根據;80–350ms → short
   實際值一致。`convert_corpus_to_moss.py --insert-pause-tokens` 已跑出
   `data/v7_pause_gold_full/`(628.6h train / 5.4h val,pause marker 對齊率
   99.96%,0% OOV),GPU encode 2026-07-23 進行緊。
-- 一併交:**§0 嘅 pause-long 結構性發現**(vad_cut 300ms 切段 → 長停頓唔存在於
-  segment 內)——engine 側要知訓練數據嘅 pause 分佈同佢哋 vocab 設計嘅落差。
-  **未達成** —— grep 過 canto-tts repo 全部 docs,冇任何提及呢個發現,佢哋暫時唔知
-  `<pause-long>` token 喺單一 segment 內樣本天生就少(within-segment p90 gap 淨係
-  0.26s,低過 long 嘅 0.48s cutoff)。留待下一步跟進。
+- 一併交:§0 嘅 pause-long 發現。**核實後(2026-07-23)冇嘢要交**——§0 表入面
+  「within-segment gap p90=0.26s → long 幾乎零樣本」呢句,量嘅係 VAD 自己嘅
+  silence-gap 偵測,唔係最終 `pause_plan` 用 forced alignment 量出嚟嘅 Δt(兩者
+  唔係同一件事,§0 本身都解釋咗點解要棄用 VAD gap 改用 forced alignment)。核實
+  實際 `pause_plan`:long 佔已分類標點 14.8%(95,835/646,001),27.6% segment
+  至少有一個;canto-tts 實際 encode 出嚟嘅數據 `<pause-long>` token 189,432 個
+  (佔 short+long 總數 23.8%)——樣本量健康,冇結構性稀缺,見 §0 更正備註。
 
 ---
 
@@ -182,5 +198,5 @@ P0 align.chars pilot(--limit 200 + 人手核對)
   → P2 pause.plan 全量
   → P3 label.store / manifest 擴展
   → P4 calibrate serve pause-preview + 人手聽 ≥30 段 → 【QC gate】
-  → P5 交貨 canto-tts —— 完成(2026-07-23,自助式;vad_cut §0 發現待補,見上)
+  → P5 交貨 canto-tts —— 完成(2026-07-23,自助式;§0 vad_cut 發現核實過時,見上)
 ```
