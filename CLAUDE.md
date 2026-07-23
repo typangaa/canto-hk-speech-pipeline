@@ -124,12 +124,14 @@ can be killed and re-run without redoing work or duplicating output.
 | `filter.acoustic` | `filters_text` (pass only) | `filters_acoustic` | SNR + DNSMOS — CPU worker-subprocess pool |
 | `filter.decide` | both `filters_*` | `filters` | merges into final `pass`/`fail_reason` |
 | `g2p` | `asr_agreement` (verified text) | `g2p` | canto-hk-g2p → Jyutping, regex-validated `^[a-z]+[1-6]$` |
+| `align.chars` | `asr_agreement` (verified text) + `segments` | `alignments` | Qwen3-ForcedAligner-0.6B-hf per-character timestamps, gold+auto_gold scope only |
+| `pause.plan` | `alignments` | `pause_plan` | classifies mid-sentence punctuation gaps (no_pause/short/long) via frozen `metadata/labels/pause_calibration.json` cutoffs — feeds manifest's `text_pause`/`punct_audit`, see `docs/PAUSE_TOKEN_PUNCTUATION_PLAN.md` |
 | `speaker.embed` | `segments` | `speaker_embeddings` | ECAPA-TDNN d-vector, sidecar-`.npy`-reuse-first |
 | `speaker.cluster` | `speaker_embeddings` | `speakers` | cross-file agglomerative clustering, whole-source recompute |
 | `tier.assign` | `asr_agreement`+`filters` | `tiers` | verification-confidence tier — see "Two tier axes" below |
 | `quality_tier.assign` | `tiers`+`filters`+`labels_*` | `quality_tiers` | A/B acoustic-cleanliness tier, gold+auto_gold scope only — see below |
 | `calibrate.sample` | `asr_agreement`+`filters`+`tiers` | `calibration_review` | queues a random sample for human review — see "Human calibration" below |
-| `manifest.build` / `.export` | `filters`+`g2p`+`speakers`+`tiers` | `metadata/*.jsonl` | final JSONL + 95/5 split; `--min-tier` / `--min-quality-tier` / `--min-agreement` |
+| `manifest.build` / `.export` | `filters`+`g2p`+`speakers`+`tiers`+`pause_plan` | `metadata/*.jsonl` | final JSONL + 95/5 split; `--min-tier` / `--min-quality-tier` / `--min-agreement` |
 | `report.build` | same join as `manifest.build` | `metadata/DATASET_REPORT.md` | live acceptance-criteria report — see Acceptance Criteria |
 | `label.suite` / `.music` / `.prosody` | `segments`/`raw_files` | `labels_*` | decode-once fan-out for the TTS-quality label store |
 | `label.calibrate` / `label.store` | label tables | `metadata/labels*.jsonl` | rate/pitch calibration + bucketed label export |
@@ -188,7 +190,11 @@ snapshot (`pipe calibrate export-snapshot`) when the writer lock is held. Run
 `pipe calibrate flush-pending` once the writer is free (safe to re-run). **Never bulk-delete
 `pending` review rows without flushing the buffer first** — `pipe calibrate prune-excluded`
 (also the UI's 🧹 button) does this safely: flush, then delete pending rows whose segment a
-later gate already excluded.
+later gate already excluded. `pipe calibrate serve` also has a **Pause QC** tab (P4,
+`docs/PAUSE_TOKEN_PUNCTUATION_PLAN.md`) for spot-checking the frozen `pause_calibration.json`
+no_pause/short/long cutoffs by ear against real audio — not part of the `text_verified`/tier
+gate above, feeds recalibration decisions only (see DECISIONS.md for the versioned-constants
+convention that gates ever changing those cutoffs).
 
 **Two tier axes — ⚠️ same word, different things. Never conflate them:**
 - **`tiers` / `tier.assign` = verification confidence**: `gold` (human-verified via
