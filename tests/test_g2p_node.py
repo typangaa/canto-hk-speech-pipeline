@@ -38,9 +38,22 @@ def test_candidate_preview_empty_text_returns_empty_list():
 
 
 def test_candidate_preview_unambiguous_text_returns_empty_list():
-    # Both words resolve to a single known multi-char dictionary entry --
-    # nothing for a reviewer to look at.
-    assert candidate_preview("心臟病中風") == []
+    # Every character has a single certain reading -- nothing for a reviewer
+    # to look at. (Not "心臟病中風": canto-hk-g2p v2.3.0's segmentation-shadow
+    # pruning (DECISIONS.md 2026-07-22) removed the purely-compositional
+    # multi-char dict entry that used to cover 心臟病, so it now resolves
+    # per-character and 心 (sam1/san1) surfaces as a genuine polyphone.)
+    assert candidate_preview("早晨") == []
+
+
+def test_candidate_preview_segmentation_shadow_fix_v2_3_0():
+    # canto-hk-g2p v2.3.0 (DECISIONS.md 2026-07-22) pruned purely-compositional
+    # dict entries like 我瞓/早瞓/未瞓 that used to greedily shadow the real
+    # compound 瞓覺 ("to sleep"), orphaning 覺 into ambiguous ranked fallback
+    # (gok3/gaau3/gaau1/gaau4). Regression guard: 瞓覺 must now resolve as a
+    # single certain compound, not a polyphone-ambiguous orphan.
+    assert text_to_jyutping("我瞓覺先") == "ngo5 fan3 gaau3 sin1"
+    assert "覺" not in {entry["token"] for entry in candidate_preview("我瞓覺先")}
 
 
 def test_candidate_preview_flags_known_polyphone():

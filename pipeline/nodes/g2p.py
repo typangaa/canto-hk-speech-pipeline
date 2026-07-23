@@ -112,6 +112,38 @@ are NOT automatically revisited by this node's anti-join discovery — a
 corpus-wide reprocess to pick up the ~20 corrected words is a separate,
 not-yet-scheduled task (see pending_task.md).
 
+Library upgrade to v2.3.0 (2026-07-22): a structural fix, not additive data —
+`segment.rs`'s greedy leftmost-longest segmenter had 73.4% of its multi-char
+dict entries (81,944/111,596) be purely-compositional (reading == char-by-char
+concatenation, e.g. 我瞓/早瞓/未瞓), which could greedily consume a prefix and
+shadow a real compound starting mid-match (e.g. 我瞓覺先 -> 我+瞓 matched
+first, orphaning 覺 into ambiguous ranked fallback gok3 instead of the correct
+瞓覺-compound gaau3). v2.3.0 prunes these entries, verified per-entry (not
+assumed) to leave `Pipeline.convert()` byte-identical for every input that
+didn't hit the shadow bug. Two effects on this node:
+  1. `text_to_jyutping()`/`text_to_jyutping_codeswitch()` output is unchanged
+     for the vast majority of text (space-joining the finer per-character
+     tokens reproduces the same string the coarser word-level token used to,
+     since the readings themselves are unchanged) -- EXCEPT for the narrow
+     set of previously-shadowed compounds (瞓覺-family confirmed fixed;
+     unknown how many other compounds were silently affected corpus-wide),
+     where the resolved reading is now correct instead of wrong. This is a
+     genuine content fix, not just a metadata bump, unlike v1.7.0/v2.1.0's
+     data-only corrections.
+  2. `candidate_preview()` (calibrate UI) now surfaces per-character
+     ambiguity for common words that used to resolve silently as a single
+     unambiguous multi-char dict entry (e.g. 心臟病, 香港, 教訓) -- this is
+     the tool doing its job more thoroughly post-pruning, not a regression;
+     `tests/test_g2p_node.py`'s unambiguous-text fixture was swapped to 早晨
+     (still a single certain-confidence dict entry) since 心臟病中風 no
+     longer qualifies.
+Same reinstall-refreshes-stale-dist-info-metadata note as v2.0.0/v2.1.0
+above. Given effect 1 is a real (if narrow-scope, corpus-size-unknown)
+correctness fix rather than pure metadata drift, this upgrade's `g2p`
+rows were corpus-wide reprocessed (provenance retag + full `pipe run g2p`
+rerun) in the same session, unlike the deferred-to-pending_task.md handling
+of v1.7.0/v2.1.0 -- see DECISIONS.md 2026-07-22.
+
 `jyutping_cs` column added (2026-07-20, T30): canto-tts (a downstream consumer
 in a sibling repo) independently re-implements "text -> Jyutping" itself
 rather than using this node's `jyutping` column, because `jyutping` drops
