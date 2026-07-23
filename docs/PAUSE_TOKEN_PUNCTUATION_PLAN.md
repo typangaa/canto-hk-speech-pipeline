@@ -4,7 +4,14 @@
 > v1 閾值卡喺感知死區 → **calibration v2 已凍結**(no_pause 0.08→0.16s,
 > long 0.35→0.48s)→ 全量 corpus-wide `pause_plan` reprocess 已完成(279,348 段
 > 重算,verdict 分佈按新閾值重新分桶)→ `manifest.export`/`label.store` 已重新
-> export → `catalog verify` 17/17 PASS。P4 全流程完結。P5(交返 canto-tts)未動工
+> export → `catalog verify` 17/17 PASS。P4 全流程完結。**P5(交返 canto-tts)已完成
+> (2026-07-23,自助式,非正式交接動作)**——canto-tts 嗰邊直接讀呢個 repo 匯出嘅
+> `metadata/train.jsonl`/`val.jsonl`(`text_pause` 欄位)+ `pause_calibration.json`,
+> `core/control_schema.py` 抄低嘅 `calibration_version`/`git_rev` 同呢邊實際版本完全
+> 對得上(`9b73455`,v2),`convert_corpus_to_moss.py --insert-pause-tokens` 已跑完
+> (628.6h train / 5.4h val,pause marker 對齊率 99.96%),GPU encode 進行緊。**唯一未
+> 交低嘅係 §0 嘅 vad_cut 結構性發現**——canto-tts docs 冇提過,已知會影響
+> `<pause-long>` 訓練訊號量,待補。詳見 DECISIONS.md 2026-07-23。
 > **緣起**:`canto-tts/docs/PAUSE_TOKEN_CALIBRATION_HANDOFF.md`(engine 側已備好
 > `<pause-short>`/`<pause-long>` vocab,等 pipeline 出數據)
 > **先讀**:`docs/LABEL_FRAMEWORK_SPEC.md` §8.3(pause raw 層已落地)、`docs/MANIFEST_SCHEMA.md`
@@ -119,12 +126,22 @@ reconciliation 三段式:Δt<80ms → 標點無聲學根據;80–350ms → short
   ③被 strip 嘅 no_pause 標點係咪真係冇停頓。
 - QC 唔過 → 返 P1 重議閾值(凍結前唯一容許回頭嘅位)。
 
-### P5 — Handoff 返 canto-tts
+### P5 — Handoff 返 canto-tts — 完成(2026-07-23,自助式)
 
 - 交:`labels.jsonl`(pause plan)+ 含 `text_pause` 嘅 manifest export +
-  `pause_calibration.json` 抄本(佢哋更新 `core/control_schema.py` comment)。
+  `pause_calibration.json` 抄本(佢哋更新 `core/control_schema.py` comment)。**已達成**
+  ——但唔係經一個正式「交貨」步驟,而係 canto-tts 嗰邊(2026-07-23)直接指向呢個
+  repo 匯出嘅 `metadata/train.jsonl`/`val.jsonl` 檔案讀取(sibling repo,同一
+  filesystem),`control_schema.py` 已抄低啱嘅 `calibration_version: 2026-07-22-
+  9b73455-v2` / `git_rev: 9b73455`,同 `metadata/labels/pause_calibration.json`
+  實際值一致。`convert_corpus_to_moss.py --insert-pause-tokens` 已跑出
+  `data/v7_pause_gold_full/`(628.6h train / 5.4h val,pause marker 對齊率
+  99.96%,0% OOV),GPU encode 2026-07-23 進行緊。
 - 一併交:**§0 嘅 pause-long 結構性發現**(vad_cut 300ms 切段 → 長停頓唔存在於
   segment 內)——engine 側要知訓練數據嘅 pause 分佈同佢哋 vocab 設計嘅落差。
+  **未達成** —— grep 過 canto-tts repo 全部 docs,冇任何提及呢個發現,佢哋暫時唔知
+  `<pause-long>` token 喺單一 segment 內樣本天生就少(within-segment p90 gap 淨係
+  0.26s,低過 long 嘅 0.48s cutoff)。留待下一步跟進。
 
 ---
 
@@ -165,5 +182,5 @@ P0 align.chars pilot(--limit 200 + 人手核對)
   → P2 pause.plan 全量
   → P3 label.store / manifest 擴展
   → P4 calibrate serve pause-preview + 人手聽 ≥30 段 → 【QC gate】
-  → P5 交貨 canto-tts
+  → P5 交貨 canto-tts —— 完成(2026-07-23,自助式;vad_cut §0 發現待補,見上)
 ```

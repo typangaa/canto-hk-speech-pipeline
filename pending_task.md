@@ -14,7 +14,19 @@ Source: round-2 post-execution review of `docs/archive/PIPELINE_REVIEW_2026-07-1
 
 ## 🔴 Tier 1 — data-trust-critical, do first
 
+(none currently — T1 reclassified 2026-07-23 as ongoing/non-blocking, see below)
+
+---
+
+## 🔵 Ongoing — owner-paced, not a blocker
+
 ### T1. Pilot QA batch review (Issue #15)
+- **Reclassified 2026-07-23 (owner decision)**: this is NOT a hard requirement and NOT a
+  blocking gate on anything downstream — moved out of Tier 1. Owner reviews this as
+  opportunistic sampling whenever free, no fixed target, no deadline, no dependency chain
+  waits on it. Kept as its own "Ongoing" entry (not Tier 4/optional) because it's still
+  the only mechanism that grows `gold` tier and spot-checks whether the tier thresholds
+  hold up — just not something anything else needs to wait for.
 - **Update 2026-07-19 (stale-excluded prune — see T25 in Done)**: found 172 (later 221 at
   a second look, after 72 more offline decisions were flushed) queue rows still `pending`
   whose segment had since been auto-excluded by T20/T22/T23's gate catch-up — these can
@@ -74,13 +86,14 @@ Source: round-2 post-execution review of `docs/archive/PIPELINE_REVIEW_2026-07-1
   focus above without me touching the review process itself (owner explicitly kept T1
   review itself human-only, not delegable).
 - **How**: work through them via the live `pipe calibrate serve` browser UI.
-- **Why first**: this is the only way to validate whether the 2026-07-11 tightened tier
-  thresholds (0.95 / 0.85 / 0.70 + `canto_ft` confidence gate) actually hold up. Every
-  downstream export and training decision rests on these thresholds.
-- **Effort**: manual, owner-paced — **owner decision 2026-07-17: no fixed completion
-  target, stop whenever** (superseded the earlier "~900 segments, a few hours" estimate,
-  which was based on the stale count anyway).
-- **Depends on**: nothing. `calibrate serve` is already running (PID 971786 at review time).
+- **Why it matters (not "why first" — see 2026-07-23 reclassification above)**: this is
+  the only way to validate whether the 2026-07-11 tightened tier thresholds (0.95 / 0.85 /
+  0.70 + `canto_ft` confidence gate) actually hold up, and the only path to grow `gold`
+  beyond spot-check size. Nothing downstream is blocked waiting on it.
+- **Effort**: manual, owner-paced — **owner decision 2026-07-17 (reaffirmed 2026-07-23):
+  no fixed completion target, stop whenever, review as free time allows**.
+- **Depends on**: nothing. Nothing depends on it either (T9 below still nominally "depends
+  on T1" for threshold calibration, but is itself Tier 3, not urgent).
 - **Owner**: human (not delegable to Claude).
 - **Update 2026-07-13**: `calibrate serve` no longer blocks while a long batch node (T15's
   `asr.transcribe`) holds the DuckDB writer lock — it falls back to a JSON snapshot for reads
@@ -303,17 +316,19 @@ implementation.
 ## Suggested execution order
 
 ```
-Do now (independent):      T1 (human QA, owner-paced, code-switch focus — 2026-07-17)
+Ongoing, non-blocking:     T1 (human QA, owner-paced, code-switch focus — reclassified 2026-07-23)
 Schedule into P6 proper:   T9 (depends on T1), T10, T14 levers (3)+(4) live-validation
 Pulled by training needs:  T13
 ```
-(updated 2026-07-19 — the T23+T24 combined follow-up (filter.decide re-run + full
-manifest re-export) is DONE, see the "T23+T24 follow-up" Done entry below; nothing left
-queued behind it. T24 (canto-hk-g2p 1.5.0→1.9.0 upgrade + phonological validation +
-corpus-wide reprocess) and T23 (label.suite chain-wiring) both in Done. T20/T21/T22 +
-the calibration_review near-incident moved to Done 2026-07-18. T5/T6/T16/
-T15-remaining-chain moved to Done in the prior 2026-07-17 update; see Done section for
-what actually landed and when.)
+(updated 2026-07-23 — T1 reclassified from Tier 1/"do now" to an ongoing, non-blocking
+owner-paced item; see the "Ongoing" section above. Nothing else in this list currently
+depends on it landing by any particular point. Prior update 2026-07-19 — the T23+T24
+combined follow-up (filter.decide re-run + full manifest re-export) is DONE, see the
+"T23+T24 follow-up" Done entry below; nothing left queued behind it. T24 (canto-hk-g2p
+1.5.0→1.9.0 upgrade + phonological validation + corpus-wide reprocess) and T23
+(label.suite chain-wiring) both in Done. T20/T21/T22 + the calibration_review
+near-incident moved to Done 2026-07-18. T5/T6/T16/T15-remaining-chain moved to Done in
+the prior 2026-07-17 update; see Done section for what actually landed and when.)
 
 ---
 

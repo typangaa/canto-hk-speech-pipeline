@@ -1725,3 +1725,34 @@ Well clear of the ≥100h/≥100-speaker acceptance floor (8,682 unique speakers
 (human-verified) remains a tiny fraction (0.4h) — P4's calibrate-serve QC pass was a
 29-segment spot-check, not a bulk verification run; growing `gold` requires more
 `pipe calibrate serve` sessions, tracked separately, not part of this g2p change.
+
+## 2026-07-23 — P5 (pause-token handoff to canto-tts) found already self-served; T1 reclassified from Tier 1 blocker to ongoing
+
+**P5 status**: `docs/PAUSE_TOKEN_PUNCTUATION_PLAN.md` §5 tracked P5 ("handoff to
+canto-tts") as not-started. Investigation found it was already effectively complete —
+just not via a formal handoff step. `~/Documents/canto-tts/scripts/convert_corpus_to_moss.py`
+(dated 2026-07-23) reads `metadata/train.jsonl`/`val.jsonl` directly off this repo's
+filesystem path (sibling repo) and consumes `text_pause` via its own `--insert-pause-tokens`
+flag. `~/Documents/canto-tts/core/control_schema.py`'s recorded `calibration_version`/
+`git_rev` (`2026-07-22-9b73455-v2` / `9b73455`) matches `metadata/labels/pause_calibration.json`'s
+actual `version`/`git_rev` fields exactly — no drift. `data/v7_pause_gold_full/` (canto-tts
+side) shows the conversion already ran: 628.6h train (272,238 records, auto_gold+gold) /
+5.4h val, pause-marker alignment 99.96% (272,122/272,238), 0% OOV; GPU encode was in
+progress at time of writing. Updated `docs/PAUSE_TOKEN_PUNCTUATION_PLAN.md`'s status
+header, P5 section, and TL;DR to reflect this.
+
+**Gap found**: the plan's §0 finding — `segment.vad_cut`'s 300ms silence-based segment
+boundary makes long pauses (≥0.48s under v2 calibration) structurally rare *within* a
+single segment (within-segment gap distribution: p50=0.23s, p90=0.26s) — was never
+relayed to canto-tts. Grepped canto-tts's full docs tree for "vad_cut"/"300ms"/"structural":
+zero mentions. Practical consequence: canto-tts's `<pause-long>` token will see much less
+training signal than `<pause-short>`, purely from this pipeline's segmentation boundary
+choice, not from any bug on either side. Left unresolved — owner wants to discuss before
+this gets written into canto-tts's docs.
+
+**T1 reclassified**: owner decision — Pilot QA batch review (`pending_task.md` T1) is no
+longer a Tier 1 data-trust-critical blocker. It remains valuable (only path to grow `gold`
+tier beyond the 29-segment spot-check, only way to validate tier thresholds against human
+judgment) but is not a hard requirement and nothing else is gated on it. Moved to a new
+"🔵 Ongoing — owner-paced, not a blocker" section in `pending_task.md`; reviewed whenever
+the owner has free time, no fixed target.
